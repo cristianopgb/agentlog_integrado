@@ -1,0 +1,24 @@
+{
+  "name": "sistema-logistico-integrado",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monorepo Sprint 0 do Sistema Logístico Integrado.",
+  "packageManager": "pnpm@10.28.1",
+  "engines": { "node": ">=20.11.0" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @sli/web --filter @sli/api dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@types/node": "^22.15.34",
+    "eslint": "^9.30.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.1"
+  }
+}
