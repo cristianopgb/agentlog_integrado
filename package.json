@@ -3,8 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "description": "Monorepo Sprint 0 do Sistema Logístico Integrado.",
-  "packageManager": "pnpm@10.28.1",
-  "engines": { "node": ">=20.11.0" },
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "scripts": {
     "dev": "pnpm --parallel --filter @sli/web --filter @sli/api dev",
     "build": "pnpm -r build",

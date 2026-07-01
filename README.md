@@ -75,10 +75,12 @@ pnpm build
 Para publicar o frontend na Vercel, configure o projeto com:
 
 - Root Directory: `apps/web`.
-- Install Command temporário: `cd ../.. && pnpm install --no-frozen-lockfile`.
+- Framework Preset: `Next.js`.
+- Node.js Version: `22.x`.
+- Install Command: `corepack enable && corepack prepare pnpm@10.14.0 --activate && cd ../.. && pnpm install --no-frozen-lockfile`.
 - Build Command: `cd ../.. && pnpm --filter @sli/web build`.
 
-Enquanto o repositório não tiver `pnpm-lock.yaml` versionado, o install command não deve usar `--frozen-lockfile`, pois a instalação headless da Vercel falha sem lockfile. Quando `pnpm-lock.yaml` estiver versionado, volte o install command para `cd ../.. && pnpm install --frozen-lockfile`.
+O `packageManager` da raiz fixa o pnpm em `10.14.0` para evitar incompatibilidade com versões antigas usadas durante o install da Vercel. O comando usa Corepack antes da instalação para ativar a versão correta do pnpm.
 
 ## Limites da Sprint 0
 
