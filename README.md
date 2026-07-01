@@ -72,7 +72,13 @@ pnpm build
 
 ## Vercel
 
-Para publicar o frontend na Vercel, configure o projeto apontando para `apps/web` como aplicação Next.js dentro do monorepo. O arquivo `vercel.json` na raiz fornece comandos mínimos para instalar dependências e executar o build do app web.
+Para publicar o frontend na Vercel, configure o projeto com:
+
+- Root Directory: `apps/web`.
+- Install Command temporário: `cd ../.. && pnpm install --no-frozen-lockfile`.
+- Build Command: `cd ../.. && pnpm --filter @sli/web build`.
+
+Enquanto o repositório não tiver `pnpm-lock.yaml` versionado, o install command não deve usar `--frozen-lockfile`, pois a instalação headless da Vercel falha sem lockfile. Quando `pnpm-lock.yaml` estiver versionado, volte o install command para `cd ../.. && pnpm install --frozen-lockfile`.
 
 ## Limites da Sprint 0
 
