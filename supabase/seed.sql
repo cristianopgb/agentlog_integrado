@@ -1,0 +1,1 @@
+-- Sprint 0: seed intencionalmente vazio. Nenhuma tabela ou dado inicial foi criado.
