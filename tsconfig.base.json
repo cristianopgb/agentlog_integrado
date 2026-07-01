@@ -37,7 +37,6 @@
       "@sli/agent-tools": [
         "packages/agent-tools/src/index.ts"
       ]
-    },
-    "ignoreDeprecations": "6.0"
+    }
   }
 }
