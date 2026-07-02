@@ -7,7 +7,8 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "lint": "eslint src",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bootstrap:admin": "node dist/scripts/bootstrap-admin.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

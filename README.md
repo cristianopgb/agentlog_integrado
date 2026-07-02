@@ -1,8 +1,8 @@
 # Sistema Logístico Integrado
 
-Monorepo da Sprint 0 do **Sistema Logístico Integrado**, um SaaS modular multiempresa com IA para transportadoras.
+Monorepo do **Sistema Logístico Integrado**, um SaaS modular multiempresa para transportadoras.
 
-A Sprint 0 entrega somente a base técnica do repositório: estrutura de monorepo, aplicações iniciais, pacotes compartilhados, documentação e diretório reservado para Supabase. Funcionalidades de produto serão implementadas apenas em sprints futuras.
+A Sprint 1 entrega somente a fundação SaaS multiempresa: Supabase Auth, tenants, perfis, roles, permissions, catálogo de módulos, vínculos de módulos por tenant, RLS básica, endpoints mínimos protegidos e telas mínimas de login/área autenticada.
 
 ## Estrutura
 
@@ -10,25 +10,22 @@ A Sprint 0 entrega somente a base técnica do repositório: estrutura de monorep
 .
 ├── apps
 │   ├── web       # Frontend Next.js, React, TypeScript e Tailwind CSS
-│   ├── api       # Backend NestJS com healthcheck inicial
-│   └── workers   # Estrutura inicial para workers Node.js/TypeScript
+│   ├── api       # Backend NestJS com healthcheck e endpoints mínimos Sprint 1
+│   └── workers   # Estrutura inicial de workers sem funcionalidades operacionais
 ├── packages      # Pacotes compartilhados do monorepo
 ├── docs          # Documentação inicial do projeto
-├── supabase      # Estrutura reservada para Supabase
-├── package.json  # Scripts raiz e configuração do workspace
+├── supabase      # Migrations e seed do Supabase
 └── pnpm-workspace.yaml
 ```
 
 ## Pré-requisitos
 
-- Node.js 20.11 ou superior para desenvolvimento local.
-- Node.js 22.x recomendado para Preview/Production na Vercel.
+- Node.js 20.11 ou superior.
 - Corepack habilitado.
 - pnpm 10.14.0.
+- Projeto Supabase configurado localmente ou remoto.
 
 ## Instalação
-
-A partir da raiz do repositório:
 
 ```bash
 corepack enable
@@ -36,9 +33,22 @@ corepack prepare pnpm@10.14.0 --activate
 pnpm install
 ```
 
-## Comandos de frontend
+## Primeiro acesso seguro
 
-Executar a partir da raiz do repositório:
+1. Configure as variáveis Supabase no `.env` local usando `.env.example` como referência.
+2. Aplique a migration da Sprint 1 em `supabase/migrations/202607020001_sprint_1_core_multitenancy.sql`.
+3. Preencha localmente `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_FULL_NAME`, `BOOTSTRAP_TENANT_NAME` e `BOOTSTRAP_TENANT_SLUG`.
+4. Rode o bootstrap manual e idempotente:
+
+```bash
+pnpm bootstrap:admin
+```
+
+5. Acesse `/login` com o usuário criado.
+
+O script de bootstrap usa `SUPABASE_SERVICE_ROLE_KEY` somente no backend/script, não imprime senha, tokens ou service role, e não cria cadastro público.
+
+## Comandos de frontend
 
 ```bash
 pnpm --filter @sli/web dev
@@ -47,32 +57,56 @@ pnpm --filter @sli/web lint
 pnpm --filter @sli/web typecheck
 ```
 
-Por padrão, o frontend roda em `http://localhost:3000` durante o desenvolvimento.
-
 ## Comandos de backend
-
-Executar a partir da raiz do repositório:
 
 ```bash
 pnpm --filter @sli/api dev
 pnpm --filter @sli/api build
 pnpm --filter @sli/api lint
 pnpm --filter @sli/api typecheck
+pnpm --filter @sli/api bootstrap:admin
 ```
 
-## Healthcheck
+## Endpoints Sprint 1
 
-Com a API em execução, o healthcheck inicial pode ser validado em:
+- `GET /health` permanece público para healthcheck.
+- `GET /users/me` retorna usuário autenticado e perfil.
+- `GET /tenants` retorna somente tenants do usuário autenticado.
+- `GET /tenants/:tenantId/modules` retorna módulos ativos do tenant somente se o usuário pertencer ao tenant.
+- `GET /modules` retorna catálogo global de módulos ativos para usuário autenticado.
 
-```bash
-curl http://localhost:3001/health
-```
+## Telas Sprint 1
 
-O endpoint existe apenas para validar que a aplicação backend inicial está respondendo.
+- `/login`: login por e-mail e senha com Supabase Auth, sem cadastro público.
+- `/app`: área autenticada simples com estado do usuário e tenant ativo.
+- `/app/tenants`: lista tenants do usuário e permite seleção local do tenant ativo.
+
+## Banco Sprint 1
+
+Migration criada:
+
+- `supabase/migrations/202607020001_sprint_1_core_multitenancy.sql`
+
+Tabelas criadas:
+
+- `tenants`
+- `users_profile`
+- `roles`
+- `permissions`
+- `user_roles`
+- `modules`
+- `tenant_modules`
+
+Módulos semeados:
+
+- Core
+- Transporte
+- Atendimento
+- Armazém
+- Financeiro
+- Equipes
 
 ## Comandos de qualidade
-
-Executar a partir da raiz do repositório:
 
 ```bash
 pnpm lint
@@ -81,44 +115,6 @@ pnpm build
 pnpm format:check
 ```
 
-Para formatar arquivos quando necessário:
+## Limites da Sprint 1
 
-```bash
-pnpm format
-```
-
-## Configuração Vercel
-
-A configuração de deploy deve ficar no painel da Vercel, sem arquivo `vercel.json` na raiz do repositório.
-
-Configuração esperada do projeto Vercel:
-
-- **Root Directory:** `apps/web`
-- **Framework Preset:** `Next.js`
-- **Node.js Version:** `22.x`
-- **Install Command:** `corepack enable && corepack prepare pnpm@10.14.0 --activate && cd ../.. && pnpm install --no-frozen-lockfile`
-- **Build Command:** sem override
-- **Output Directory:** sem override
-
-> Com **Root Directory** configurado como `apps/web`, não configure `apps/web/.next` como **Output Directory**. O Next.js e a Vercel resolvem a saída de build automaticamente a partir do diretório raiz configurado.
-
-Também não é necessário sobrescrever `buildCommand`, `installCommand` ou `outputDirectory` em arquivo de configuração versionado para a Sprint 0.
-
-## Limites da Sprint 0
-
-Esta sprint contém apenas limpeza e estrutura técnica inicial. Não fazem parte da Sprint 0:
-
-- banco de dados ou migrations reais;
-- configuração Supabase;
-- configuração OpenAI;
-- autenticação;
-- tenants;
-- roles;
-- permissions;
-- dashboards;
-- módulos operacionais;
-- integrações externas;
-- WhatsApp;
-- agentes de IA com acesso a dados reais.
-
-Qualquer evolução funcional deve ser solicitada explicitamente em sprint futura.
+Não foram implementados dashboards reais, SaaS Admin, planos, cobrança, setup kanban, contratos de dados, staging, pareamento, tickets, módulos operacionais, WhatsApp, OpenAI ou agentes de IA.
