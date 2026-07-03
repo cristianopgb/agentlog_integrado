@@ -36,6 +36,8 @@ pnpm install
 ## Primeiro acesso seguro
 
 1. Configure as variáveis Supabase no `.env` local usando `.env.example` como referência.
+   - Na Vercel, o frontend deve usar preferencialmente `NEXT_PUBLIC_AGENTLOG_SUPABASE_SUPABASE_URL` e `NEXT_PUBLIC_AGENTLOG_SUPABASE_SUPABASE_ANON_KEY`.
+   - O frontend mantém compatibilidade com `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` como fallback.
 2. Aplique a migration da Sprint 1 em `supabase/migrations/202607020001_sprint_1_core_multitenancy.sql`.
 3. Preencha localmente `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_FULL_NAME`, `BOOTSTRAP_TENANT_NAME` e `BOOTSTRAP_TENANT_SLUG`.
 4. Rode o bootstrap manual e idempotente:
