@@ -51,6 +51,9 @@ export function createBrowserSupabaseClient() {
         const user = await request<{ id: string; email?: string }>('/auth/v1/user');
         return { data: { user } };
       },
+      signOut() {
+        window.localStorage.removeItem(tokenKey);
+      },
     },
     from(table: string) {
       let selected = '*';
