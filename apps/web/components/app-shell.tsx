@@ -15,6 +15,7 @@ const navigation = [
   { href: '/app/admin/plans', label: 'Planos', marker: 'P', permission: 'commercial.plans.view' },
   { href: '/app/admin/subscription', label: 'Assinatura', marker: 'A', permission: 'commercial.subscription.view' },
   { href: '/app/admin/modules', label: 'Módulos', marker: 'M', permission: 'core.modules.view' },
+  { href: '/app/setup', label: 'Setup', marker: 'S', permission: 'setup.projects.view' },
   { href: '/app/admin/roles', label: 'Roles', marker: 'R', permission: 'core.roles.view' },
   { href: '/app/admin/permissions', label: 'Permissões', marker: 'K', permission: 'core.permissions.view' },
 ];
