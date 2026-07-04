@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createBrowserSupabaseClient } from '../../../lib/supabase';
+import { Card, EmptyState, SectionHeader, StatusBadge } from '../../../components/ui';
 
 type Tenant = { id: string; name: string; slug: string };
 
@@ -14,39 +15,40 @@ export default function TenantsPage() {
     supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) return;
 
-      const { data: profile } = await supabase
-        .from('users_profile')
-        .select('active_tenant_id')
-        .eq('id', data.user.id)
-        .maybeSingle();
+      const { data: profile } = await supabase.from('users_profile').select('active_tenant_id').eq('id', data.user.id).maybeSingle();
       setActiveTenantId((profile as { active_tenant_id: string | null } | null)?.active_tenant_id ?? null);
 
-      const { data: userRoles } = await supabase
-        .from('user_roles')
-        .select('tenant:tenants(id, name, slug)')
-        .eq('user_id', data.user.id);
-
+      const { data: userRoles } = await supabase.from('user_roles').select('tenant:tenants(id, name, slug)').eq('user_id', data.user.id);
       setTenants((userRoles ?? []).map((row) => (row as { tenant: Tenant }).tenant).filter(Boolean));
     });
   }, []);
 
   return (
-    <main className="min-h-screen px-6 py-10">
-      <section className="mx-auto max-w-3xl rounded-2xl border border-border bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-bold">Tenants disponíveis</h1>
-        <ul className="mt-6 space-y-3">
-          {tenants.map((tenant) => (
-            <li className="rounded-lg border p-4" key={tenant.id}>
-              <button className="text-left" onClick={() => setActiveTenantId(tenant.id)} type="button">
-                <strong>{tenant.name}</strong>
-                <span className="ml-2 text-slate-500">{tenant.slug}</span>
-                {activeTenantId === tenant.id ? <span className="ml-3 text-sm text-green-700">ativo</span> : null}
+    <div className="mx-auto max-w-6xl space-y-8">
+      <SectionHeader eyebrow="Organizações" title="Tenants disponíveis" description="Escolha visualmente o contexto de operação entre os tenants vinculados ao usuário autenticado." />
+      {tenants.length ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {tenants.map((tenant) => {
+            const active = activeTenantId === tenant.id;
+            return (
+              <button className={`text-left transition hover:-translate-y-1 ${active ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`} key={tenant.id} onClick={() => setActiveTenantId(tenant.id)} type="button">
+                <Card className="h-full">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-xl font-semibold text-slate-950">{tenant.name}</h2>
+                      <p className="mt-1 text-sm text-slate-500">{tenant.slug}</p>
+                    </div>
+                    {active ? <StatusBadge tone="success">ativo</StatusBadge> : <StatusBadge>disponível</StatusBadge>}
+                  </div>
+                  <p className="mt-6 text-sm leading-6 text-slate-600">Tenant disponível para consulta na área autenticada.</p>
+                </Card>
               </button>
-            </li>
-          ))}
-        </ul>
-        {!tenants.length ? <p className="mt-6 text-slate-600">Nenhum tenant disponível para este usuário.</p> : null}
-      </section>
-    </main>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState title="Nenhum tenant disponível" description="Este usuário ainda não possui tenants vinculados para exibição." />
+      )}
+    </div>
   );
 }
