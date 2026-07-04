@@ -28,6 +28,16 @@ export class SupabaseService {
     return this.parseResponse<T>(response);
   }
 
+  async insert<T>(table: string, payload: Record<string, unknown>): Promise<T> {
+    const response = await fetch(`${this.url}/rest/v1/${table}`, { method: 'POST', headers: { ...this.adminHeaders(), Prefer: 'return=representation' }, body: JSON.stringify(payload) });
+    return this.parseResponse<T>(response);
+  }
+
+  async update<T>(table: string, query: string, payload: Record<string, unknown>): Promise<T> {
+    const response = await fetch(`${this.url}/rest/v1/${table}?${query}`, { method: 'PATCH', headers: { ...this.adminHeaders(), Prefer: 'return=representation' }, body: JSON.stringify(payload) });
+    return this.parseResponse<T>(response);
+  }
+
   private adminHeaders(): Record<string, string> {
     return { apikey: this.serviceRoleKey, Authorization: `Bearer ${this.serviceRoleKey}`, 'Content-Type': 'application/json' };
   }
