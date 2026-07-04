@@ -40,13 +40,26 @@ export default function AppPage() {
     <main className="min-h-screen px-6 py-10">
       <section className="mx-auto max-w-3xl rounded-2xl border border-border bg-white p-8 shadow-sm">
         <h1 className="text-3xl font-bold">Sistema Logístico Integrado</h1>
-        <p className="mt-4 text-slate-600">Área autenticada inicial da Sprint 1.</p>
+        <p className="mt-4 text-slate-600">Área autenticada inicial do Sistema Logístico Integrado.</p>
         <div className="mt-6 space-y-2 rounded-lg bg-slate-50 p-4">
           <p><strong>Usuário autenticado:</strong> {email ?? 'não carregado'}</p>
           <p><strong>Perfil:</strong> {profile?.full_name ?? 'sem nome informado'}</p>
           <p><strong>Tenant ativo:</strong> {activeTenant ? `${activeTenant.name} (${activeTenant.slug})` : 'nenhum tenant ativo'}</p>
         </div>
-        <Link className="mt-6 inline-flex rounded-md bg-slate-900 px-4 py-2 text-white" href="/app/tenants">Ver tenants</Link>
+        <nav className="mt-6 grid gap-3 sm:grid-cols-2" aria-label="Navegação principal da área autenticada">
+          <Link className="inline-flex rounded-md bg-slate-900 px-4 py-2 text-white" href="/app/tenants">
+            Ver tenants
+          </Link>
+          <Link className="inline-flex rounded-md bg-slate-900 px-4 py-2 text-white" href="/app/admin/plans">
+            Ver planos
+          </Link>
+          <Link className="inline-flex rounded-md bg-slate-900 px-4 py-2 text-white" href="/app/admin/subscription">
+            Ver assinatura
+          </Link>
+          <Link className="inline-flex rounded-md bg-slate-900 px-4 py-2 text-white" href="/app/admin/modules">
+            Ver módulos
+          </Link>
+        </nav>
       </section>
     </main>
   );

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { createBrowserSupabaseClient } from '../../../../lib/supabase';
 
@@ -51,6 +52,9 @@ export default function AdminPlansPage() {
   return (
     <main className="min-h-screen px-6 py-10">
       <section className="mx-auto max-w-5xl rounded-2xl border border-border bg-white p-8 shadow-sm">
+        <Link className="mb-6 inline-flex text-sm font-medium text-slate-700 hover:text-slate-900" href="/app">
+          Voltar para /app
+        </Link>
         <h1 className="text-2xl font-bold">Planos</h1>
         <p className="mt-2 text-slate-600">Visualização interna dos planos comerciais da Sprint 2.</p>
         {needsLogin ? <p className="mt-6 text-amber-700">Faça login para visualizar os planos.</p> : null}
