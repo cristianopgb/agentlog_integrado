@@ -4,16 +4,19 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createBrowserSupabaseClient } from '../lib/supabase';
+import { getCurrentUserPermissions, hasPermission, type UserPermission } from '../lib/rbac';
 
 type Profile = { full_name: string | null; active_tenant_id: string | null } | null;
 type Tenant = { id: string; name: string; slug: string } | null;
 
 const navigation = [
-  { href: '/app', label: 'Dashboard', marker: 'D' },
-  { href: '/app/tenants', label: 'Tenants', marker: 'T' },
-  { href: '/app/admin/plans', label: 'Planos', marker: 'P' },
-  { href: '/app/admin/subscription', label: 'Assinatura', marker: 'A' },
-  { href: '/app/admin/modules', label: 'Módulos', marker: 'M' },
+  { href: '/app', label: 'Dashboard', marker: 'D', permission: 'core.app.view' },
+  { href: '/app/tenants', label: 'Tenants', marker: 'T', permission: 'core.tenants.view' },
+  { href: '/app/admin/plans', label: 'Planos', marker: 'P', permission: 'commercial.plans.view' },
+  { href: '/app/admin/subscription', label: 'Assinatura', marker: 'A', permission: 'commercial.subscription.view' },
+  { href: '/app/admin/modules', label: 'Módulos', marker: 'M', permission: 'core.modules.view' },
+  { href: '/app/admin/roles', label: 'Roles', marker: 'R', permission: 'core.roles.view' },
+  { href: '/app/admin/permissions', label: 'Permissões', marker: 'K', permission: 'core.permissions.view' },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -22,6 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState<string | undefined>();
   const [profile, setProfile] = useState<Profile>(null);
   const [tenant, setTenant] = useState<Tenant>(null);
+  const [permissions, setPermissions] = useState<UserPermission[]>([]);
 
   useEffect(() => {
     const supabase = createBrowserSupabaseClient();
@@ -36,6 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (loadedProfile?.active_tenant_id) {
         const { data: tenantData } = await supabase.from('tenants').select('id, name, slug').eq('id', loadedProfile.active_tenant_id).maybeSingle();
         setTenant(tenantData as Tenant);
+        setPermissions(await getCurrentUserPermissions(loadedProfile.active_tenant_id));
       }
     });
   }, []);
@@ -58,7 +63,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
         <nav className="flex-1 space-y-2 px-4" aria-label="Navegação autenticada">
-          {navigation.map((item) => {
+          {navigation.filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => {
             const active = pathname === item.href;
             return (
               <Link key={item.href} href={item.href} className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition ${active ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>
@@ -89,7 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
           <nav className="mt-4 flex gap-2 overflow-x-auto lg:hidden" aria-label="Navegação autenticada mobile">
-            {navigation.map((item) => <Link key={item.href} href={item.href} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${pathname === item.href ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>{item.label}</Link>)}
+            {navigation.filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => <Link key={item.href} href={item.href} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${pathname === item.href ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>{item.label}</Link>)}
           </nav>
         </header>
         <main className="px-4 py-8 md:px-8 lg:px-10">{children}</main>
