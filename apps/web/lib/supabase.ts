@@ -1,4 +1,15 @@
 type AuthResponse = { access_token?: string; user?: { id: string; email?: string } };
+type RestResult<T> = { data: T | null; error: Error | null };
+
+type SupabaseErrorBody = {
+  message?: string;
+  msg?: string;
+  error?: string;
+  error_description?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+};
 
 const tokenKey = 'sli_supabase_access_token';
 
@@ -16,10 +27,34 @@ function getConfig() {
   return { url: url.replace(/\/$/, ''), anonKey };
 }
 
+function buildRestError(status: number, statusText: string, body: string): Error {
+  let parsed: SupabaseErrorBody | null = null;
+  try {
+    parsed = body ? (JSON.parse(body) as SupabaseErrorBody) : null;
+  } catch {
+    parsed = null;
+  }
+
+  const message =
+    parsed?.message ??
+    parsed?.error_description ??
+    parsed?.error ??
+    parsed?.msg ??
+    (body || statusText || 'Supabase request failed.');
+  const details = [parsed?.details, parsed?.hint, parsed?.code ? `code: ${parsed.code}` : null]
+    .filter(Boolean)
+    .join(' ');
+  return new Error(`Supabase REST ${status}: ${message}${details ? ` (${details})` : ''}`);
+}
+
+function encodeQueryParam(key: string, value: string) {
+  return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
 export function createBrowserSupabaseClient() {
   const { url, anonKey } = getConfig();
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
+  async function request<T>(path: string, init?: RequestInit): Promise<RestResult<T>> {
     const token = window.localStorage.getItem(tokenKey);
     const response = await fetch(`${url}${path}`, {
       ...init,
@@ -30,11 +65,14 @@ export function createBrowserSupabaseClient() {
         ...(init?.headers ?? {}),
       },
     });
-    if (!response.ok) return null;
-    if (response.status === 204) return null;
-    const text = await response.text();
-    if (!text) return null;
-    return JSON.parse(text) as T;
+    const text = response.status === 204 ? '' : await response.text();
+    if (!response.ok) return { data: null, error: buildRestError(response.status, response.statusText, text) };
+    if (!text) return { data: null, error: null };
+    try {
+      return { data: JSON.parse(text) as T, error: null };
+    } catch (error) {
+      return { data: null, error: error instanceof Error ? error : new Error('Invalid Supabase JSON response.') };
+    }
   }
 
   return {
@@ -51,8 +89,8 @@ export function createBrowserSupabaseClient() {
         return { error: null };
       },
       async getUser() {
-        const user = await request<{ id: string; email?: string }>('/auth/v1/user');
-        return { data: { user } };
+        const { data: user, error } = await request<{ id: string; email?: string }>('/auth/v1/user');
+        return { data: { user }, error };
       },
       signOut() {
         window.localStorage.removeItem(tokenKey);
@@ -65,14 +103,14 @@ export function createBrowserSupabaseClient() {
       let patchBody: Record<string, unknown> | null = null;
       let insertBody: Record<string, unknown> | null = null;
       async function run() {
-        const query = [`select=${selected}`, ...filters, ...orders].join('&');
+        const query = [encodeQueryParam('select', selected), ...filters, ...orders].join('&');
         const init = insertBody
           ? { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(insertBody) }
           : patchBody
             ? { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patchBody) }
             : undefined;
-        const data = await request<unknown[]>(`/rest/v1/${table}?${query}`, init);
-        return { data: data ?? [], error: null };
+        const { data, error } = await request<unknown[]>(`/rest/v1/${table}?${query}`, init);
+        return { data: data ?? [], error };
       }
       return {
         select(columns: string) {
@@ -88,20 +126,20 @@ export function createBrowserSupabaseClient() {
           return this;
         },
         eq(column: string, value: string) {
-          filters.push(`${column}=eq.${value}`);
+          filters.push(encodeQueryParam(column, `eq.${value}`));
           return this;
         },
         order(column: string, options?: { ascending?: boolean }) {
-          orders.push(`order=${column}.${options?.ascending === false ? 'desc' : 'asc'}`);
+          orders.push(encodeQueryParam('order', `${column}.${options?.ascending === false ? 'desc' : 'asc'}`));
           return this;
         },
         async maybeSingle() {
-          const query = [`select=${selected}`, ...filters, ...orders, 'limit=1'].join('&');
-          const data = await request<unknown[]>(`/rest/v1/${table}?${query}`);
-          return { data: data?.[0] ?? null, error: null };
+          const query = [encodeQueryParam('select', selected), ...filters, ...orders, encodeQueryParam('limit', '1')].join('&');
+          const { data, error } = await request<unknown[]>(`/rest/v1/${table}?${query}`);
+          return { data: data?.[0] ?? null, error };
         },
-        then(resolve: (value: { data: unknown[]; error: null }) => void) {
-          run().then(resolve);
+        then(resolve: (value: { data: unknown[]; error: Error | null }) => void, reject?: (reason: unknown) => void) {
+          run().then(resolve, reject);
         },
       };
     },
