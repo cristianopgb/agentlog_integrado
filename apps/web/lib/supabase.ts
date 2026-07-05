@@ -96,16 +96,19 @@ export function createBrowserSupabaseClient() {
         window.localStorage.removeItem(tokenKey);
       },
     },
+    rpc(functionName: string, payload: Record<string, unknown>) {
+      return request(`/rest/v1/rpc/${functionName}`, { method: 'POST', body: JSON.stringify(payload) });
+    },
     from(table: string) {
       let selected = '*';
       const filters: string[] = [];
       const orders: string[] = [];
       let patchBody: Record<string, unknown> | null = null;
-      let insertBody: Record<string, unknown> | null = null;
+      let insertBody: Record<string, unknown> | Record<string, unknown>[] | null = null;
       async function run() {
         const query = [encodeQueryParam('select', selected), ...filters, ...orders].join('&');
         const init = insertBody
-          ? { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(insertBody) }
+          ? { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(insertBody) }
           : patchBody
             ? { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patchBody) }
             : undefined;
@@ -121,7 +124,7 @@ export function createBrowserSupabaseClient() {
           patchBody = values;
           return this;
         },
-        insert(values: Record<string, unknown>) {
+        insert(values: Record<string, unknown> | Record<string, unknown>[]) {
           insertBody = values;
           return this;
         },
