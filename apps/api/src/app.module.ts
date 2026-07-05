@@ -7,13 +7,14 @@ import { RbacController } from './rbac/rbac.controller';
 import { RbacModule } from './rbac/rbac.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { SetupModule } from './setup/setup.module';
+import { DataContractsModule } from './data-contracts/data-contracts.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { TenantsController } from './tenants/tenants.controller';
 import { UsageModule } from './usage/usage.module';
 import { UsersController } from './users/users.controller';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule],
+  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule],
   controllers: [HealthController, UsersController, TenantsController, ModulesController, RbacController],
 })
 export class AppModule {}

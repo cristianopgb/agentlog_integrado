@@ -16,6 +16,8 @@ const navigation = [
   { href: '/app/admin/subscription', label: 'Assinatura', marker: 'A', permission: 'commercial.subscription.view' },
   { href: '/app/admin/modules', label: 'Módulos', marker: 'M', permission: 'core.modules.view' },
   { href: '/app/setup', label: 'Setup', marker: 'S', permission: 'setup.projects.view' },
+  { href: '/app/setup/data-sources', label: 'Fontes de dados', marker: 'F', permission: 'core.data_sources.view' },
+  { href: '/app/setup/data-contracts', label: 'Contratos de dados', marker: 'C', permission: 'core.data_contracts.view' },
   { href: '/app/admin/roles', label: 'Roles', marker: 'R', permission: 'core.roles.view' },
   { href: '/app/admin/permissions', label: 'Permissões', marker: 'K', permission: 'core.permissions.view' },
 ];

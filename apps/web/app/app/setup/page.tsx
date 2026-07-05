@@ -52,9 +52,11 @@ export default function SetupPage() {
             <p className="mt-1 font-semibold">{tenantId}</p>
             <p className="mt-4 text-3xl font-bold">{projects.length}</p>
             <p className="text-sm text-slate-600">projetos de setup</p>
-            <Link className="mt-4 inline-flex rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white" href="/app/setup/projects">
-              Ver projetos
-            </Link>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link className="inline-flex rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white" href="/app/setup/projects">Ver projetos</Link>
+              {hasPermission(permissions, 'core.data_sources.view') ? <Link className="inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" href="/app/setup/data-sources">Fontes de dados</Link> : null}
+              {hasPermission(permissions, 'core.data_contracts.view') ? <Link className="inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" href="/app/setup/data-contracts">Contratos de dados</Link> : null}
+            </div>
           </Card>
           <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-4">
             {statuses.map((status) => (
