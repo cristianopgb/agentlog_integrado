@@ -3,7 +3,7 @@ import { RbacService } from '../rbac/rbac.service';
 import { SupabaseService } from '../supabase/supabase.service';
 
 const sourceFields = 'id,tenant_id,name,description,source_type,module_key,status,owner_user_id,created_at,updated_at,created_by,updated_by';
-const contractFields = 'id,tenant_id,data_source_id,name,description,module_key,entity_key,contract_version,format,direction,status,periodicity,effective_from,effective_until,created_at,updated_at,created_by,updated_by,data_source:data_sources(id,name,source_type)';
+const contractFields = 'id,tenant_id,data_source_id,name,description,module_key,entity_key,contract_version,format,direction,status,periodicity,effective_from,effective_until,created_at,updated_at,created_by,updated_by,data_source:data_sources!data_contracts_data_source_tenant_fk(id,name,source_type)';
 const fieldFields = 'id,tenant_id,data_contract_id,field_key,source_field_name,description,data_type,is_required,is_unique,allow_null,min_length,max_length,min_value,max_value,regex_pattern,date_format,sort_order,created_at,updated_at';
 const allowedValueFields = 'id,tenant_id,data_contract_id,data_contract_field_id,value,label,normalized_value,is_active,sort_order,created_at,updated_at';
 
