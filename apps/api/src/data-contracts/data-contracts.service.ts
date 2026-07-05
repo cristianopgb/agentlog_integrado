@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { RbacService } from '../rbac/rbac.service';
 import { SupabaseService } from '../supabase/supabase.service';
 
 const sourceFields = 'id,tenant_id,name,description,source_type,module_key,status,owner_user_id,created_at,updated_at,created_by,updated_by';
@@ -8,19 +9,63 @@ const allowedValueFields = 'id,tenant_id,data_contract_id,data_contract_field_id
 
 @Injectable()
 export class DataContractsService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: SupabaseService, private readonly rbac: RbacService) {}
+
   listSources(tenantId: string) { return this.supabase.select('data_sources', `select=${sourceFields}&tenant_id=eq.${tenantId}&order=name.asc`); }
   createSource(tenantId: string, userId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['name','description','source_type','module_key','status','owner_user_id']); if (!payload.name || !payload.source_type || !payload.module_key) throw new BadRequestException('name, source_type and module_key are required.'); return this.supabase.insert('data_sources', { ...payload, tenant_id: tenantId, created_by: userId, updated_by: userId }); }
   updateSource(tenantId: string, sourceId: string, userId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['name','description','source_type','module_key','status','owner_user_id']); return this.supabase.update('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, { ...payload, updated_by: userId }); }
   listContracts(tenantId: string) { return this.supabase.select('data_contracts', `select=${contractFields}&tenant_id=eq.${tenantId}&order=created_at.desc`); }
   async getContract(tenantId: string, contractId: string) { const rows = await this.supabase.select<Array<unknown>>('data_contracts', `select=${contractFields}&tenant_id=eq.${tenantId}&id=eq.${contractId}&limit=1`); if (!rows.length) throw new NotFoundException('Data contract not found.'); return rows[0]; }
-  createContract(tenantId: string, userId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['data_source_id','name','description','module_key','entity_key','contract_version','format','direction','status','periodicity','effective_from','effective_until']); if (!payload.data_source_id || !payload.name || !payload.module_key || !payload.entity_key || !payload.format) throw new BadRequestException('data_source_id, name, module_key, entity_key and format are required.'); return this.supabase.insert('data_contracts', { ...payload, tenant_id: tenantId, created_by: userId, updated_by: userId }); }
-  updateContract(tenantId: string, contractId: string, userId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['name','description','module_key','entity_key','contract_version','format','direction','status','periodicity','effective_from','effective_until']); return this.supabase.update('data_contracts', `tenant_id=eq.${tenantId}&id=eq.${contractId}`, { ...payload, updated_by: userId }); }
+
+  async createContract(tenantId: string, userId: string, body: Record<string, unknown>) {
+    const payload = this.pick(body, ['data_source_id','name','description','module_key','entity_key','contract_version','format','direction','status','periodicity','effective_from','effective_until']);
+    if (!payload.data_source_id || !payload.name || !payload.module_key || !payload.entity_key || !payload.format) throw new BadRequestException('data_source_id, name, module_key, entity_key and format are required.');
+    if (payload.status === 'active') await this.rbac.ensurePermission(userId, tenantId, ['core.data_contracts.activate']);
+    await this.ensureDataSourceBelongsToTenant(tenantId, String(payload.data_source_id));
+    return this.supabase.insert('data_contracts', { ...payload, tenant_id: tenantId, created_by: userId, updated_by: userId });
+  }
+
+  async updateContract(tenantId: string, contractId: string, userId: string, body: Record<string, unknown>) {
+    const payload = this.pick(body, ['name','description','module_key','entity_key','contract_version','format','direction','status','periodicity','effective_from','effective_until']);
+    if (payload.status === 'active') await this.rbac.ensurePermission(userId, tenantId, ['core.data_contracts.activate']);
+    return this.supabase.update('data_contracts', `tenant_id=eq.${tenantId}&id=eq.${contractId}`, { ...payload, updated_by: userId });
+  }
+
   listFields(tenantId: string, contractId: string) { return this.supabase.select('data_contract_fields', `select=${fieldFields}&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&order=sort_order.asc`); }
-  createField(tenantId: string, contractId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['field_key','source_field_name','description','data_type','is_required','is_unique','allow_null','min_length','max_length','min_value','max_value','regex_pattern','date_format','sort_order']); if (!payload.field_key || !payload.source_field_name || !payload.data_type) throw new BadRequestException('field_key, source_field_name and data_type are required.'); return this.supabase.insert('data_contract_fields', { ...payload, tenant_id: tenantId, data_contract_id: contractId }); }
+
+  async createField(tenantId: string, contractId: string, body: Record<string, unknown>) {
+    const payload = this.pick(body, ['field_key','source_field_name','description','data_type','is_required','is_unique','allow_null','min_length','max_length','min_value','max_value','regex_pattern','date_format','sort_order']);
+    if (!payload.field_key || !payload.source_field_name || !payload.data_type) throw new BadRequestException('field_key, source_field_name and data_type are required.');
+    await this.ensureContractBelongsToTenant(tenantId, contractId);
+    return this.supabase.insert('data_contract_fields', { ...payload, tenant_id: tenantId, data_contract_id: contractId });
+  }
+
   updateField(tenantId: string, fieldId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['field_key','source_field_name','description','data_type','is_required','is_unique','allow_null','min_length','max_length','min_value','max_value','regex_pattern','date_format','sort_order']); return this.supabase.update('data_contract_fields', `tenant_id=eq.${tenantId}&id=eq.${fieldId}`, payload); }
   listAllowedValues(tenantId: string, fieldId: string) { return this.supabase.select('data_contract_allowed_values', `select=${allowedValueFields}&tenant_id=eq.${tenantId}&data_contract_field_id=eq.${fieldId}&order=sort_order.asc`); }
-  async createAllowedValue(tenantId: string, fieldId: string, body: Record<string, unknown>) { const fields = await this.supabase.select<Array<{ data_contract_id: string }>>('data_contract_fields', `select=data_contract_id&tenant_id=eq.${tenantId}&id=eq.${fieldId}&limit=1`); if (!fields.length) throw new NotFoundException('Data contract field not found.'); const payload = this.pick(body, ['value','label','normalized_value','is_active','sort_order']); if (!payload.value) throw new BadRequestException('value is required.'); return this.supabase.insert('data_contract_allowed_values', { ...payload, tenant_id: tenantId, data_contract_id: fields[0].data_contract_id, data_contract_field_id: fieldId }); }
+
+  async createAllowedValue(tenantId: string, fieldId: string, body: Record<string, unknown>) {
+    const fields = await this.supabase.select<Array<{ data_contract_id: string }>>('data_contract_fields', `select=data_contract_id&tenant_id=eq.${tenantId}&id=eq.${fieldId}&limit=1`);
+    if (!fields.length) throw new NotFoundException('Data contract field not found.');
+    const payload = this.pick(body, ['data_contract_id','value','label','normalized_value','is_active','sort_order']);
+    if (!payload.value) throw new BadRequestException('value is required.');
+    const contractId = String(fields[0].data_contract_id);
+    if (payload.data_contract_id !== undefined && payload.data_contract_id !== contractId) throw new ForbiddenException('Data contract field does not belong to the provided data contract.');
+    await this.ensureContractBelongsToTenant(tenantId, contractId);
+    const allowedValuePayload = this.pick(body, ['value','label','normalized_value','is_active','sort_order']);
+    return this.supabase.insert('data_contract_allowed_values', { ...allowedValuePayload, tenant_id: tenantId, data_contract_id: contractId, data_contract_field_id: fieldId });
+  }
+
   updateAllowedValue(tenantId: string, allowedValueId: string, body: Record<string, unknown>) { const payload = this.pick(body, ['value','label','normalized_value','is_active','sort_order']); return this.supabase.update('data_contract_allowed_values', `tenant_id=eq.${tenantId}&id=eq.${allowedValueId}`, payload); }
+
+  private async ensureDataSourceBelongsToTenant(tenantId: string, sourceId: string) {
+    const rows = await this.supabase.select<Array<{ id: string }>>('data_sources', `select=id&tenant_id=eq.${tenantId}&id=eq.${sourceId}&limit=1`);
+    if (!rows.length) throw new NotFoundException('Data source not found for this tenant.');
+  }
+
+  private async ensureContractBelongsToTenant(tenantId: string, contractId: string) {
+    const rows = await this.supabase.select<Array<{ id: string }>>('data_contracts', `select=id&tenant_id=eq.${tenantId}&id=eq.${contractId}&limit=1`);
+    if (!rows.length) throw new NotFoundException('Data contract not found for this tenant.');
+  }
+
   private pick(body: Record<string, unknown>, keys: string[]) { return Object.fromEntries(keys.filter((key) => body[key] !== undefined).map((key) => [key, body[key]])); }
 }
