@@ -28,8 +28,13 @@ export class SupabaseService {
     return this.parseResponse<T>(response);
   }
 
-  async insert<T>(table: string, payload: Record<string, unknown>): Promise<T> {
+  async insert<T>(table: string, payload: Record<string, unknown> | Record<string, unknown>[]): Promise<T> {
     const response = await fetch(`${this.url}/rest/v1/${table}`, { method: 'POST', headers: { ...this.adminHeaders(), Prefer: 'return=representation' }, body: JSON.stringify(payload) });
+    return this.parseResponse<T>(response);
+  }
+
+  async rpc<T>(functionName: string, payload: Record<string, unknown>): Promise<T> {
+    const response = await fetch(`${this.url}/rest/v1/rpc/${functionName}`, { method: 'POST', headers: this.adminHeaders(), body: JSON.stringify(payload) });
     return this.parseResponse<T>(response);
   }
 
