@@ -1,0 +1,2 @@
+import { Card, SectionHeader, StatusBadge } from '../../../components/ui';
+export default function ReportsPage(){return <div className="mx-auto max-w-4xl space-y-6"><SectionHeader eyebrow="Relatórios" title="Relatórios" description="Esta área será implementada em sprint futura."/><Card><StatusBadge tone="warning">em breve</StatusBadge><p className="mt-4 text-slate-600">Nenhum relatório real foi implementado na Sprint 7.1.</p></Card></div>;}

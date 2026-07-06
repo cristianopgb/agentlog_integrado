@@ -11,16 +11,17 @@ type Tenant = { id: string; name: string; slug: string } | null;
 
 const navigation = [
   { href: '/app', label: 'Dashboard', marker: 'D', permission: 'core.app.view' },
+  { href: '/app/integrations', label: 'Integrações', marker: 'I', permission: 'core.data_sources.view' },
+  { href: '/app/indicators', label: 'Indicadores', marker: 'N', badge: 'em breve' },
+  { href: '/app/reports', label: 'Relatórios', marker: 'R', badge: 'em breve' },
+  { href: '/app/agents', label: 'Agentes', marker: 'A', badge: 'em breve' },
+];
+
+const adminNavigation = [
   { href: '/app/tenants', label: 'Tenants', marker: 'T', permission: 'core.tenants.view' },
   { href: '/app/admin/plans', label: 'Planos', marker: 'P', permission: 'commercial.plans.view' },
-  { href: '/app/admin/subscription', label: 'Assinatura', marker: 'A', permission: 'commercial.subscription.view' },
+  { href: '/app/admin/subscription', label: 'Assinatura', marker: 'S', permission: 'commercial.subscription.view' },
   { href: '/app/admin/modules', label: 'Módulos', marker: 'M', permission: 'core.modules.view' },
-  { href: '/app/setup', label: 'Setup', marker: 'S', permission: 'setup.projects.view' },
-  { href: '/app/setup/data-sources', label: 'Fontes de dados', marker: 'F', permission: 'core.data_sources.view' },
-  { href: '/app/setup/data-contracts', label: 'Contratos de dados', marker: 'C', permission: 'core.data_contracts.view' },
-  { href: '/app/setup/staging', label: 'Staging', marker: 'G', permission: 'core.staging_batches.view' },
-  { href: '/app/setup/mapping', label: 'Pareamento', marker: 'P', permission: 'core.field_mappings.view' },
-  { href: '/app/setup/canonical', label: 'Modelo canônico', marker: 'N', permission: 'core.canonical_entities.view' },
   { href: '/app/admin/roles', label: 'Roles', marker: 'R', permission: 'core.roles.view' },
   { href: '/app/admin/permissions', label: 'Permissões', marker: 'K', permission: 'core.permissions.view' },
 ];
@@ -68,16 +69,26 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </div>
-        <nav className="flex-1 space-y-2 px-4" aria-label="Navegação autenticada">
+        <nav className="flex-1 space-y-2 overflow-y-auto px-4" aria-label="Navegação autenticada">
           {navigation.filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => {
-            const active = pathname === item.href;
+            const active = pathname === item.href || (item.href !== '/app' && pathname.startsWith(item.href));
             return (
               <Link key={item.href} href={item.href} className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition ${active ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>
                 <span className={`flex h-8 w-8 items-center justify-center rounded-xl text-xs font-bold ${active ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>{item.marker}</span>
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {'badge' in item ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">{item.badge}</span> : null}
               </Link>
             );
           })}
+          <div className="pt-4">
+            <p className="px-4 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Administração</p>
+            <div className="mt-2 space-y-2">
+              {adminNavigation.filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => {
+                const active = pathname === item.href;
+                return <Link key={item.href} href={item.href} className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition ${active ? 'bg-white text-slate-950 shadow-lg' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><span className={`flex h-8 w-8 items-center justify-center rounded-xl text-xs font-bold ${active ? 'bg-blue-600 text-white' : 'bg-white/10'}`}>{item.marker}</span>{item.label}</Link>;
+              })}
+            </div>
+          </div>
         </nav>
         <div className="m-4 rounded-2xl border border-white/10 bg-white/10 p-4 text-sm">
           <p className="text-slate-300">Usuário</p>
@@ -100,7 +111,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
           <nav className="mt-4 flex gap-2 overflow-x-auto lg:hidden" aria-label="Navegação autenticada mobile">
-            {navigation.filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => <Link key={item.href} href={item.href} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${pathname === item.href ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>{item.label}</Link>)}
+            {[...navigation, ...adminNavigation].filter((item) => !item.permission || hasPermission(permissions, item.permission)).map((item) => <Link key={item.href} href={item.href} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ${pathname === item.href ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>{item.label}</Link>)}
           </nav>
         </header>
         <main className="px-4 py-8 md:px-8 lg:px-10">{children}</main>
