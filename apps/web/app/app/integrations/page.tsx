@@ -6,7 +6,7 @@ import { getCurrentUserPermissions, hasPermission, type UserPermission } from '.
 import { getSessionContext } from '../../../lib/setup-api';
 import { listIntegrations, type IntegrationSummary } from '../../../lib/integrations-api';
 
-const statusTone = { 'conexão pendente': 'warning', 'estrutura configurada': 'info', 'validação pendente': 'warning', 'mapeamento pendente': 'warning', 'integração configurada': 'success' } as const;
+const statusTone = { 'conexão pendente': 'warning', 'estrutura pendente': 'warning', 'mapeamento pendente': 'warning', 'integração configurada': 'success' } as const;
 const typeLabels: Record<string, string> = { api: 'API', spreadsheet: 'Planilha', database: 'Banco', other: 'Outro', manual_file: 'Planilha', email: 'Outro' };
 
 export default function IntegrationsPage() {
