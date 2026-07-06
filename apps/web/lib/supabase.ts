@@ -105,10 +105,12 @@ export function createBrowserSupabaseClient() {
       const orders: string[] = [];
       let patchBody: Record<string, unknown> | null = null;
       let insertBody: Record<string, unknown> | Record<string, unknown>[] | null = null;
+      let upsertConflict: string | null = null;
+      let limitValue: number | null = null;
       async function run() {
-        const query = [encodeQueryParam('select', selected), ...filters, ...orders].join('&');
+        const query = [encodeQueryParam('select', selected), ...filters, ...orders, ...(limitValue === null ? [] : [encodeQueryParam('limit', String(limitValue))])].join('&');
         const init = insertBody
-          ? { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify(insertBody) }
+          ? { method: 'POST', headers: { Prefer: `return=representation${upsertConflict ? ',resolution=merge-duplicates' : ''}` }, body: JSON.stringify(insertBody) }
           : patchBody
             ? { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patchBody) }
             : undefined;
@@ -128,12 +130,22 @@ export function createBrowserSupabaseClient() {
           insertBody = values;
           return this;
         },
+        upsert(values: Record<string, unknown> | Record<string, unknown>[], options?: { onConflict?: string }) {
+          insertBody = values;
+          upsertConflict = options?.onConflict ?? null;
+          if (upsertConflict) filters.push(encodeQueryParam('on_conflict', upsertConflict));
+          return this;
+        },
         eq(column: string, value: string) {
           filters.push(encodeQueryParam(column, `eq.${value}`));
           return this;
         },
         order(column: string, options?: { ascending?: boolean }) {
           orders.push(encodeQueryParam('order', `${column}.${options?.ascending === false ? 'desc' : 'asc'}`));
+          return this;
+        },
+        limit(value: number) {
+          limitValue = value;
           return this;
         },
         async maybeSingle() {
