@@ -9,13 +9,14 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { SetupModule } from './setup/setup.module';
 import { DataContractsModule } from './data-contracts/data-contracts.module';
 import { StagingModule } from './staging/staging.module';
+import { CanonicalModule } from './canonical/canonical.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { TenantsController } from './tenants/tenants.controller';
 import { UsageModule } from './usage/usage.module';
 import { UsersController } from './users/users.controller';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule],
+  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule],
   controllers: [HealthController, UsersController, TenantsController, ModulesController, RbacController],
 })
 export class AppModule {}

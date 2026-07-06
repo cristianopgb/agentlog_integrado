@@ -19,6 +19,8 @@ const navigation = [
   { href: '/app/setup/data-sources', label: 'Fontes de dados', marker: 'F', permission: 'core.data_sources.view' },
   { href: '/app/setup/data-contracts', label: 'Contratos de dados', marker: 'C', permission: 'core.data_contracts.view' },
   { href: '/app/setup/staging', label: 'Staging', marker: 'G', permission: 'core.staging_batches.view' },
+  { href: '/app/setup/mapping', label: 'Pareamento', marker: 'P', permission: 'core.field_mappings.view' },
+  { href: '/app/setup/canonical', label: 'Modelo canônico', marker: 'N', permission: 'core.canonical_entities.view' },
   { href: '/app/admin/roles', label: 'Roles', marker: 'R', permission: 'core.roles.view' },
   { href: '/app/admin/permissions', label: 'Permissões', marker: 'K', permission: 'core.permissions.view' },
 ];
