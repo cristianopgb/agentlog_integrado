@@ -98,31 +98,56 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
   const supabase = createBrowserSupabaseClient();
   const { data: existing, error: existingError } = await supabase.from('data_contracts').select(contractSelect).eq('tenant_id', tenantId).eq('data_source_id', source.id).eq('entity_key', 'deliveries').order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (existingError) throw existingError;
-  if (existing) return existing as DataContract;
 
-  const { data: contracts, error: contractError } = await supabase.from('data_contracts').insert({
-    tenant_id: tenantId,
-    data_source_id: source.id,
-    name: 'Estrutura inicial de entregas',
-    description: 'Contrato declarativo inicial de entregas criado pela trilha principal da integração. Não realiza upload, API real ou gravação operacional nesta sprint.',
-    module_key: source.module_key,
-    entity_key: 'deliveries',
-    contract_version: 1,
-    format: source.source_type === 'api' ? 'api_json' : source.source_type === 'spreadsheet' ? String(source.metadata?.file_type ?? 'xlsx') : 'other',
-    direction: 'inbound',
-    status: 'draft',
-    periodicity: 'on_demand',
-  }).select(contractSelect);
-  if (contractError) throw contractError;
-  const contract = ((contracts as DataContract[])[0]);
+  let contract = existing as DataContract | null;
+  if (!contract) {
+    const { data: contracts, error: contractError } = await supabase.from('data_contracts').insert({
+      tenant_id: tenantId,
+      data_source_id: source.id,
+      name: 'Estrutura inicial de entregas',
+      description: 'Contrato declarativo inicial de entregas criado pela trilha principal da integração. Não realiza upload, API real ou gravação operacional nesta sprint.',
+      module_key: source.module_key,
+      entity_key: 'deliveries',
+      contract_version: 1,
+      format: source.source_type === 'api' ? 'api_json' : source.source_type === 'spreadsheet' ? String(source.metadata?.file_type ?? 'xlsx') : 'other',
+      direction: 'inbound',
+      status: 'draft',
+      periodicity: 'on_demand',
+    }).select(contractSelect);
+    if (contractError) throw contractError;
+    contract = (contracts as DataContract[])[0];
+  }
 
-  const { data: fields, error: fieldError } = await supabase.from('data_contract_fields').insert(initialDeliveryFields.map((field) => ({ ...field, tenant_id: tenantId, data_contract_id: contract.id }))).select('id,field_key');
+  const { error: fieldError } = await supabase.from('data_contract_fields').upsert(
+    initialDeliveryFields.map((field) => ({ ...field, tenant_id: tenantId, data_contract_id: contract.id })),
+    { onConflict: 'data_contract_id,field_key' },
+  );
   if (fieldError) throw fieldError;
+
+  const { data: fields, error: fieldsError } = await supabase
+    .from('data_contract_fields')
+    .select('id,field_key')
+    .eq('tenant_id', tenantId)
+    .eq('data_contract_id', contract.id);
+  if (fieldsError) throw fieldsError;
+
   const statusField = (fields as { id: string; field_key: string }[]).find((field) => field.field_key === 'delivery_status');
   if (statusField) {
-    const { error: allowedError } = await supabase.from('data_contract_allowed_values').insert(deliveryStatusValues.map((value, index) => ({ tenant_id: tenantId, data_contract_id: contract.id, data_contract_field_id: statusField.id, value, label: value, normalized_value: value, sort_order: (index + 1) * 10 })));
+    const { error: allowedError } = await supabase.from('data_contract_allowed_values').upsert(
+      deliveryStatusValues.map((value, index) => ({
+        tenant_id: tenantId,
+        data_contract_id: contract.id,
+        data_contract_field_id: statusField.id,
+        value,
+        label: value,
+        normalized_value: value,
+        sort_order: (index + 1) * 10,
+      })),
+      { onConflict: 'data_contract_field_id,value' },
+    );
     if (allowedError) throw allowedError;
   }
+
   return contract;
 }
 

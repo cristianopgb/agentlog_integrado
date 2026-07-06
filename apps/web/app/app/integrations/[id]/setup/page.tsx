@@ -88,7 +88,7 @@ export default function IntegrationSetupPage() {
   const missingItems = [!connectionDeclared ? 'conexão declarada' : '', !contract || fields.length === 0 ? 'contrato/estrutura de dados' : '', mappedCount === 0 ? 'campos mapeados' : ''].filter(Boolean);
   const titleType = source?.source_type === 'api' ? 'Integração com API' : source?.source_type === 'spreadsheet' ? 'Integração com Planilha' : 'Integração';
 
-  const contractActions = !contract ? <Card className="border-amber-200 bg-amber-50">
+  const contractActions = !contract || fields.length < 7 ? <Card className="border-amber-200 bg-amber-50">
     <h2 className="text-lg font-bold">Você ainda não definiu a estrutura dos dados desta integração.</h2>
     <p className="mt-2 text-sm text-slate-600">Escolha uma estrutura dentro desta trilha. Nenhum upload, parser ou chamada externa será executado.</p>
     <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
