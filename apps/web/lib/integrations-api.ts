@@ -16,27 +16,63 @@ export type IntegrationSummary = {
   generalStatus: 'conexão pendente' | 'estrutura pendente' | 'mapeamento pendente' | 'integração configurada';
 };
 
-type InitialDeliveryField = {
+type NormalizedInitialDeliveryField = {
+  tenant_id: string;
+  data_contract_id: string;
   field_key: string;
   source_field_name: string;
+  description: string | null;
   data_type: string;
   is_required: boolean;
+  is_unique: boolean;
   allow_null: boolean;
-  date_format?: string;
+  min_length: number | null;
+  max_length: number | null;
+  min_value: number | null;
+  max_value: number | null;
+  regex_pattern: string | null;
+  date_format: string | null;
   sort_order: number;
 };
 
-const initialDeliveryFields: InitialDeliveryField[] = [
-  { field_key: 'delivery_number', source_field_name: 'Numero Entrega', data_type: 'text', is_required: true, allow_null: false, sort_order: 10 },
-  { field_key: 'customer_document', source_field_name: 'Documento Cliente', data_type: 'text', is_required: true, allow_null: false, sort_order: 20 },
-  { field_key: 'customer_name', source_field_name: 'Nome Cliente', data_type: 'text', is_required: true, allow_null: false, sort_order: 30 },
-  { field_key: 'delivery_status', source_field_name: 'Status Entrega', data_type: 'enum', is_required: true, allow_null: false, sort_order: 40 },
-  { field_key: 'expected_delivery_date', source_field_name: 'Data Prevista', data_type: 'date', is_required: false, allow_null: true, date_format: 'YYYY-MM-DD', sort_order: 50 },
-  { field_key: 'delivered_at', source_field_name: 'Data Entrega', data_type: 'datetime', is_required: false, allow_null: true, sort_order: 60 },
-  { field_key: 'total_value', source_field_name: 'Valor Total', data_type: 'decimal', is_required: false, allow_null: true, sort_order: 70 },
+type InitialDeliveryFieldDefinition = Omit<NormalizedInitialDeliveryField, 'tenant_id' | 'data_contract_id'>;
+
+const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
+  { field_key: 'delivery_number', source_field_name: 'Numero Entrega', description: null, data_type: 'text', is_required: true, is_unique: false, allow_null: false, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 10 },
+  { field_key: 'customer_document', source_field_name: 'Documento Cliente', description: null, data_type: 'text', is_required: true, is_unique: false, allow_null: false, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 20 },
+  { field_key: 'customer_name', source_field_name: 'Nome Cliente', description: null, data_type: 'text', is_required: true, is_unique: false, allow_null: false, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 30 },
+  { field_key: 'delivery_status', source_field_name: 'Status Entrega', description: null, data_type: 'enum', is_required: true, is_unique: false, allow_null: false, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 40 },
+  { field_key: 'expected_delivery_date', source_field_name: 'Data Prevista', description: null, data_type: 'date', is_required: false, is_unique: false, allow_null: true, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: 'YYYY-MM-DD', sort_order: 50 },
+  { field_key: 'delivered_at', source_field_name: 'Data Entrega', description: null, data_type: 'datetime', is_required: false, is_unique: false, allow_null: true, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 60 },
+  { field_key: 'total_value', source_field_name: 'Valor Total', description: null, data_type: 'decimal', is_required: false, is_unique: false, allow_null: true, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: 70 },
 ];
 
 const deliveryStatusValues = ['pending', 'in_transit', 'delivered', 'failed', 'cancelled'];
+
+function isDuplicateContractError(error: { code?: string; status?: number; message?: string } | null) {
+  return error?.code === '23505' || error?.status === 409 || error?.message?.toLowerCase().includes('duplicate key');
+}
+
+function normalizeInitialDeliveryField(tenantId: string, contractId: string, field: InitialDeliveryFieldDefinition): NormalizedInitialDeliveryField {
+  return {
+    tenant_id: tenantId,
+    data_contract_id: contractId,
+    field_key: field.field_key,
+    source_field_name: field.source_field_name,
+    description: field.description,
+    data_type: field.data_type,
+    is_required: field.is_required,
+    is_unique: field.is_unique,
+    allow_null: field.allow_null,
+    min_length: field.min_length,
+    max_length: field.max_length,
+    min_value: field.min_value,
+    max_value: field.max_value,
+    regex_pattern: field.regex_pattern,
+    date_format: field.date_format,
+    sort_order: field.sort_order,
+  };
+}
 
 export async function listIntegrations(tenantId: string): Promise<IntegrationSummary[]> {
   const supabase = createBrowserSupabaseClient();
@@ -96,10 +132,13 @@ export async function linkExistingContractToIntegration(tenantId: string, contra
 
 export async function createInitialDeliveryContract(tenantId: string, source: IntegrationSource) {
   const supabase = createBrowserSupabaseClient();
-  const { data: existing, error: existingError } = await supabase.from('data_contracts').select(contractSelect).eq('tenant_id', tenantId).eq('data_source_id', source.id).eq('entity_key', 'deliveries').order('created_at', { ascending: false }).limit(1).maybeSingle();
-  if (existingError) throw existingError;
+  const fetchExistingContract = async () => {
+    const { data, error } = await supabase.from('data_contracts').select(contractSelect).eq('tenant_id', tenantId).eq('data_source_id', source.id).eq('entity_key', 'deliveries').eq('contract_version', '1').maybeSingle();
+    if (error) throw error;
+    return data as DataContract | null;
+  };
 
-  let contract = existing as DataContract | null;
+  let contract = await fetchExistingContract();
   if (!contract) {
     const { data: contracts, error: contractError } = await supabase.from('data_contracts').insert({
       tenant_id: tenantId,
@@ -114,12 +153,19 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
       status: 'draft',
       periodicity: 'on_demand',
     }).select(contractSelect);
-    if (contractError) throw contractError;
-    contract = (contracts as DataContract[])[0];
+
+    if (contractError) {
+      if (!isDuplicateContractError(contractError)) throw contractError;
+      contract = await fetchExistingContract();
+    } else {
+      contract = (contracts as DataContract[])[0];
+    }
   }
 
+  if (!contract) throw new Error('Não foi possível localizar o contrato declarativo inicial de entregas.');
+
   const { error: fieldError } = await supabase.from('data_contract_fields').upsert(
-    initialDeliveryFields.map((field) => ({ ...field, tenant_id: tenantId, data_contract_id: contract.id })),
+    initialDeliveryFields.map((field) => normalizeInitialDeliveryField(tenantId, contract.id, field)),
     { onConflict: 'data_contract_id,field_key' },
   );
   if (fieldError) throw fieldError;
@@ -141,6 +187,7 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
         value,
         label: value,
         normalized_value: value,
+        is_active: true,
         sort_order: (index + 1) * 10,
       })),
       { onConflict: 'data_contract_field_id,value' },
