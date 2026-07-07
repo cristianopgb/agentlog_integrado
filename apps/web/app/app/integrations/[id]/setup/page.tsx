@@ -80,6 +80,14 @@ const canonicalEntityLabels: Record<string, string> = {
   team_records: 'Equipes',
   deliveries: 'Entregas legado',
 };
+const normalizationStatusLabels: Record<string, string> = {
+  completed: 'Concluída',
+  completed_with_errors: 'Concluída com inconsistências',
+  failed: 'Falhou',
+  running: 'Em processamento',
+  pending: 'Pendente',
+};
+
 const canonicalFieldLabels: Record<string, string> = {
   operation_record_id: 'Registro operacional',
   external_id: 'ID externo',
@@ -511,36 +519,83 @@ export default function IntegrationSetupPage() {
     connectionDeclared && contract && fields.length > 0 && mappedCount > 0,
   );
   const lastNormalizationRun = normalizationRuns[0] ?? null;
+  const latestValidatedBatchLabel = latestBatch
+    ? latestBatch.validated_at
+      ? new Intl.DateTimeFormat('pt-BR', {
+          dateStyle: 'short',
+          timeStyle: 'short',
+        }).format(new Date(latestBatch.validated_at))
+      : latestBatch.batch_code || latestBatch.id.slice(0, 8)
+    : 'Nenhum lote validado';
   const canRunNormalization =
     hasPermission(perms, 'normalization.run') &&
     hasPermission(perms, 'native_records.manage');
   const normalizationDisabledReason = !latestBatch
     ? 'Não há lote validado para processar.'
     : mappedCount === 0
-      ? 'Não há campos mapeados para o contrato da integração.'
+      ? 'Mapeie os campos antes de processar para a base nativa.'
       : !canRunNormalization
-        ? 'Permissões normalization.run e native_records.manage são necessárias.'
+        ? 'Você não tem permissão para executar a normalização.'
         : '';
-  async function runNormalization() {
-    if (!tenantId || !latestBatch || normalizationDisabledReason) return;
+
+  async function refreshNormalizationSummary(
+    t: string,
+    batchId: string,
+    preferredRunId?: string,
+  ) {
+    const runs = await listNormalizationRuns(t);
+    const sourceRuns = runs.filter((run) => run.staging_batch_id === batchId);
+    setNormalizationRuns(sourceRuns);
+    const selectedRun =
+      sourceRuns.find((run) => run.id === preferredRunId) ?? sourceRuns[0];
+    setNormalizationErrors(
+      selectedRun ? await listNormalizationErrors(t, selectedRun.id) : [],
+    );
+    return selectedRun;
+  }
+
+  async function handleNormalize() {
+    if (normalizing) return;
+    if (!tenantId) {
+      setMsg('Selecione um tenant ativo.');
+      return;
+    }
+    if (!latestBatch?.id) {
+      setMsg('Não há lote validado para processar.');
+      return;
+    }
+    if (mappedCount === 0) {
+      setMsg('Mapeie os campos antes de processar para a base nativa.');
+      return;
+    }
+    if (!canRunNormalization) {
+      setMsg('Você não tem permissão para executar a normalização.');
+      return;
+    }
+
     setNormalizing(true);
     try {
       const run = await processNormalization(tenantId, latestBatch.id);
-      setNormalizationRuns([run, ...normalizationRuns]);
-      setNormalizationErrors(await listNormalizationErrors(tenantId, run.id));
+      const refreshedRun =
+        (await refreshNormalizationSummary(tenantId, latestBatch.id, run.id)) ??
+        run;
       setMsg(
-        run.status === 'completed'
+        refreshedRun.status === 'completed'
           ? 'Normalização concluída. Os dados tratados foram gravados na base nativa.'
-          : run.status === 'completed_with_errors'
+          : refreshedRun.status === 'completed_with_errors'
             ? 'Normalização concluída com inconsistências. Revise os erros.'
-            : 'Não foi possível normalizar o lote. Revise os erros técnicos.',
+            : 'Não foi possível processar para a base nativa. Revise a configuração da integração ou tente novamente.',
       );
-    } catch (e) {
-      setMsg(
-        e instanceof Error
-          ? e.message
-          : 'Não foi possível normalizar o lote. Revise os erros técnicos.',
-      );
+    } catch (error) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Falha ao processar normalização.', error);
+      }
+      const message =
+        error instanceof Error &&
+        error.message.includes('API backend não configurada')
+          ? error.message
+          : 'Não foi possível processar para a base nativa. Revise a configuração da integração ou tente novamente.';
+      setMsg(message);
     } finally {
       setNormalizing(false);
     }
@@ -1003,7 +1058,7 @@ export default function IntegrationSetupPage() {
             </div>
             <div className="rounded-2xl bg-slate-50 p-4 md:col-span-2">
               <dt className="font-semibold">Último lote validado</dt>
-              <dd>{latestBatch?.validated_at ?? 'Nenhum lote validado'}</dd>
+              <dd>{latestValidatedBatchLabel}</dd>
             </div>
           </dl>
 
@@ -1020,9 +1075,7 @@ export default function IntegrationSetupPage() {
               <dl className="mt-4 grid gap-3 text-sm md:grid-cols-3">
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">Último lote validado</dt>
-                  <dd className="font-semibold">
-                    {latestBatch?.batch_code ?? latestBatch?.id ?? 'Nenhum'}
-                  </dd>
+                  <dd className="font-semibold">{latestValidatedBatchLabel}</dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">Registros válidos</dt>
@@ -1040,7 +1093,11 @@ export default function IntegrationSetupPage() {
                   </dt>
                   <dd>
                     {lastNormalizationRun ? (
-                      <StatusBadge>{lastNormalizationRun.status}</StatusBadge>
+                      <StatusBadge>
+                        {normalizationStatusLabels[
+                          lastNormalizationRun.status
+                        ] ?? lastNormalizationRun.status}
+                      </StatusBadge>
                     ) : (
                       'Nenhuma execução'
                     )}
@@ -1074,7 +1131,7 @@ export default function IntegrationSetupPage() {
               <button
                 className="mt-4 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 disabled={!!normalizationDisabledReason || normalizing}
-                onClick={runNormalization}
+                onClick={handleNormalize}
                 type="button"
               >
                 {normalizing ? 'Processando...' : 'Processar para base nativa'}

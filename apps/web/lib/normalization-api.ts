@@ -49,8 +49,26 @@ async function api(path: string, init?: RequestInit) {
       ...(init?.headers ?? {}),
     },
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  const text = await response.text();
+  const body = text ? tryParseJson(text) : null;
+  if (!response.ok) {
+    const message =
+      typeof body === 'object' && body && 'message' in body
+        ? Array.isArray(body.message)
+          ? body.message.join(' ')
+          : String(body.message)
+        : text;
+    throw new Error(message || 'API request failed.');
+  }
+  return body;
+}
+
+function tryParseJson(text: string) {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
 }
 
 export function processNormalization(tenantId: string, batchId: string) {
