@@ -49,6 +49,15 @@ const steps = [
   { key: 'done', label: 'Pronto' },
 ] as const;
 const mappingTypes = ['direct', 'transformed', 'default_value', 'ignored'];
+const primaryEntityKey = 'operation_records';
+const moduleEntityKeys = [
+  'transport_records',
+  'attendance_records',
+  'finance_records',
+  'warehouse_records',
+  'team_records',
+];
+const visibleEntityOrder = [primaryEntityKey, ...moduleEntityKeys];
 const mappingTypeLabels: Record<string, string> = {
   direct: 'Direto',
   transformed: 'Com transformação declarada',
@@ -62,6 +71,7 @@ const canonicalEntityLabels: Record<string, string> = {
   finance_records: 'Financeiro',
   warehouse_records: 'Armazém',
   team_records: 'Equipes',
+  deliveries: 'Entregas legado',
 };
 const canonicalFieldLabels: Record<string, string> = {
   operation_record_id: 'Registro operacional',
@@ -183,21 +193,6 @@ const canonicalFieldLabels: Record<string, string> = {
   overtime_hours: 'Horas extras',
   worked_at: 'Data trabalhada',
 };
-const deliveryFieldHints = [
-  'entrega',
-  'delivery',
-  'transporte',
-  'transport',
-  'cte',
-  'ct-e',
-  'nota',
-  'invoice',
-  'cliente',
-  'customer',
-  'motorista',
-  'driver',
-  'frete',
-];
 
 type StepKey = (typeof steps)[number]['key'];
 type Preview = {
@@ -214,43 +209,21 @@ function entityLabel(entity?: CanonicalEntity | null) {
 function fieldLabel(field: CanonicalField) {
   return canonicalFieldLabels[field.field_key] ?? field.name;
 }
-function sourceLooksLikeDelivery(
-  fields: DataContractField[],
-  contract: DataContract | null,
-  source: IntegrationSource | null,
-) {
-  const text = [
-    contract?.name,
-    contract?.module_key,
-    contract?.entity_key,
-    source?.name,
-    source?.module_key,
-    ...fields.flatMap((field) => [field.field_key, field.source_field_name]),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  return deliveryFieldHints.some((hint) => text.includes(hint));
-}
 function chooseInitialEntity(
   entities: CanonicalEntity[],
-  fields: DataContractField[],
-  contract: DataContract | null,
-  source: IntegrationSource | null,
   chosenEntityId?: string,
 ) {
   if (chosenEntityId && entities.some((entity) => entity.id === chosenEntityId))
     return chosenEntityId;
-  const byKey = (key: string) =>
-    entities.find((entity) => entity.entity_key === key)?.id;
-  if (sourceLooksLikeDelivery(fields, contract, source))
-    return (
-      byKey('operation_records') ??
-      byKey('transport_records') ??
-      entities[0]?.id ??
-      ''
-    );
-  return byKey('operation_records') ?? entities[0]?.id ?? '';
+  return (
+    entities.find((entity) => entity.entity_key === primaryEntityKey)?.id ??
+    entities[0]?.id ??
+    ''
+  );
+}
+function entitySortOrder(entity: CanonicalEntity) {
+  const index = visibleEntityOrder.indexOf(entity.entity_key);
+  return index === -1 ? 999 : index;
 }
 
 export default function IntegrationSetupPage() {
@@ -307,12 +280,12 @@ export default function IntegrationSetupPage() {
       setFields(fs);
       setMappings(ms);
       setPreview(pv);
-      setEntityId(chooseInitialEntity(es, fs, c, s, chosenEntityId));
+      setEntityId(chooseInitialEntity(es, chosenEntityId));
     } else {
       setFields([]);
       setMappings([]);
       setPreview(null);
-      setEntityId(chooseInitialEntity(es, [], c, s, chosenEntityId));
+      setEntityId(chooseInitialEntity(es, chosenEntityId));
     }
   }
 
@@ -458,13 +431,15 @@ export default function IntegrationSetupPage() {
   const groupedCanonicalEntities = useMemo(
     () =>
       entities
+        .filter((entity) => visibleEntityOrder.includes(entity.entity_key))
         .map((entity) => ({
           ...entity,
           fields: canonicalFields.filter(
             (field) => field.canonical_entity_id === entity.id,
           ),
         }))
-        .filter((entity) => entity.fields.length > 0),
+        .filter((entity) => entity.fields.length > 0)
+        .sort((a, b) => entitySortOrder(a) - entitySortOrder(b)),
     [entities, canonicalFields],
   );
   const selectedCanonicalFields = useMemo(
@@ -487,12 +462,16 @@ export default function IntegrationSetupPage() {
       ),
     [fields, query],
   );
+  const hasCommonCoreMapping = mappings.some((mapping) => {
+    const entity = entities.find(
+      (item) => item.id === mapping.canonical_entity_id,
+    );
+    return entity?.entity_key === primaryEntityKey;
+  });
   const showDestinationWarning = Boolean(
-    sourceLooksLikeDelivery(fields, contract, source) &&
     selectedEntity?.entity_key &&
-    !['operation_records', 'transport_records'].includes(
-      selectedEntity.entity_key,
-    ),
+      moduleEntityKeys.includes(selectedEntity.entity_key) &&
+      !hasCommonCoreMapping,
   );
   const connectionDeclared = source?.metadata?.connection_declared === true;
   const mappedCount = mappings.length;
@@ -769,11 +748,12 @@ export default function IntegrationSetupPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-bold">Mapeamento</h2>
-                    <p className="mt-1 text-xs text-slate-500">
-                      O núcleo operacional comum contém dados básicos usados por
-                      vários módulos, como CTe, NF, cliente, embarcador,
-                      destinatário, origem, destino, peso, valor, placa,
-                      motorista, status e datas.
+                    <p className="mt-1 text-sm text-slate-600">
+                      O Núcleo operacional comum deve ser mapeado primeiro. Ele
+                      reúne os dados básicos usados por vários módulos, como CT-e,
+                      NF, entrega, cliente, origem, destino, peso, valor, placa,
+                      motorista, status e datas. Depois, mapeie campos específicos
+                      do módulo, se existirem.
                     </p>
                   </div>
                   <label className="text-sm font-semibold text-slate-700">
@@ -794,8 +774,8 @@ export default function IntegrationSetupPage() {
                 <div className="mt-4 space-y-4">
                   {showDestinationWarning ? (
                     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                      Os campos da fonte parecem ser de entrega/transporte.
-                      Confira se a base de destino selecionada está correta.
+                      Recomendamos mapear primeiro o Núcleo operacional comum. Os
+                      módulos específicos complementam essa base.
                     </div>
                   ) : null}
                   <div className="rounded-2xl border bg-slate-50 p-3">
@@ -808,9 +788,14 @@ export default function IntegrationSetupPage() {
                           key={entity.id}
                           onClick={() => changeEntity(entity.id)}
                           type="button"
-                          className={`rounded-xl border px-3 py-2 text-xs font-semibold ${entityId === entity.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'bg-white text-slate-600'}`}
+                          className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+                            entity.entity_key === primaryEntityKey
+                              ? 'border-blue-300 bg-blue-50 text-blue-800 shadow-sm'
+                              : 'bg-white text-slate-600'
+                          } ${entityId === entity.id ? 'ring-2 ring-blue-500' : ''}`}
                         >
                           {entityLabel(entity)} · {entity.fields.length}
+                          {entity.entity_key === primaryEntityKey ? ' · base principal' : ''}
                         </button>
                       ))}
                     </div>
