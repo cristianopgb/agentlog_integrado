@@ -37,6 +37,13 @@ import {
   type StagingBatch,
 } from '../../../../../lib/staging-api';
 import {
+  listNormalizationErrors,
+  listNormalizationRuns,
+  processNormalization,
+  type NormalizationError,
+  type NormalizationRun,
+} from '../../../../../lib/normalization-api';
+import {
   getCurrentUserPermissions,
   hasPermission,
   type UserPermission,
@@ -246,6 +253,13 @@ export default function IntegrationSetupPage() {
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [preview, setPreview] = useState<Preview>(null);
   const [latestBatch, setLatestBatch] = useState<StagingBatch | null>(null);
+  const [normalizationRuns, setNormalizationRuns] = useState<
+    NormalizationRun[]
+  >([]);
+  const [normalizationErrors, setNormalizationErrors] = useState<
+    NormalizationError[]
+  >([]);
+  const [normalizing, setNormalizing] = useState(false);
   const [query, setQuery] = useState('');
   const [perms, setPerms] = useState<UserPermission[]>([]);
   const [msg, setMsg] = useState('Carregando integração...');
@@ -261,9 +275,13 @@ export default function IntegrationSetupPage() {
       listReusableContracts(t, params.id),
     ]);
     setEntities(es);
-    setLatestBatch(
-      batches.find((batch) => batch.data_source_id === params.id) ?? null,
-    );
+    const latestValidatedBatch =
+      batches.find(
+        (batch) =>
+          batch.data_source_id === params.id &&
+          (batch.status === 'validated' || batch.status === 'partially_valid'),
+      ) ?? null;
+    setLatestBatch(latestValidatedBatch);
     setReusableContracts(reusable);
     setSelectedContractId(reusable[0]?.id ?? '');
     setCanonicalFields(
@@ -281,11 +299,25 @@ export default function IntegrationSetupPage() {
       setMappings(ms);
       setPreview(pv);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
+      const runs = await listNormalizationRuns(t);
+      const sourceRuns = runs.filter((run) =>
+        latestValidatedBatch
+          ? run.staging_batch_id === latestValidatedBatch.id
+          : false,
+      );
+      setNormalizationRuns(sourceRuns);
+      if (sourceRuns[0])
+        setNormalizationErrors(
+          await listNormalizationErrors(t, sourceRuns[0].id),
+        );
+      else setNormalizationErrors([]);
     } else {
       setFields([]);
       setMappings([]);
       setPreview(null);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
+      setNormalizationRuns([]);
+      setNormalizationErrors([]);
     }
   }
 
@@ -470,14 +502,49 @@ export default function IntegrationSetupPage() {
   });
   const showDestinationWarning = Boolean(
     selectedEntity?.entity_key &&
-      moduleEntityKeys.includes(selectedEntity.entity_key) &&
-      !hasCommonCoreMapping,
+    moduleEntityKeys.includes(selectedEntity.entity_key) &&
+    !hasCommonCoreMapping,
   );
   const connectionDeclared = source?.metadata?.connection_declared === true;
   const mappedCount = mappings.length;
   const isComplete = Boolean(
     connectionDeclared && contract && fields.length > 0 && mappedCount > 0,
   );
+  const lastNormalizationRun = normalizationRuns[0] ?? null;
+  const canRunNormalization =
+    hasPermission(perms, 'normalization.run') &&
+    hasPermission(perms, 'native_records.manage');
+  const normalizationDisabledReason = !latestBatch
+    ? 'Não há lote validado para processar.'
+    : mappedCount === 0
+      ? 'Não há campos mapeados para o contrato da integração.'
+      : !canRunNormalization
+        ? 'Permissões normalization.run e native_records.manage são necessárias.'
+        : '';
+  async function runNormalization() {
+    if (!tenantId || !latestBatch || normalizationDisabledReason) return;
+    setNormalizing(true);
+    try {
+      const run = await processNormalization(tenantId, latestBatch.id);
+      setNormalizationRuns([run, ...normalizationRuns]);
+      setNormalizationErrors(await listNormalizationErrors(tenantId, run.id));
+      setMsg(
+        run.status === 'completed'
+          ? 'Normalização concluída. Os dados tratados foram gravados na base nativa.'
+          : run.status === 'completed_with_errors'
+            ? 'Normalização concluída com inconsistências. Revise os erros.'
+            : 'Não foi possível normalizar o lote. Revise os erros técnicos.',
+      );
+    } catch (e) {
+      setMsg(
+        e instanceof Error
+          ? e.message
+          : 'Não foi possível normalizar o lote. Revise os erros técnicos.',
+      );
+    } finally {
+      setNormalizing(false);
+    }
+  }
   const missingItems = [
     !connectionDeclared ? 'conexão declarada' : '',
     !contract ? 'contrato vinculado' : '',
@@ -750,10 +817,10 @@ export default function IntegrationSetupPage() {
                     <h2 className="text-lg font-bold">Mapeamento</h2>
                     <p className="mt-1 text-sm text-slate-600">
                       O Núcleo operacional comum deve ser mapeado primeiro. Ele
-                      reúne os dados básicos usados por vários módulos, como CT-e,
-                      NF, entrega, cliente, origem, destino, peso, valor, placa,
-                      motorista, status e datas. Depois, mapeie campos específicos
-                      do módulo, se existirem.
+                      reúne os dados básicos usados por vários módulos, como
+                      CT-e, NF, entrega, cliente, origem, destino, peso, valor,
+                      placa, motorista, status e datas. Depois, mapeie campos
+                      específicos do módulo, se existirem.
                     </p>
                   </div>
                   <label className="text-sm font-semibold text-slate-700">
@@ -774,8 +841,8 @@ export default function IntegrationSetupPage() {
                 <div className="mt-4 space-y-4">
                   {showDestinationWarning ? (
                     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                      Recomendamos mapear primeiro o Núcleo operacional comum. Os
-                      módulos específicos complementam essa base.
+                      Recomendamos mapear primeiro o Núcleo operacional comum.
+                      Os módulos específicos complementam essa base.
                     </div>
                   ) : null}
                   <div className="rounded-2xl border bg-slate-50 p-3">
@@ -795,7 +862,9 @@ export default function IntegrationSetupPage() {
                           } ${entityId === entity.id ? 'ring-2 ring-blue-500' : ''}`}
                         >
                           {entityLabel(entity)} · {entity.fields.length}
-                          {entity.entity_key === primaryEntityKey ? ' · base principal' : ''}
+                          {entity.entity_key === primaryEntityKey
+                            ? ' · base principal'
+                            : ''}
                         </button>
                       ))}
                     </div>
@@ -900,7 +969,9 @@ export default function IntegrationSetupPage() {
           </h2>
           <p className="mx-auto mt-3 max-w-2xl text-slate-600">
             {isComplete
-              ? 'A conexão declarativa, a estrutura de dados e o mapeamento foram configurados. A gravação automática na base operacional nativa será implementada em sprint futura.'
+              ? latestBatch
+                ? 'A integração está configurada. Você pode processar o lote validado para gravar os dados tratados na base operacional nativa.'
+                : 'A integração está configurada. Para gravar na base nativa, valide um lote de staging e execute a normalização.'
               : 'Complete os itens pendentes abaixo antes de considerar esta integração configurada.'}
           </p>
           {!isComplete ? (
@@ -935,6 +1006,98 @@ export default function IntegrationSetupPage() {
               <dd>{latestBatch?.validated_at ?? 'Nenhum lote validado'}</dd>
             </div>
           </dl>
+
+          {isComplete ? (
+            <div className="mx-auto mt-6 max-w-4xl rounded-2xl border bg-white p-4 text-left">
+              <h3 className="text-lg font-bold">
+                Normalização para base nativa
+              </h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Processa somente o lote validado e os campos mapeados desta
+                integração para gravar os dados tratados na base operacional
+                nativa.
+              </p>
+              <dl className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Último lote validado</dt>
+                  <dd className="font-semibold">
+                    {latestBatch?.batch_code ?? latestBatch?.id ?? 'Nenhum'}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Registros válidos</dt>
+                  <dd className="font-semibold">
+                    {latestBatch?.valid_records ?? 0}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Campos mapeados</dt>
+                  <dd className="font-semibold">{mappedCount}</dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">
+                    Último status de normalização
+                  </dt>
+                  <dd>
+                    {lastNormalizationRun ? (
+                      <StatusBadge>{lastNormalizationRun.status}</StatusBadge>
+                    ) : (
+                      'Nenhuma execução'
+                    )}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Criados</dt>
+                  <dd className="font-semibold">
+                    {lastNormalizationRun
+                      ? lastNormalizationRun.created_operation_records +
+                        lastNormalizationRun.created_extension_records
+                      : 0}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Atualizados</dt>
+                  <dd className="font-semibold">
+                    {lastNormalizationRun
+                      ? lastNormalizationRun.updated_operation_records +
+                        lastNormalizationRun.updated_extension_records
+                      : 0}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Erros</dt>
+                  <dd className="font-semibold">
+                    {lastNormalizationRun?.error_records ?? 0}
+                  </dd>
+                </div>
+              </dl>
+              <button
+                className="mt-4 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                disabled={!!normalizationDisabledReason || normalizing}
+                onClick={runNormalization}
+                type="button"
+              >
+                {normalizing ? 'Processando...' : 'Processar para base nativa'}
+              </button>
+              {normalizationDisabledReason ? (
+                <p className="mt-2 text-sm text-amber-700">
+                  {normalizationDisabledReason}
+                </p>
+              ) : null}
+              {normalizationErrors.length ? (
+                <ul className="mt-3 space-y-2 text-sm">
+                  {normalizationErrors.slice(0, 5).map((error) => (
+                    <li
+                      key={error.id}
+                      className="rounded-lg bg-rose-50 p-2 text-rose-900"
+                    >
+                      <strong>{error.error_code}</strong>: {error.error_message}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             <button
               onClick={() => setStep('connection')}
