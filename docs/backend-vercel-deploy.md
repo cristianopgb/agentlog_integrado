@@ -1,0 +1,68 @@
+# Deploy do backend NestJS na Vercel
+
+Este guia prepara o `apps/api` para publicação separada do frontend. O frontend `apps/web` continua usando `NEXT_PUBLIC_API_URL` para chamar a API pública.
+
+## Projeto backend na Vercel
+
+1. Crie um novo projeto na Vercel apontando para o mesmo repositório GitHub.
+2. Configure **Root Directory** como `apps/api`.
+3. Configure os comandos do projeto backend:
+   - **Install Command:** `cd ../.. && pnpm install --frozen-lockfile`
+   - **Build Command:** vazio ou padrão da Vercel; o `vercel.json` usa `@vercel/node` para empacotar `api/index.ts`.
+   - **Output Directory:** não configurar.
+4. Publique o projeto e copie a URL pública gerada para usar no frontend.
+
+## Variáveis do backend
+
+Configure somente no projeto backend da Vercel:
+
+```env
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+CORS_ORIGIN=
+```
+
+- `SUPABASE_URL`: URL do projeto Supabase usado pelo backend.
+- `SUPABASE_SERVICE_ROLE_KEY`: chave service role, restrita ao backend. Não configure essa variável no frontend.
+- `CORS_ORIGIN`: origem pública do frontend, por exemplo `https://seu-frontend.vercel.app`. Para mais de uma origem, separe por vírgula.
+
+## Variáveis do frontend
+
+Configure no projeto frontend `apps/web` da Vercel:
+
+```env
+NEXT_PUBLIC_API_URL=
+```
+
+Use a URL pública do backend, sem barra final, por exemplo:
+
+```env
+NEXT_PUBLIC_API_URL=https://seu-backend.vercel.app
+```
+
+## Testar o healthcheck
+
+Depois do deploy do backend, teste:
+
+```bash
+curl https://seu-backend.vercel.app/health
+```
+
+A resposta esperada é um JSON com `status` igual a `ok`, `service` igual a `api` e `project` igual a `Sistema Logístico Integrado`.
+
+## Testar os endpoints da Sprint 9
+
+Os endpoints de normalização continuam publicados pelo backend NestJS:
+
+- `POST /tenants/:tenantId/staging-batches/:batchId/normalize`
+- `GET /tenants/:tenantId/normalization-runs`
+- `GET /tenants/:tenantId/normalization-runs/:runId`
+
+Eles permanecem protegidos por autenticação e permissões do backend. Para validar pelo frontend:
+
+1. Confirme que `NEXT_PUBLIC_API_URL` está configurada no projeto `apps/web` da Vercel com a URL pública do backend.
+2. Faça novo deploy do frontend para aplicar a variável.
+3. Acesse a tela da Sprint 9 com um usuário autorizado.
+4. Clique em **Processar para base nativa**.
+5. A mensagem “API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.” não deve aparecer quando a variável estiver definida.
+6. Se houver erro de permissão, autenticação ou validação de dados, trate-o como resposta funcional da API, não como ausência de configuração do backend.
