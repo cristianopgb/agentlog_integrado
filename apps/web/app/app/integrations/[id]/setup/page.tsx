@@ -28,6 +28,7 @@ import {
   listCanonicalFields,
   listFieldMappings,
   upsertFieldMapping,
+  updateFieldMapping,
   type CanonicalEntity,
   type CanonicalField,
   type FieldMapping,
@@ -272,6 +273,8 @@ export default function IntegrationSetupPage() {
   const [query, setQuery] = useState('');
   const [perms, setPerms] = useState<UserPermission[]>([]);
   const [msg, setMsg] = useState('Carregando integração...');
+  const [draftMappings, setDraftMappings] = useState<Record<string, { data_contract_field_id: string; mapping_type: string }>>({});
+  const [mappingSaveState, setMappingSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
 
   async function load(t: string, chosenEntityId?: string) {
     const s = await getIntegrationSource(t, params.id);
@@ -309,6 +312,8 @@ export default function IntegrationSetupPage() {
       setFields(fs);
       setMappings(ms);
       setNormalizationMappings(batchMs);
+      setDraftMappings({});
+      setMappingSaveState('idle');
       setPreview(pv);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
       const runs = await listNormalizationRuns(t);
@@ -327,6 +332,8 @@ export default function IntegrationSetupPage() {
       setFields([]);
       setMappings([]);
       setNormalizationMappings([]);
+      setDraftMappings({});
+      setMappingSaveState('idle');
       setPreview(null);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
       setNormalizationRuns([]);
@@ -451,25 +458,67 @@ export default function IntegrationSetupPage() {
       );
     }
   }
-  async function saveMapping(cf: CanonicalField, form: HTMLFormElement) {
-    if (!contract) return;
-    const f = new FormData(form);
-    const fieldId = String(f.get('data_contract_field_id') || '');
-    if (!fieldId) return;
+  function updateDraftMapping(
+    fieldId: string,
+    patch: Partial<{ data_contract_field_id: string; mapping_type: string }>,
+  ) {
+    const existing = mappings.find((mapping) => mapping.canonical_field_id === fieldId);
+    setDraftMappings((current) => ({
+      ...current,
+      [fieldId]: {
+        data_contract_field_id:
+          patch.data_contract_field_id ?? existing?.data_contract_field_id ?? '',
+        mapping_type: patch.mapping_type ?? existing?.mapping_type ?? 'direct',
+      },
+    }));
+    setMappingSaveState('dirty');
+  }
+
+  async function handleSaveMappingsBatch(options?: { continueAfterSave?: boolean }) {
+    if (!contract || mappingSaveState === 'saving') return false;
+    const visibleFields = selectedCanonicalFields;
+    const changed = visibleFields
+      .map((cf) => {
+        const draft = draftMappings[cf.id];
+        if (!draft) return null;
+        const existing = mappings.find((mapping) => mapping.canonical_field_id === cf.id);
+        if (!draft.data_contract_field_id && draft.mapping_type !== 'ignored') return null;
+        if (
+          existing &&
+          existing.data_contract_field_id === draft.data_contract_field_id &&
+          existing.mapping_type === draft.mapping_type
+        ) return null;
+        return { cf, draft };
+      })
+      .filter(Boolean) as Array<{ cf: CanonicalField; draft: { data_contract_field_id: string; mapping_type: string } }>;
+    if (!changed.length) {
+      if (options?.continueAfterSave) setStep('done');
+      return true;
+    }
+    setMappingSaveState('saving');
     try {
-      await upsertFieldMapping(tenantId, contract.id, {
-        data_contract_field_id: fieldId,
-        canonical_entity_id: cf.canonical_entity_id,
-        canonical_field_id: cf.id,
-        mapping_type: String(f.get('mapping_type') || 'direct'),
-        status: 'active',
-      });
+      await Promise.all(changed.map(({ cf, draft }) => {
+        const existing = mappings.find((mapping) => mapping.canonical_field_id === cf.id);
+        const payload = {
+          data_contract_field_id: draft.data_contract_field_id,
+          canonical_entity_id: cf.canonical_entity_id,
+          canonical_field_id: cf.id,
+          mapping_type: draft.mapping_type,
+          status: 'active',
+        };
+        return existing
+          ? updateFieldMapping(tenantId, existing.id, payload)
+          : upsertFieldMapping(tenantId, contract.id, payload);
+      }));
       await load(tenantId, entityId);
-      setMsg('Mapeamento salvo.');
+      setMappingSaveState('saved');
+      setMsg('Mapeamentos salvos.');
+      if (options?.continueAfterSave) setStep('done');
+      return true;
     } catch {
-      setMsg(
-        'Não foi possível salvar o mapeamento. Tente novamente ou revise a integração.',
-      );
+      setMappingSaveState('error');
+      setMsg('Erro ao salvar mapeamentos. Tente novamente ou revise a integração.');
+      return false;
     }
   }
 
@@ -540,6 +589,9 @@ export default function IntegrationSetupPage() {
         }).format(new Date(latestBatch.validated_at))
       : latestBatch.batch_code || latestBatch.id.slice(0, 8)
     : 'Nenhum lote validado';
+  const canManageMappings =
+    hasPermission(perms, 'core.field_mappings.create') &&
+    hasPermission(perms, 'core.field_mappings.update');
   const canRunNormalization =
     hasPermission(perms, 'normalization.run') &&
     hasPermission(perms, 'native_records.manage');
@@ -548,7 +600,7 @@ export default function IntegrationSetupPage() {
     : !contractMatchesLatestBatch
       ? 'O lote validado pertence a outro contrato de dados. Valide um novo lote ou refaça o mapeamento para este contrato.'
       : mappedCount === 0
-        ? 'Mapeie os campos deste lote/contrato antes de processar para a base nativa.'
+        ? 'Mapeie pelo menos um campo antes de processar para a base nativa.'
         : !canRunNormalization
         ? 'Você não tem permissão para executar a normalização.'
         : '';
@@ -584,7 +636,7 @@ export default function IntegrationSetupPage() {
       return;
     }
     if (mappedCount === 0) {
-      setMsg('Mapeie os campos deste lote/contrato antes de processar para a base nativa.');
+      setMsg('Mapeie pelo menos um campo antes de processar para a base nativa.');
       return;
     }
     if (!canRunNormalization) {
@@ -843,11 +895,16 @@ export default function IntegrationSetupPage() {
             </button>
             <div className="flex gap-2">
               <button
-                onClick={() => setStep('done')}
-                className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white"
+                onClick={() => handleSaveMappingsBatch({ continueAfterSave: true })}
+                disabled={mappingSaveState === 'saving' || (mappingSaveState === 'dirty' && !canManageMappings)}
+                className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
                 type="button"
               >
-                Continuar
+                {mappingSaveState === 'saving'
+                  ? 'Salvando...'
+                  : mappingSaveState === 'dirty'
+                    ? 'Salvar e continuar'
+                    : 'Continuar'}
               </button>
             </div>
           </div>
@@ -890,11 +947,7 @@ export default function IntegrationSetupPage() {
                   <div>
                     <h2 className="text-lg font-bold">Mapeamento</h2>
                     <p className="mt-1 text-sm text-slate-600">
-                      O Núcleo operacional comum deve ser mapeado primeiro. Ele
-                      reúne os dados básicos usados por vários módulos, como
-                      CT-e, NF, entrega, cliente, origem, destino, peso, valor,
-                      placa, motorista, status e datas. Depois, mapeie campos
-                      específicos do módulo, se existirem.
+                      Mapeie os campos disponíveis no legado. Você não precisa preencher todos os campos nativos. Quanto mais campos forem mapeados, mais indicadores, relatórios e análises ficarão disponíveis.
                     </p>
                   </div>
                   <label className="text-sm font-semibold text-slate-700">
@@ -943,18 +996,39 @@ export default function IntegrationSetupPage() {
                       ))}
                     </div>
                   </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-3 text-sm">
+                    <span className="font-semibold">
+                      {mappingSaveState === 'dirty'
+                        ? 'Alterações não salvas'
+                        : mappingSaveState === 'saving'
+                          ? 'Salvando...'
+                          : mappingSaveState === 'saved'
+                            ? 'Mapeamentos salvos'
+                            : mappingSaveState === 'error'
+                              ? 'Erro ao salvar mapeamentos'
+                              : 'Selecione vários campos e salve tudo em lote'}
+                    </span>
+                    <button
+                      onClick={() => handleSaveMappingsBatch()}
+                      disabled={mappingSaveState === 'saving' || mappingSaveState !== 'dirty' || !canManageMappings}
+                      className="rounded-xl bg-blue-600 px-4 py-2 font-bold text-white disabled:bg-slate-300"
+                      type="button"
+                    >
+                      {mappingSaveState === 'saving' ? 'Salvando...' : 'Salvar mapeamentos'}
+                    </button>
+                  </div>
                   {selectedCanonicalFields.map((cf) => {
                     const mapping = mappings.find(
                       (m) => m.canonical_field_id === cf.id,
                     );
+                    const draft = draftMappings[cf.id];
+                    const selectedSource = draft?.data_contract_field_id ?? mapping?.data_contract_field_id ?? '';
+                    const selectedType = draft?.mapping_type ?? mapping?.mapping_type ?? 'direct';
+                    const isIgnored = selectedType === 'ignored';
                     return (
-                      <form
+                      <div
                         key={cf.id}
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          saveMapping(cf, e.currentTarget);
-                        }}
-                        className="rounded-2xl border p-3"
+                        className="rounded-xl border p-3"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -963,14 +1037,14 @@ export default function IntegrationSetupPage() {
                               {cf.field_key} · {cf.data_type}
                             </p>
                           </div>
-                          <StatusBadge tone={mapping ? 'success' : 'warning'}>
-                            {mapping ? 'mapeado' : 'pendente'}
+                          <StatusBadge tone={isIgnored ? 'warning' : selectedSource ? 'success' : undefined}>
+                            {isIgnored ? 'ignorado' : selectedSource ? 'mapeado' : 'não mapeado'}
                           </StatusBadge>
                         </div>
                         <div className="mt-3 grid gap-2">
                           <select
-                            name="data_contract_field_id"
-                            defaultValue={mapping?.data_contract_field_id ?? ''}
+                            value={selectedSource}
+                            onChange={(e) => updateDraftMapping(cf.id, { data_contract_field_id: e.target.value })}
                             className="rounded-xl border p-2 text-sm"
                           >
                             <option value="">Selecione campo da fonte</option>
@@ -981,8 +1055,8 @@ export default function IntegrationSetupPage() {
                             ))}
                           </select>
                           <select
-                            name="mapping_type"
-                            defaultValue={mapping?.mapping_type ?? 'direct'}
+                            value={selectedType}
+                            onChange={(e) => updateDraftMapping(cf.id, { mapping_type: e.target.value })}
                             className="rounded-xl border p-2 text-sm"
                           >
                             {mappingTypes.map((type) => (
@@ -991,21 +1065,13 @@ export default function IntegrationSetupPage() {
                               </option>
                             ))}
                           </select>
-                          <button
-                            disabled={
-                              !hasPermission(
-                                perms,
-                                mapping
-                                  ? 'core.field_mappings.update'
-                                  : 'core.field_mappings.create',
-                              )
-                            }
-                            className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-300"
-                          >
-                            Salvar mapeamento
-                          </button>
+                          <p className="text-xs text-slate-500">
+                            {selectedSource
+                              ? 'Campo mapeado para processamento.'
+                              : 'Campo não mapeado. Dado não disponível; mapeie este campo para habilitar análises futuras.'}
+                          </p>
                         </div>
-                      </form>
+                      </div>
                     );
                   })}
                 </div>
