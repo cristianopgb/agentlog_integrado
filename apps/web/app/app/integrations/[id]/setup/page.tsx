@@ -1378,6 +1378,12 @@ export default function IntegrationSetupPage() {
               Editar mapeamento
             </button>
             <Link
+              href="/app/native-data"
+              className="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white"
+            >
+              Ver dados tratados
+            </Link>
+            <Link
               href="/app/integrations"
               className="rounded-xl bg-slate-950 px-4 py-2 font-semibold text-white"
             >
