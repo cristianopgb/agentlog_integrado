@@ -89,6 +89,24 @@ const normalizationStatusLabels: Record<string, string> = {
   pending: 'Pendente',
 };
 
+function isNormalizationWarning(error: NormalizationError) {
+  return error.details?.severity === 'warning';
+}
+
+function normalizationRunLabel(
+  run: NormalizationRun,
+  errors: NormalizationError[],
+) {
+  if (
+    (run.status === 'completed' || run.status === 'completed_with_errors') &&
+    errors.length > 0 &&
+    errors.every(isNormalizationWarning)
+  ) {
+    return 'Concluída com avisos';
+  }
+  return normalizationStatusLabels[run.status] ?? run.status;
+}
+
 const canonicalFieldLabels: Record<string, string> = {
   operation_record_id: 'Registro operacional',
   external_id: 'ID externo',
@@ -260,7 +278,9 @@ export default function IntegrationSetupPage() {
   const [entityId, setEntityId] = useState('');
   const [canonicalFields, setCanonicalFields] = useState<CanonicalField[]>([]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
-  const [normalizationMappings, setNormalizationMappings] = useState<FieldMapping[]>([]);
+  const [normalizationMappings, setNormalizationMappings] = useState<
+    FieldMapping[]
+  >([]);
   const [preview, setPreview] = useState<Preview>(null);
   const [latestBatch, setLatestBatch] = useState<StagingBatch | null>(null);
   const [normalizationRuns, setNormalizationRuns] = useState<
@@ -273,8 +293,12 @@ export default function IntegrationSetupPage() {
   const [query, setQuery] = useState('');
   const [perms, setPerms] = useState<UserPermission[]>([]);
   const [msg, setMsg] = useState('Carregando integração...');
-  const [draftMappings, setDraftMappings] = useState<Record<string, { data_contract_field_id: string; mapping_type: string }>>({});
-  const [mappingSaveState, setMappingSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
+  const [draftMappings, setDraftMappings] = useState<
+    Record<string, { data_contract_field_id: string; mapping_type: string }>
+  >({});
+  const [mappingSaveState, setMappingSaveState] = useState<
+    'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+  >('idle');
 
   async function load(t: string, chosenEntityId?: string) {
     const s = await getIntegrationSource(t, params.id);
@@ -306,7 +330,9 @@ export default function IntegrationSetupPage() {
       const [fs, ms, batchMs, pv] = await Promise.all([
         listContractFields(t, c.id),
         listFieldMappings(t, c.id),
-        batchContractId ? listFieldMappings(t, batchContractId) : Promise.resolve([]),
+        batchContractId
+          ? listFieldMappings(t, batchContractId)
+          : Promise.resolve([]),
         getLatestStagingRecordForContract(t, c.id),
       ]);
       setFields(fs);
@@ -462,54 +488,70 @@ export default function IntegrationSetupPage() {
     fieldId: string,
     patch: Partial<{ data_contract_field_id: string; mapping_type: string }>,
   ) {
-    const existing = mappings.find((mapping) => mapping.canonical_field_id === fieldId);
+    const existing = mappings.find(
+      (mapping) => mapping.canonical_field_id === fieldId,
+    );
     setDraftMappings((current) => ({
       ...current,
       [fieldId]: {
         data_contract_field_id:
-          patch.data_contract_field_id ?? existing?.data_contract_field_id ?? '',
+          patch.data_contract_field_id ??
+          existing?.data_contract_field_id ??
+          '',
         mapping_type: patch.mapping_type ?? existing?.mapping_type ?? 'direct',
       },
     }));
     setMappingSaveState('dirty');
   }
 
-  async function handleSaveMappingsBatch(options?: { continueAfterSave?: boolean }) {
+  async function handleSaveMappingsBatch(options?: {
+    continueAfterSave?: boolean;
+  }) {
     if (!contract || mappingSaveState === 'saving') return false;
-    const visibleFields = selectedCanonicalFields;
-    const changed = visibleFields
+    const changed = canonicalFields
       .map((cf) => {
         const draft = draftMappings[cf.id];
         if (!draft) return null;
-        const existing = mappings.find((mapping) => mapping.canonical_field_id === cf.id);
-        if (!draft.data_contract_field_id && draft.mapping_type !== 'ignored') return null;
+        const existing = mappings.find(
+          (mapping) => mapping.canonical_field_id === cf.id,
+        );
+        if (!draft.data_contract_field_id && draft.mapping_type !== 'ignored')
+          return null;
         if (
           existing &&
           existing.data_contract_field_id === draft.data_contract_field_id &&
           existing.mapping_type === draft.mapping_type
-        ) return null;
+        )
+          return null;
         return { cf, draft };
       })
-      .filter(Boolean) as Array<{ cf: CanonicalField; draft: { data_contract_field_id: string; mapping_type: string } }>;
+      .filter(Boolean) as Array<{
+      cf: CanonicalField;
+      draft: { data_contract_field_id: string; mapping_type: string };
+    }>;
     if (!changed.length) {
       if (options?.continueAfterSave) setStep('done');
       return true;
     }
     setMappingSaveState('saving');
     try {
-      await Promise.all(changed.map(({ cf, draft }) => {
-        const existing = mappings.find((mapping) => mapping.canonical_field_id === cf.id);
-        const payload = {
-          data_contract_field_id: draft.data_contract_field_id,
-          canonical_entity_id: cf.canonical_entity_id,
-          canonical_field_id: cf.id,
-          mapping_type: draft.mapping_type,
-          status: 'active',
-        };
-        return existing
-          ? updateFieldMapping(tenantId, existing.id, payload)
-          : upsertFieldMapping(tenantId, contract.id, payload);
-      }));
+      await Promise.all(
+        changed.map(({ cf, draft }) => {
+          const existing = mappings.find(
+            (mapping) => mapping.canonical_field_id === cf.id,
+          );
+          const payload = {
+            data_contract_field_id: draft.data_contract_field_id,
+            canonical_entity_id: cf.canonical_entity_id,
+            canonical_field_id: cf.id,
+            mapping_type: draft.mapping_type,
+            status: 'active',
+          };
+          return existing
+            ? updateFieldMapping(tenantId, existing.id, payload)
+            : upsertFieldMapping(tenantId, contract.id, payload);
+        }),
+      );
       await load(tenantId, entityId);
       setMappingSaveState('saved');
       setMsg('Mapeamentos salvos.');
@@ -517,7 +559,9 @@ export default function IntegrationSetupPage() {
       return true;
     } catch {
       setMappingSaveState('error');
-      setMsg('Erro ao salvar mapeamentos. Tente novamente ou revise a integração.');
+      setMsg(
+        'Erro ao salvar mapeamentos. Tente novamente ou revise a integração.',
+      );
       return false;
     }
   }
@@ -575,7 +619,9 @@ export default function IntegrationSetupPage() {
   );
   const mappedCount = activeNormalizationMappings.length;
   const contractMatchesLatestBatch = Boolean(
-    contract?.id && latestBatch?.data_contract_id && contract.id === latestBatch.data_contract_id,
+    contract?.id &&
+    latestBatch?.data_contract_id &&
+    contract.id === latestBatch.data_contract_id,
   );
   const isComplete = Boolean(
     connectionDeclared && contract && fields.length > 0 && mappedCount > 0,
@@ -602,8 +648,8 @@ export default function IntegrationSetupPage() {
       : mappedCount === 0
         ? 'Mapeie pelo menos um campo antes de processar para a base nativa.'
         : !canRunNormalization
-        ? 'Você não tem permissão para executar a normalização.'
-        : '';
+          ? 'Você não tem permissão para executar a normalização.'
+          : '';
 
   async function refreshNormalizationSummary(
     t: string,
@@ -615,10 +661,11 @@ export default function IntegrationSetupPage() {
     setNormalizationRuns(sourceRuns);
     const selectedRun =
       sourceRuns.find((run) => run.id === preferredRunId) ?? sourceRuns[0];
-    setNormalizationErrors(
-      selectedRun ? await listNormalizationErrors(t, selectedRun.id) : [],
-    );
-    return selectedRun;
+    const selectedErrors = selectedRun
+      ? await listNormalizationErrors(t, selectedRun.id)
+      : [];
+    setNormalizationErrors(selectedErrors);
+    return { run: selectedRun, errors: selectedErrors };
   }
 
   async function handleNormalize() {
@@ -632,11 +679,15 @@ export default function IntegrationSetupPage() {
       return;
     }
     if (!contractMatchesLatestBatch) {
-      setMsg('O lote validado pertence a outro contrato de dados. Valide um novo lote ou refaça o mapeamento para este contrato.');
+      setMsg(
+        'O lote validado pertence a outro contrato de dados. Valide um novo lote ou refaça o mapeamento para este contrato.',
+      );
       return;
     }
     if (mappedCount === 0) {
-      setMsg('Mapeie pelo menos um campo antes de processar para a base nativa.');
+      setMsg(
+        'Mapeie pelo menos um campo antes de processar para a base nativa.',
+      );
       return;
     }
     if (!canRunNormalization) {
@@ -647,15 +698,24 @@ export default function IntegrationSetupPage() {
     setNormalizing(true);
     try {
       const run = await processNormalization(tenantId, latestBatch.id);
-      const refreshedRun =
-        (await refreshNormalizationSummary(tenantId, latestBatch.id, run.id)) ??
-        run;
+      const refreshed = await refreshNormalizationSummary(
+        tenantId,
+        latestBatch.id,
+        run.id,
+      );
+      const refreshedRun = refreshed.run ?? run;
+      const refreshedErrors = refreshed.errors;
+      const onlyWarnings =
+        refreshedErrors.length > 0 &&
+        refreshedErrors.every(isNormalizationWarning);
       setMsg(
-        refreshedRun.status === 'completed'
-          ? 'Normalização concluída. Os dados tratados foram gravados na base nativa.'
-          : refreshedRun.status === 'completed_with_errors'
-            ? 'Normalização concluída com inconsistências. Revise os erros.'
-            : 'Não foi possível processar para a base nativa. Revise a configuração da integração ou tente novamente.',
+        onlyWarnings
+          ? 'Normalização concluída com dados parciais. O sistema gravou os dados disponíveis. Indicadores que dependem de campos não mapeados ficarão indisponíveis até que esses dados sejam adicionados.'
+          : refreshedRun.status === 'completed'
+            ? 'Normalização concluída. Os dados tratados foram gravados na base nativa.'
+            : refreshedRun.status === 'completed_with_errors'
+              ? 'Normalização concluída com inconsistências. Revise os erros.'
+              : 'Não foi possível processar para a base nativa. Revise a configuração da integração ou tente novamente.',
       );
     } catch (error) {
       if (process.env.NODE_ENV === 'development') {
@@ -895,8 +955,13 @@ export default function IntegrationSetupPage() {
             </button>
             <div className="flex gap-2">
               <button
-                onClick={() => handleSaveMappingsBatch({ continueAfterSave: true })}
-                disabled={mappingSaveState === 'saving' || (mappingSaveState === 'dirty' && !canManageMappings)}
+                onClick={() =>
+                  handleSaveMappingsBatch({ continueAfterSave: true })
+                }
+                disabled={
+                  mappingSaveState === 'saving' ||
+                  (mappingSaveState === 'dirty' && !canManageMappings)
+                }
                 className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
                 type="button"
               >
@@ -947,7 +1012,10 @@ export default function IntegrationSetupPage() {
                   <div>
                     <h2 className="text-lg font-bold">Mapeamento</h2>
                     <p className="mt-1 text-sm text-slate-600">
-                      Mapeie os campos disponíveis no legado. Você não precisa preencher todos os campos nativos. Quanto mais campos forem mapeados, mais indicadores, relatórios e análises ficarão disponíveis.
+                      Mapeie os campos disponíveis no legado. Você não precisa
+                      preencher todos os campos nativos. Quanto mais campos
+                      forem mapeados, mais indicadores, relatórios e análises
+                      ficarão disponíveis.
                     </p>
                   </div>
                   <label className="text-sm font-semibold text-slate-700">
@@ -1010,11 +1078,17 @@ export default function IntegrationSetupPage() {
                     </span>
                     <button
                       onClick={() => handleSaveMappingsBatch()}
-                      disabled={mappingSaveState === 'saving' || mappingSaveState !== 'dirty' || !canManageMappings}
+                      disabled={
+                        mappingSaveState === 'saving' ||
+                        mappingSaveState !== 'dirty' ||
+                        !canManageMappings
+                      }
                       className="rounded-xl bg-blue-600 px-4 py-2 font-bold text-white disabled:bg-slate-300"
                       type="button"
                     >
-                      {mappingSaveState === 'saving' ? 'Salvando...' : 'Salvar mapeamentos'}
+                      {mappingSaveState === 'saving'
+                        ? 'Salvando...'
+                        : 'Salvar mapeamentos'}
                     </button>
                   </div>
                   {selectedCanonicalFields.map((cf) => {
@@ -1022,14 +1096,15 @@ export default function IntegrationSetupPage() {
                       (m) => m.canonical_field_id === cf.id,
                     );
                     const draft = draftMappings[cf.id];
-                    const selectedSource = draft?.data_contract_field_id ?? mapping?.data_contract_field_id ?? '';
-                    const selectedType = draft?.mapping_type ?? mapping?.mapping_type ?? 'direct';
+                    const selectedSource =
+                      draft?.data_contract_field_id ??
+                      mapping?.data_contract_field_id ??
+                      '';
+                    const selectedType =
+                      draft?.mapping_type ?? mapping?.mapping_type ?? 'direct';
                     const isIgnored = selectedType === 'ignored';
                     return (
-                      <div
-                        key={cf.id}
-                        className="rounded-xl border p-3"
-                      >
+                      <div key={cf.id} className="rounded-xl border p-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="font-semibold">{fieldLabel(cf)}</p>
@@ -1037,14 +1112,30 @@ export default function IntegrationSetupPage() {
                               {cf.field_key} · {cf.data_type}
                             </p>
                           </div>
-                          <StatusBadge tone={isIgnored ? 'warning' : selectedSource ? 'success' : undefined}>
-                            {isIgnored ? 'ignorado' : selectedSource ? 'mapeado' : 'não mapeado'}
+                          <StatusBadge
+                            tone={
+                              isIgnored
+                                ? 'warning'
+                                : selectedSource
+                                  ? 'success'
+                                  : undefined
+                            }
+                          >
+                            {isIgnored
+                              ? 'ignorado'
+                              : selectedSource
+                                ? 'mapeado'
+                                : 'não mapeado'}
                           </StatusBadge>
                         </div>
                         <div className="mt-3 grid gap-2">
                           <select
                             value={selectedSource}
-                            onChange={(e) => updateDraftMapping(cf.id, { data_contract_field_id: e.target.value })}
+                            onChange={(e) =>
+                              updateDraftMapping(cf.id, {
+                                data_contract_field_id: e.target.value,
+                              })
+                            }
                             className="rounded-xl border p-2 text-sm"
                           >
                             <option value="">Selecione campo da fonte</option>
@@ -1056,7 +1147,11 @@ export default function IntegrationSetupPage() {
                           </select>
                           <select
                             value={selectedType}
-                            onChange={(e) => updateDraftMapping(cf.id, { mapping_type: e.target.value })}
+                            onChange={(e) =>
+                              updateDraftMapping(cf.id, {
+                                mapping_type: e.target.value,
+                              })
+                            }
                             className="rounded-xl border p-2 text-sm"
                           >
                             {mappingTypes.map((type) => (
@@ -1174,11 +1269,15 @@ export default function IntegrationSetupPage() {
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">Contrato da integração</dt>
-                  <dd className="font-semibold">{contract?.id.slice(0, 8) ?? 'Nenhum'}</dd>
+                  <dd className="font-semibold">
+                    {contract?.id.slice(0, 8) ?? 'Nenhum'}
+                  </dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">Contrato do lote</dt>
-                  <dd className="font-semibold">{latestBatch?.data_contract_id?.slice(0, 8) ?? 'Nenhum'}</dd>
+                  <dd className="font-semibold">
+                    {latestBatch?.data_contract_id?.slice(0, 8) ?? 'Nenhum'}
+                  </dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">
@@ -1187,9 +1286,10 @@ export default function IntegrationSetupPage() {
                   <dd>
                     {lastNormalizationRun ? (
                       <StatusBadge>
-                        {normalizationStatusLabels[
-                          lastNormalizationRun.status
-                        ] ?? lastNormalizationRun.status}
+                        {normalizationRunLabel(
+                          lastNormalizationRun,
+                          normalizationErrors,
+                        )}
                       </StatusBadge>
                     ) : (
                       'Nenhuma execução'
@@ -1200,9 +1300,11 @@ export default function IntegrationSetupPage() {
                   <dt className="text-slate-500">Criados</dt>
                   <dd className="font-semibold">
                     {lastNormalizationRun
-                      ? lastNormalizationRun.created_operation_records +
-                        lastNormalizationRun.created_extension_records
-                      : 0}
+                      ? `${
+                          lastNormalizationRun.created_operation_records +
+                          lastNormalizationRun.created_extension_records
+                        } (${lastNormalizationRun.created_operation_records} núcleo + ${lastNormalizationRun.created_extension_records} extensão)`
+                      : '0 (0 núcleo + 0 extensão)'}
                   </dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
@@ -1212,6 +1314,12 @@ export default function IntegrationSetupPage() {
                       ? lastNormalizationRun.updated_operation_records +
                         lastNormalizationRun.updated_extension_records
                       : 0}
+                  </dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Avisos</dt>
+                  <dd className="font-semibold">
+                    {normalizationErrors.filter(isNormalizationWarning).length}
                   </dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
@@ -1236,14 +1344,22 @@ export default function IntegrationSetupPage() {
               ) : null}
               {normalizationErrors.length ? (
                 <ul className="mt-3 space-y-2 text-sm">
-                  {normalizationErrors.slice(0, 5).map((error) => (
-                    <li
-                      key={error.id}
-                      className="rounded-lg bg-rose-50 p-2 text-rose-900"
-                    >
-                      <strong>{error.error_code}</strong>: {error.error_message}
-                    </li>
-                  ))}
+                  {normalizationErrors.slice(0, 5).map((error) => {
+                    const warning = isNormalizationWarning(error);
+                    return (
+                      <li
+                        key={error.id}
+                        className={
+                          warning
+                            ? 'rounded-lg bg-amber-50 p-2 text-amber-900'
+                            : 'rounded-lg bg-rose-50 p-2 text-rose-900'
+                        }
+                      >
+                        <strong>{warning ? 'Aviso' : error.error_code}</strong>:{' '}
+                        {error.error_message}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </div>
