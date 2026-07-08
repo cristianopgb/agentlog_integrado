@@ -21,8 +21,10 @@ export class NativeRecordsService {
       filters.push(`or=(cte_number.ilike.${term},invoice_number.ilike.${term},document_number.ilike.${term},order_number.ilike.${term},delivery_number.ilike.${term},customer_name.ilike.${term},customer_document.ilike.${term},status.ilike.${term})`);
     }
     const rows = await this.supabase.select<Record<string, unknown>[]>('operation_records', `${filters.join('&')}&order=updated_at.desc&limit=${limit}&offset=${offset}`);
+    const sourceIds = [...new Set(rows.map((row) => row.source_data_source_id).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    const sourceNames = await this.sourceNamesById(tenantId, sourceIds);
     const all = await this.supabase.select<Array<{ data_quality_status: string | null; updated_at: string | null }>>('operation_records', `select=data_quality_status,updated_at&tenant_id=eq.${tenantId}&deleted_at=is.null&order=updated_at.desc&limit=10000`);
-    return { data: rows.map(clean), pagination: { limit, offset, count: rows.length }, summary: { total: all.length, complete: all.filter((r) => r.data_quality_status === 'valid').length, partial: all.filter((r) => r.data_quality_status === 'partial').length, lastNormalization: all[0]?.updated_at ?? null } };
+    return { data: rows.map((row) => ({ ...clean(row), source_data_source_name: typeof row.source_data_source_id === 'string' ? sourceNames.get(row.source_data_source_id) ?? null : null })), pagination: { limit, offset, count: rows.length }, summary: { total: all.length, complete: all.filter((r) => r.data_quality_status === 'valid').length, partial: all.filter((r) => r.data_quality_status === 'partial').length, lastNormalization: all[0]?.updated_at ?? null } };
   }
 
   async get(tenantId: string, recordId: string) {
@@ -35,6 +37,13 @@ export class NativeRecordsService {
     await this.get(tenantId, recordId);
     const rows = await this.supabase.select<Record<string, unknown>[]>('entity_events', `select=id,entity_type,entity_id,event_type,event_title,event_description,occurred_at,source_system,source_data_source_id,source_staging_record_id,created_at&tenant_id=eq.${tenantId}&entity_type=eq.operation_record&entity_id=eq.${recordId}&order=occurred_at.desc&limit=100`);
     return rows.map(clean);
+  }
+
+  private async sourceNamesById(tenantId: string, sourceIds: string[]) {
+    if (!sourceIds.length) return new Map<string, string>();
+    const ids = sourceIds.map((id) => `"${id}"`).join(',');
+    const rows = await this.supabase.select<Array<{ id: string; name: string | null }>>('data_sources', `select=id,name&tenant_id=eq.${tenantId}&id=in.(${ids})`);
+    return new Map(rows.map((row) => [row.id, row.name ?? 'Origem não informada']));
   }
 
   async extensions(tenantId: string, recordId: string) {
