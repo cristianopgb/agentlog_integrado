@@ -68,8 +68,7 @@ export class NormalizationService {
           if (mapping.mapping_type === 'ignored') continue;
           if (mapping.mapping_type === 'transformed') { await addError('INVALID_CANONICAL_FIELD', 'Transformação livre não é executada nesta sprint.', {}, record.id, mapping); continue; }
           const rawValue = mapping.mapping_type === 'default_value' ? this.defaultFromNotes(mapping) : record.normalized_payload?.[mapping.data_contract_field.field_key];
-          if ((rawValue === undefined || rawValue === null || rawValue === '') && mapping.canonical_field.is_required) { partial = true; await addError('REQUIRED_VALUE_MISSING', 'Valor obrigatório ausente.', { contract_field_key: mapping.data_contract_field.field_key }, record.id, mapping); continue; }
-          if (rawValue === undefined || rawValue === null || rawValue === '') continue;
+          if (rawValue === undefined || rawValue === null || rawValue === '') { partial = true; continue; }
           const converted = this.convertValue(rawValue, mapping.canonical_field.data_type);
           if (!converted.ok) { await addError('INVALID_VALUE_TYPE', 'Valor não pôde ser convertido para o tipo canônico.', { value: rawValue, data_type: mapping.canonical_field.data_type }, record.id, mapping); continue; }
           const targetEntity = legacyEntities.has(entityKey) ? 'operation_records' : entityKey;
@@ -78,7 +77,9 @@ export class NormalizationService {
           else { if (!enabledModules.has(entityModule[targetEntity])) { await addError('MODULE_NOT_ENABLED', 'Módulo da extensão não está habilitado para o tenant.', { module_key: entityModule[targetEntity] }, record.id, mapping); continue; } if (extensionColumns[targetEntity]?.has(targetField)) buckets[targetEntity] = { ...(buckets[targetEntity] ?? {}), [targetField]: converted.value }; else await addError('INVALID_CANONICAL_FIELD', 'Campo não pertence à extensão nativa.', { field_key: fieldKey }, record.id, mapping); }
         }
         if (Object.keys(buckets.operation_records).length === 0 && Object.keys(buckets).some((key) => key !== 'operation_records')) { partial = true; await addError('MISSING_OPERATION_RECORD', 'Extensão mapeada sem campos do núcleo; operation_record mínimo será criado.', {}, record.id); }
-        const op = await this.upsertOperation(tenantId, batch, record, buckets.operation_records, partial);
+        const hasCoreValues = Object.keys(buckets.operation_records).length > 0;
+        const hasDocumentKey = Boolean(buckets.operation_records.external_id || buckets.operation_records.cte_key || buckets.operation_records.invoice_key || buckets.operation_records.delivery_number);
+        const op = await this.upsertOperation(tenantId, batch, record, buckets.operation_records, partial || !hasCoreValues || !hasDocumentKey);
         counters[op.created ? 'created_operation_records' : 'updated_operation_records'] += 1;
         await this.event(tenantId, 'operation_records', op.id, op.created, batch, record, userId);
         for (const entity of Object.keys(buckets).filter((key) => extensionEntities.has(key) && Object.keys(buckets[key]).length)) {
