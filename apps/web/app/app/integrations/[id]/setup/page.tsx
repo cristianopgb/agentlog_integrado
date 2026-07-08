@@ -259,6 +259,7 @@ export default function IntegrationSetupPage() {
   const [entityId, setEntityId] = useState('');
   const [canonicalFields, setCanonicalFields] = useState<CanonicalField[]>([]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
+  const [normalizationMappings, setNormalizationMappings] = useState<FieldMapping[]>([]);
   const [preview, setPreview] = useState<Preview>(null);
   const [latestBatch, setLatestBatch] = useState<StagingBatch | null>(null);
   const [normalizationRuns, setNormalizationRuns] = useState<
@@ -298,13 +299,16 @@ export default function IntegrationSetupPage() {
       ).flat(),
     );
     if (c) {
-      const [fs, ms, pv] = await Promise.all([
+      const batchContractId = latestValidatedBatch?.data_contract_id ?? null;
+      const [fs, ms, batchMs, pv] = await Promise.all([
         listContractFields(t, c.id),
         listFieldMappings(t, c.id),
+        batchContractId ? listFieldMappings(t, batchContractId) : Promise.resolve([]),
         getLatestStagingRecordForContract(t, c.id),
       ]);
       setFields(fs);
       setMappings(ms);
+      setNormalizationMappings(batchMs);
       setPreview(pv);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
       const runs = await listNormalizationRuns(t);
@@ -322,6 +326,7 @@ export default function IntegrationSetupPage() {
     } else {
       setFields([]);
       setMappings([]);
+      setNormalizationMappings([]);
       setPreview(null);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
       setNormalizationRuns([]);
@@ -457,7 +462,7 @@ export default function IntegrationSetupPage() {
         canonical_entity_id: cf.canonical_entity_id,
         canonical_field_id: cf.id,
         mapping_type: String(f.get('mapping_type') || 'direct'),
-        status: 'draft',
+        status: 'active',
       });
       await load(tenantId, entityId);
       setMsg('Mapeamento salvo.');
@@ -514,7 +519,15 @@ export default function IntegrationSetupPage() {
     !hasCommonCoreMapping,
   );
   const connectionDeclared = source?.metadata?.connection_declared === true;
-  const mappedCount = mappings.length;
+  const activeNormalizationMappings = normalizationMappings.filter(
+    (mapping) =>
+      mapping.data_contract_id === latestBatch?.data_contract_id &&
+      (mapping.status === 'active' || !mapping.status),
+  );
+  const mappedCount = activeNormalizationMappings.length;
+  const contractMatchesLatestBatch = Boolean(
+    contract?.id && latestBatch?.data_contract_id && contract.id === latestBatch.data_contract_id,
+  );
   const isComplete = Boolean(
     connectionDeclared && contract && fields.length > 0 && mappedCount > 0,
   );
@@ -532,9 +545,11 @@ export default function IntegrationSetupPage() {
     hasPermission(perms, 'native_records.manage');
   const normalizationDisabledReason = !latestBatch
     ? 'Não há lote validado para processar.'
-    : mappedCount === 0
-      ? 'Mapeie os campos antes de processar para a base nativa.'
-      : !canRunNormalization
+    : !contractMatchesLatestBatch
+      ? 'O lote validado pertence a outro contrato de dados. Valide um novo lote ou refaça o mapeamento para este contrato.'
+      : mappedCount === 0
+        ? 'Mapeie os campos deste lote/contrato antes de processar para a base nativa.'
+        : !canRunNormalization
         ? 'Você não tem permissão para executar a normalização.'
         : '';
 
@@ -564,8 +579,12 @@ export default function IntegrationSetupPage() {
       setMsg('Não há lote validado para processar.');
       return;
     }
+    if (!contractMatchesLatestBatch) {
+      setMsg('O lote validado pertence a outro contrato de dados. Valide um novo lote ou refaça o mapeamento para este contrato.');
+      return;
+    }
     if (mappedCount === 0) {
-      setMsg('Mapeie os campos antes de processar para a base nativa.');
+      setMsg('Mapeie os campos deste lote/contrato antes de processar para a base nativa.');
       return;
     }
     if (!canRunNormalization) {
@@ -1086,6 +1105,14 @@ export default function IntegrationSetupPage() {
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">Campos mapeados</dt>
                   <dd className="font-semibold">{mappedCount}</dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Contrato da integração</dt>
+                  <dd className="font-semibold">{contract?.id.slice(0, 8) ?? 'Nenhum'}</dd>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <dt className="text-slate-500">Contrato do lote</dt>
+                  <dd className="font-semibold">{latestBatch?.data_contract_id?.slice(0, 8) ?? 'Nenhum'}</dd>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3">
                   <dt className="text-slate-500">

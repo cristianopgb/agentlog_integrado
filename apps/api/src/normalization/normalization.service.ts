@@ -4,13 +4,16 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 type Batch = { id: string; tenant_id: string; data_source_id: string | null; data_contract_id: string | null; status: string; source_reference?: string | null };
 type RecordRow = { id: string; tenant_id: string; staging_batch_id: string; validation_status: string; normalized_payload: Record<string, unknown> | null };
-type Mapping = { id: string; mapping_type: string; status: string; notes: string | null; data_contract_field: { field_key: string } | null; canonical_field: { field_key: string; data_type: string; is_required: boolean } | null; canonical_entity: { entity_key: string; module_key: string } | null };
+type Mapping = { id: string; data_contract_id: string; data_contract_field_id: string; canonical_entity_id: string; canonical_field_id: string; mapping_type: string; status: string | null; notes: string | null; data_contract_field: { id: string; data_contract_id: string; field_key: string } | null; canonical_field: { id: string; canonical_entity_id: string; field_key: string; data_type: string; is_required: boolean } | null; canonical_entity: { id: string; entity_key: string; module_key: string } | null };
+type MappingLoadResult = { mappings: Mapping[]; mappingsFoundCount: number; activeMappingsFoundCount: number };
 type MappingLoadFailure = { code: 'FIELD_MAPPING_LOAD_FAILED'; originalError: unknown };
 type Run = { id: string };
 
 type Counters = { total_records: number; processed_records: number; created_operation_records: number; updated_operation_records: number; created_extension_records: number; updated_extension_records: number; error_records: number };
 
-const nativeEntities = new Set(['operation_records', 'transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records', 'deliveries', 'Entregas']);
+const nativeEntities = new Set(['operation_records', 'transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records', 'deliveries', 'Entregas', 'Entregas legado']);
+const prioritizedEntities = new Set(['operation_records', 'transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records']);
+const legacyEntities = new Set(['deliveries', 'Entregas', 'Entregas legado']);
 const extensionEntities = new Set(['transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records']);
 const entityEventType: Record<string, string> = { operation_records: 'operation_record', transport_records: 'transport_record', attendance_records: 'attendance_record', finance_records: 'finance_record', warehouse_records: 'warehouse_record', team_records: 'team_record' };
 const entityModule: Record<string, string> = { transport_records: 'transporte', attendance_records: 'atendimento', finance_records: 'financeiro', warehouse_records: 'armazem', team_records: 'equipes' };
@@ -50,7 +53,7 @@ export class NormalizationService {
         return this.finish(run.id, 'failed', counters, errorSummary);
       }
       const mappings = mappingsResult.mappings;
-      if (!mappings.length) { await addError('NO_FIELD_MAPPINGS', 'Não há field_mappings ativos para o contrato do lote.'); return this.finish(run.id, 'failed', counters, errorSummary); }
+      if (!mappings.length) { await addError('NO_FIELD_MAPPINGS', 'Não há mapeamentos ativos para o contrato do lote validado. Revise o mapeamento ou valide um novo lote com o contrato correto.', { tenant_id: tenantId, staging_batch_id: batchId, batch_data_contract_id: batch.data_contract_id, data_source_id: batch.data_source_id, mappings_found_count: mappingsResult.mappingsFoundCount, active_mappings_found_count: mappingsResult.activeMappingsFoundCount }); return this.finish(run.id, 'failed', counters, errorSummary); }
       const records = await this.getValidRecords(tenantId, batchId);
       counters.total_records = records.length;
       if (!records.length) { await addError('NO_VALID_RECORDS', 'Não há staging_records válidos com normalized_payload para normalizar.'); return this.finish(run.id, 'failed', counters, errorSummary); }
@@ -69,7 +72,7 @@ export class NormalizationService {
           if (rawValue === undefined || rawValue === null || rawValue === '') continue;
           const converted = this.convertValue(rawValue, mapping.canonical_field.data_type);
           if (!converted.ok) { await addError('INVALID_VALUE_TYPE', 'Valor não pôde ser convertido para o tipo canônico.', { value: rawValue, data_type: mapping.canonical_field.data_type }, record.id, mapping); continue; }
-          const targetEntity = entityKey === 'deliveries' || entityKey === 'Entregas' ? 'operation_records' : entityKey;
+          const targetEntity = legacyEntities.has(entityKey) ? 'operation_records' : entityKey;
           const targetField = aliases[fieldKey as string] ?? fieldKey;
           if (targetEntity === 'operation_records') { if (operationColumns.has(targetField)) buckets.operation_records[targetField] = converted.value; else await addError('INVALID_CANONICAL_FIELD', 'Campo não pertence à base operacional nativa.', { field_key: fieldKey }, record.id, mapping); }
           else { if (!enabledModules.has(entityModule[targetEntity])) { await addError('MODULE_NOT_ENABLED', 'Módulo da extensão não está habilitado para o tenant.', { module_key: entityModule[targetEntity] }, record.id, mapping); continue; } if (extensionColumns[targetEntity]?.has(targetField)) buckets[targetEntity] = { ...(buckets[targetEntity] ?? {}), [targetField]: converted.value }; else await addError('INVALID_CANONICAL_FIELD', 'Campo não pertence à extensão nativa.', { field_key: fieldKey }, record.id, mapping); }
@@ -95,14 +98,26 @@ export class NormalizationService {
   private async finish(runId: string, status: string, counters: Counters, errorSummary: Record<string, number>) { const [row] = await this.supabase.update<unknown[]>('normalization_runs', `id=eq.${runId}`, { ...counters, status, error_summary: errorSummary, finished_at: new Date().toISOString() }); return row; }
   private async getBatch(tenantId: string, batchId: string) { const rows = await this.supabase.select<Batch[]>('staging_batches', `select=id,tenant_id,data_source_id,data_contract_id,status,source_reference&tenant_id=eq.${tenantId}&id=eq.${batchId}&limit=1`); if (!rows.length) throw new NotFoundException('Staging batch not found.'); return rows[0]; }
   private getValidRecords(tenantId: string, batchId: string) { return this.supabase.select<RecordRow[]>('staging_records', `select=id,tenant_id,staging_batch_id,validation_status,normalized_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&normalized_payload=not.is.null&order=row_number.asc`); }
-  private async loadMappings(tenantId: string, contractId: string | null): Promise<{ mappings: Mapping[] } | MappingLoadFailure> {
+  private async loadMappings(tenantId: string, contractId: string | null): Promise<MappingLoadResult | MappingLoadFailure> {
     try {
-      return { mappings: await this.getMappings(tenantId, contractId) };
+      return await this.getMappings(tenantId, contractId);
     } catch (error) {
       return { code: 'FIELD_MAPPING_LOAD_FAILED', originalError: error };
     }
   }
-  private getMappings(tenantId: string, contractId: string | null) { if (!contractId) return []; return this.supabase.select<Mapping[]>('field_mappings', `select=id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&status=eq.active`); }
+  private async getMappings(tenantId: string, contractId: string | null): Promise<MappingLoadResult> {
+    if (!contractId) return { mappings: [], mappingsFoundCount: 0, activeMappingsFoundCount: 0 };
+    const rows = await this.supabase.select<Mapping[]>('field_mappings', `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
+    const activeRows = rows.filter((mapping) => mapping.status === 'active' || !mapping.status);
+    return {
+      mappings: activeRows
+        .filter((mapping) => mapping.data_contract_field?.data_contract_id === contractId)
+        .filter((mapping) => mapping.canonical_field?.canonical_entity_id === mapping.canonical_entity_id)
+        .sort((a, b) => Number(prioritizedEntities.has(b.canonical_entity?.entity_key ?? '')) - Number(prioritizedEntities.has(a.canonical_entity?.entity_key ?? ''))),
+      mappingsFoundCount: rows.length,
+      activeMappingsFoundCount: activeRows.length,
+    };
+  }
   private errorDetails(error: unknown) { return error instanceof Error ? { message: error.message } : { error }; }
   private async getEnabledModules(tenantId: string) { const rows = await this.supabase.select<Array<{ module: { key: string } }>>('tenant_modules', `select=module:modules(key)&tenant_id=eq.${tenantId}&is_active=eq.true`); return new Set(['core', ...rows.map((row) => row.module.key)]); }
   private async upsertOperation(tenantId: string, batch: Batch, record: RecordRow, values: Record<string, unknown>, partial: boolean) { const base = { ...values, tenant_id: tenantId, source_data_source_id: batch.data_source_id, source_data_contract_id: batch.data_contract_id, source_staging_batch_id: batch.id, source_staging_record_id: record.id, source_system: batch.source_reference ?? 'staging', source_payload_hash: createHash('sha256').update(JSON.stringify(record.normalized_payload ?? {})).digest('hex'), data_quality_status: partial ? 'partial' : String(values.data_quality_status ?? 'valid') }; const existing = await this.findOperation(tenantId, base); if (existing) { const [row] = await this.supabase.update<Array<{ id: string }>>('operation_records', `tenant_id=eq.${tenantId}&id=eq.${existing.id}`, base); return { id: row.id, created: false }; } const [row] = await this.supabase.insert<Array<{ id: string }>>('operation_records', base); return { id: row.id, created: true }; }
