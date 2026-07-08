@@ -13,7 +13,7 @@ const navigation = [
   { href: '/app', label: 'Dashboard', marker: 'D', permission: 'core.app.view' },
   { href: '/app/integrations', label: 'Integrações', marker: 'I', permission: 'core.data_sources.view' },
   { href: '/app/native-data', label: 'Dados tratados', marker: 'B', permission: 'native_records.view' },
-  { href: '/app/indicators', label: 'Indicadores', marker: 'N', badge: 'em breve' },
+  { href: '/app/indicators', label: 'Indicadores', marker: 'N', permission: 'indicators.view' },
   { href: '/app/reports', label: 'Relatórios', marker: 'R', badge: 'em breve' },
   { href: '/app/agents', label: 'Agentes', marker: 'A', badge: 'em breve' },
 ];
