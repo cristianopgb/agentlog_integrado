@@ -1,8 +1,13 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
-import { Request } from 'express';
+import type { Request } from 'express';
+import type { IncomingHttpHeaders } from 'http';
 import { SupabaseService } from '../supabase/supabase.service';
 
-export type AuthenticatedRequest = Request & { user: { id: string; email?: string } };
+export type AuthenticatedRequest = Request & {
+  headers: IncomingHttpHeaders;
+  params: Record<string, string | undefined>;
+  user: { id: string; email?: string };
+};
 
 @Injectable()
 export class AuthGuard implements CanActivate {
