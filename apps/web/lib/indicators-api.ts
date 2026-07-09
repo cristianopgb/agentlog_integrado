@@ -10,3 +10,13 @@ export function listIndicators(tenantId: string) { return api<{ data: Indicator[
 export function getIndicatorsSummary(tenantId: string) { return api<IndicatorSummary>(`/tenants/${tenantId}/native-indicators/summary`); }
 export function getIndicator(tenantId: string, key: string) { return api<Indicator & { preview: IndicatorPreview | null }>(`/tenants/${tenantId}/native-indicators/${key}`); }
 export function previewIndicator(tenantId: string, key: string) { return api<IndicatorPreview>(`/tenants/${tenantId}/native-indicators/${key}/preview`, { method: 'POST' }); }
+export type CustomIndicatorStatus = 'draft' | 'active' | 'inactive';
+export type IndicatorField = { id:string; module_key:string; base_table:string; field_key:string; label:string; data_type:string; semantic_type:string; allowed_operations:string[]; allowed_filters:string[]; is_dimension:boolean; is_measure:boolean };
+export type CustomIndicator = { id:string; name:string; description:string|null; module_key:string; family_key:string; indicator_type:string; value_format:string; base_table:string; operation_key:string; calculation_config:Record<string,unknown>; formula_preview:string; status:CustomIndicatorStatus; available_for_dashboard:boolean; available_for_reports:boolean; created_at:string; updated_at:string };
+export type CustomPreview = { status:'success'|'insufficient_data'|'empty'|'failed'; value:unknown; series:Array<Record<string,unknown>>; table:Array<Record<string,unknown>>; records_considered:number; formula_preview:string; fields_used:Array<Record<string,unknown>>; filters_used:Array<Record<string,unknown>>; message:string };
+export function listIndicatorFields(tenantId:string){ return api<{data:IndicatorField[]}>(`/tenants/${tenantId}/indicator-fields`); }
+export function listCustomIndicators(tenantId:string){ return api<{data:CustomIndicator[]}>(`/tenants/${tenantId}/custom-indicators`); }
+export function createCustomIndicator(tenantId:string,payload:Record<string,unknown>){ return api<CustomIndicator>(`/tenants/${tenantId}/custom-indicators`,{method:'POST',body:JSON.stringify(payload)}); }
+export function previewCustomIndicator(tenantId:string,payload:Record<string,unknown>){ return api<CustomPreview>(`/tenants/${tenantId}/custom-indicators/preview`,{method:'POST',body:JSON.stringify(payload)}); }
+export function previewSavedCustomIndicator(tenantId:string,id:string){ return api<CustomPreview>(`/tenants/${tenantId}/custom-indicators/${id}/preview`,{method:'POST'}); }
+export function setCustomIndicatorStatus(tenantId:string,id:string,status:CustomIndicatorStatus){ return api<CustomIndicator>(`/tenants/${tenantId}/custom-indicators/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}); }
