@@ -150,7 +150,7 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
       contract_version: 1,
       format: source.source_type === 'api' ? 'api_json' : source.source_type === 'spreadsheet' ? String(source.metadata?.file_type ?? 'xlsx') : 'other',
       direction: 'inbound',
-      status: 'draft',
+      status: source.source_type === 'spreadsheet' ? 'active' : 'draft',
       periodicity: 'on_demand',
     }).select(contractSelect);
 
@@ -163,18 +163,29 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
   }
 
   if (!contract) throw new Error('Não foi possível localizar o contrato declarativo inicial de entregas.');
+  const contractId = contract.id;
 
   const { error: fieldError } = await supabase.from('data_contract_fields').upsert(
-    initialDeliveryFields.map((field) => normalizeInitialDeliveryField(tenantId, contract.id, field)),
+    initialDeliveryFields.map((field) => normalizeInitialDeliveryField(tenantId, contractId, field)),
     { onConflict: 'data_contract_id,field_key' },
   );
   if (fieldError) throw fieldError;
+
+  if (source.source_type === 'spreadsheet' && contract.status !== 'active') {
+    const { error: activateError } = await supabase
+      .from('data_contracts')
+      .update({ status: 'active' })
+      .eq('tenant_id', tenantId)
+      .eq('id', contractId);
+    if (activateError) throw activateError;
+    contract = { ...contract, status: 'active' };
+  }
 
   const { data: fields, error: fieldsError } = await supabase
     .from('data_contract_fields')
     .select('id,field_key')
     .eq('tenant_id', tenantId)
-    .eq('data_contract_id', contract.id);
+    .eq('data_contract_id', contractId);
   if (fieldsError) throw fieldsError;
 
   const statusField = (fields as { id: string; field_key: string }[]).find((field) => field.field_key === 'delivery_status');
@@ -182,7 +193,7 @@ export async function createInitialDeliveryContract(tenantId: string, source: In
     const { error: allowedError } = await supabase.from('data_contract_allowed_values').upsert(
       deliveryStatusValues.map((value, index) => ({
         tenant_id: tenantId,
-        data_contract_id: contract.id,
+        data_contract_id: contractId,
         data_contract_field_id: statusField.id,
         value,
         label: value,
