@@ -204,3 +204,10 @@ function getGeneralStatus(source: IntegrationSource, contract: DataContract | nu
   if (mappedCount === 0) return 'mapeamento pendente';
   return 'integração configurada';
 }
+
+function getApiBase() { const configured = process.env.NEXT_PUBLIC_API_URL; if (configured) return configured.replace(/\/$/, ''); if (process.env.NODE_ENV === 'production') throw new Error('API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.'); return 'http://localhost:3001'; }
+async function api<T>(path: string, init?: RequestInit): Promise<T> { const token = createBrowserSupabaseClient().auth.getAccessToken(); const response = await fetch(`${getApiBase()}${path}`, { ...init, headers: { Authorization: token ? `Bearer ${token}` : '', ...(init?.headers ?? {}) } }); const text = await response.text(); const body = text ? JSON.parse(text) as unknown : null; if (!response.ok) throw new Error(typeof body === 'object' && body && 'message' in body ? String((body as { message: unknown }).message) : text); return body as T; }
+export async function uploadIntegrationFile(tenantId: string, sourceId: string, file: File) { const form = new FormData(); form.append('file', file); return api<StagingBatch>(`/tenants/${tenantId}/data-sources/${sourceId}/upload`, { method: 'POST', body: form }); }
+export function inactivateIntegration(tenantId: string, sourceId: string) { return api(`/tenants/${tenantId}/data-sources/${sourceId}/inactivate`, { method: 'PATCH' }); }
+export function deleteIntegration(tenantId: string, sourceId: string) { return api(`/tenants/${tenantId}/data-sources/${sourceId}`, { method: 'DELETE' }); }
+export async function listUploadHistory(tenantId: string, sourceId: string) { const { data, error } = await createBrowserSupabaseClient().from('staging_batches').select('id,tenant_id,data_source_id,data_contract_id,batch_code,source_reference,status,total_records,valid_records,invalid_records,error_count,metadata,received_at,validated_at,created_at').eq('tenant_id', tenantId).eq('data_source_id', sourceId).order('created_at', { ascending: false }); if (error) throw error; return data as StagingBatch[]; }

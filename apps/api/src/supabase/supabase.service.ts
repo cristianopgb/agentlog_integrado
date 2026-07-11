@@ -43,6 +43,11 @@ export class SupabaseService {
     return this.parseResponse<T>(response);
   }
 
+  async delete<T>(table: string, query: string): Promise<T> {
+    const response = await fetch(`${this.url}/rest/v1/${table}?${query}`, { method: 'DELETE', headers: { ...this.adminHeaders(), Prefer: 'return=representation' } });
+    return this.parseResponse<T>(response);
+  }
+
   private adminHeaders(): Record<string, string> {
     return { apikey: this.serviceRoleKey, Authorization: `Bearer ${this.serviceRoleKey}`, 'Content-Type': 'application/json' };
   }
