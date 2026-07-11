@@ -8,7 +8,7 @@ import { getSessionContext } from '../../../../lib/setup-api';
 
 const options = [
   { type: 'api', title: 'API', description: 'Configuração declarativa de endpoint, método e autenticação. Não chama API externa nesta sprint.' },
-  { type: 'spreadsheet', title: 'Planilha', description: 'Declara o tipo esperado de arquivo. Upload real será implementado em sprint futura.' },
+  { type: 'spreadsheet', title: 'Planilha', description: 'Declara o tipo esperado de arquivo. Use Atualizar dados na lista de Integrações para enviar XLSX/CSV contra o contrato ativo.' },
   { type: 'database', title: 'Banco', description: 'Conexão real com banco será implementada em sprint futura. Nesta etapa, use estrutura declarativa ou API/planilha declarativa.', disabled: true },
   { type: 'other', title: 'Outro', description: 'Fonte genérica para estrutura já existente.' },
 ];

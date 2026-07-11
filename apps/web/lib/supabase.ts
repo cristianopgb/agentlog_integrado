@@ -92,6 +92,9 @@ export function createBrowserSupabaseClient() {
         const { data: user, error } = await request<{ id: string; email?: string }>('/auth/v1/user');
         return { data: { user }, error };
       },
+      getAccessToken() {
+        return window.localStorage.getItem(tokenKey);
+      },
       signOut() {
         window.localStorage.removeItem(tokenKey);
       },

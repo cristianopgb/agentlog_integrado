@@ -426,7 +426,7 @@ export default function IntegrationSetupPage() {
               connection_declared: true,
               file_type: String(f.get('file_type') || 'xlsx'),
               upload_enabled: false,
-              note: 'Upload real será implementado em sprint futura.',
+              note: 'Use Atualizar dados na lista de Integrações para enviar XLSX/CSV contra o contrato ativo.',
             };
     if (source.source_type === 'api' && !metadata.api_url)
       return setMsg(
@@ -925,7 +925,7 @@ export default function IntegrationSetupPage() {
                     </select>
                   </label>
                   <div className="rounded-2xl border border-dashed bg-slate-50 p-8 text-center text-sm text-slate-500">
-                    Upload real será implementado em sprint futura.
+                    Use Atualizar dados na lista de Integrações para enviar XLSX/CSV contra o contrato ativo.
                   </div>
                 </div>
               )}
@@ -936,8 +936,7 @@ export default function IntegrationSetupPage() {
                 Salvar conexão declarativa
               </button>
               <p className="text-xs text-slate-500">
-                Nenhuma chamada externa, upload real, parser ou leitura real de
-                schema é executada nesta sprint.
+                Nenhuma chamada externa ou leitura real de schema é executada. O upload manual usa parser backend rígido contra contrato ativo.
               </p>
             </form>
           </Card>
