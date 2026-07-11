@@ -15,6 +15,7 @@ import {
   linkExistingContractToIntegration,
   listReusableContracts,
   updateIntegrationConnection,
+  uploadIntegrationFile,
   type IntegrationSource,
 } from '../../../../../lib/integrations-api';
 import {
@@ -23,7 +24,7 @@ import {
   type DataContractField,
 } from '../../../../../lib/data-contracts-api';
 import {
-  getLatestStagingRecordForContract,
+  getLatestStagingRecordForSourceContract,
   listCanonicalEntities,
   listCanonicalFields,
   listFieldMappings,
@@ -259,6 +260,13 @@ function entitySortOrder(entity: CanonicalEntity) {
   const index = visibleEntityOrder.indexOf(entity.entity_key);
   return index === -1 ? 999 : index;
 }
+function uploadStatusMessage(status: string) {
+  if (status === 'validated') return 'Arquivo validado. O lote real já pode seguir para mapeamento e normalização.';
+  if (status === 'partially_valid') return 'Arquivo parcialmente válido. Apenas linhas válidas poderão seguir para normalização.';
+  if (status === 'rejected') return 'Arquivo rejeitado. Corrija a planilha conforme o contrato e envie novamente.';
+  return 'Arquivo recebido. Revise o resultado do lote antes de normalizar.';
+}
+
 
 export default function IntegrationSetupPage() {
   const params = useParams<{ id: string }>();
@@ -278,11 +286,9 @@ export default function IntegrationSetupPage() {
   const [entityId, setEntityId] = useState('');
   const [canonicalFields, setCanonicalFields] = useState<CanonicalField[]>([]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
-  const [normalizationMappings, setNormalizationMappings] = useState<
-    FieldMapping[]
-  >([]);
   const [preview, setPreview] = useState<Preview>(null);
   const [latestBatch, setLatestBatch] = useState<StagingBatch | null>(null);
+  const [latestSourceBatch, setLatestSourceBatch] = useState<StagingBatch | null>(null);
   const [normalizationRuns, setNormalizationRuns] = useState<
     NormalizationRun[]
   >([]);
@@ -299,6 +305,8 @@ export default function IntegrationSetupPage() {
   const [mappingSaveState, setMappingSaveState] = useState<
     'idle' | 'dirty' | 'saving' | 'saved' | 'error'
   >('idle');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   async function load(t: string, chosenEntityId?: string) {
     const s = await getIntegrationSource(t, params.id);
@@ -311,13 +319,9 @@ export default function IntegrationSetupPage() {
       listReusableContracts(t, params.id),
     ]);
     setEntities(es);
-    const latestValidatedBatch =
-      batches.find(
-        (batch) =>
-          batch.data_source_id === params.id &&
-          (batch.status === 'validated' || batch.status === 'partially_valid'),
-      ) ?? null;
-    setLatestBatch(latestValidatedBatch);
+    const sourceBatches = batches.filter((batch) => batch.data_source_id === params.id);
+    const latestAnySourceBatch = sourceBatches[0] ?? null;
+    setLatestSourceBatch(latestAnySourceBatch);
     setReusableContracts(reusable);
     setSelectedContractId(reusable[0]?.id ?? '');
     setCanonicalFields(
@@ -326,18 +330,20 @@ export default function IntegrationSetupPage() {
       ).flat(),
     );
     if (c) {
-      const batchContractId = latestValidatedBatch?.data_contract_id ?? null;
-      const [fs, ms, batchMs, pv] = await Promise.all([
+      const latestValidatedBatch =
+        sourceBatches.find(
+          (batch) =>
+            batch.data_contract_id === c.id &&
+            (batch.status === 'validated' || batch.status === 'partially_valid'),
+        ) ?? null;
+      setLatestBatch(latestValidatedBatch);
+      const [fs, ms, pv] = await Promise.all([
         listContractFields(t, c.id),
         listFieldMappings(t, c.id),
-        batchContractId
-          ? listFieldMappings(t, batchContractId)
-          : Promise.resolve([]),
-        getLatestStagingRecordForContract(t, c.id),
+        getLatestStagingRecordForSourceContract(t, params.id, c.id),
       ]);
       setFields(fs);
       setMappings(ms);
-      setNormalizationMappings(batchMs);
       setDraftMappings({});
       setMappingSaveState('idle');
       setPreview(pv);
@@ -357,10 +363,10 @@ export default function IntegrationSetupPage() {
     } else {
       setFields([]);
       setMappings([]);
-      setNormalizationMappings([]);
       setDraftMappings({});
       setMappingSaveState('idle');
       setPreview(null);
+      setLatestBatch(null);
       setEntityId(chooseInitialEntity(es, chosenEntityId));
       setNormalizationRuns([]);
       setNormalizationErrors([]);
@@ -425,8 +431,8 @@ export default function IntegrationSetupPage() {
               sprint_7_1: true,
               connection_declared: true,
               file_type: String(f.get('file_type') || 'xlsx'),
-              upload_enabled: false,
-              note: 'Use Atualizar dados na lista de Integrações para enviar XLSX/CSV contra o contrato ativo.',
+              upload_enabled: true,
+              note: 'Envie XLSX/CSV na própria tela de setup contra o contrato ativo vinculado.',
             };
     if (source.source_type === 'api' && !metadata.api_url)
       return setMsg(
@@ -612,9 +618,9 @@ export default function IntegrationSetupPage() {
     !hasCommonCoreMapping,
   );
   const connectionDeclared = source?.metadata?.connection_declared === true;
-  const activeNormalizationMappings = normalizationMappings.filter(
+  const activeNormalizationMappings = mappings.filter(
     (mapping) =>
-      mapping.data_contract_id === latestBatch?.data_contract_id &&
+      mapping.data_contract_id === contract?.id &&
       (mapping.status === 'active' || !mapping.status),
   );
   const mappedCount = activeNormalizationMappings.length;
@@ -623,8 +629,13 @@ export default function IntegrationSetupPage() {
     latestBatch?.data_contract_id &&
     contract.id === latestBatch.data_contract_id,
   );
+  const hasRealValidatedBatch = Boolean(latestBatch && contractMatchesLatestBatch);
   const isComplete = Boolean(
-    connectionDeclared && contract && fields.length > 0 && mappedCount > 0,
+    connectionDeclared &&
+      contract?.status === 'active' &&
+      fields.length > 0 &&
+      mappedCount > 0 &&
+      hasRealValidatedBatch,
   );
   const lastNormalizationRun = normalizationRuns[0] ?? null;
   const latestValidatedBatchLabel = latestBatch
@@ -638,6 +649,7 @@ export default function IntegrationSetupPage() {
   const canManageMappings =
     hasPermission(perms, 'core.field_mappings.create') &&
     hasPermission(perms, 'core.field_mappings.update');
+  const canManageStaging = hasPermission(perms, 'staging.manage');
   const canRunNormalization =
     hasPermission(perms, 'normalization.run') &&
     hasPermission(perms, 'native_records.manage');
@@ -734,9 +746,41 @@ export default function IntegrationSetupPage() {
   const missingItems = [
     !connectionDeclared ? 'conexão declarada' : '',
     !contract ? 'contrato vinculado' : '',
+    contract && contract.status !== 'active' ? 'contrato ativo para operação' : '',
     contract && fields.length === 0 ? 'campos no contrato' : '',
     mappedCount === 0 ? 'campos mapeados' : '',
+    !hasRealValidatedBatch
+      ? 'Enviar e validar pelo menos um arquivo.'
+      : '',
   ].filter(Boolean);
+
+  async function handleUpload() {
+    if (!source || !contract || !uploadFile || uploading) return;
+    if (!canManageStaging) {
+      setMsg('Você não tem permissão para atualizar dados de staging.');
+      return;
+    }
+    if (contract.status !== 'active') {
+      setMsg('O upload exige contrato ativo com campos definidos.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const batch = await uploadIntegrationFile(tenantId, source.id, uploadFile);
+      setLatestSourceBatch(batch);
+      await load(tenantId, entityId);
+      setUploadFile(null);
+      setMsg(uploadStatusMessage(batch.status));
+    } catch (error) {
+      setMsg(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível enviar o arquivo. Revise o contrato e tente novamente.',
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
   const titleType =
     source?.source_type === 'api'
       ? 'Integração com API'
@@ -745,6 +789,60 @@ export default function IntegrationSetupPage() {
         : source?.source_type === 'database'
           ? 'Integração com Banco'
           : 'Integração';
+
+  const uploadSection =
+    source?.source_type === 'spreadsheet' && contract && fields.length > 0 ? (
+      <Card className="border-blue-100 bg-blue-50/40">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold">Atualizar dados desta integração</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Envie XLSX/CSV diretamente no setup da integração {source.name}. O arquivo será validado contra o contrato ativo antes de alimentar staging.
+            </p>
+          </div>
+          <StatusBadge tone={contract.status === 'active' ? 'success' : 'warning'}>
+            Contrato {contract.status}
+          </StatusBadge>
+        </div>
+        <dl className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+          <div className="rounded-2xl bg-white p-3"><dt className="font-semibold">Integração</dt><dd>{source.name}</dd></div>
+          <div className="rounded-2xl bg-white p-3"><dt className="font-semibold">Contrato vinculado</dt><dd>{contract.name}</dd></div>
+          <div className="rounded-2xl bg-white p-3"><dt className="font-semibold">Colunas esperadas</dt><dd>{fields.length}</dd></div>
+        </dl>
+        <div className="mt-4 rounded-2xl bg-white p-3 text-sm">
+          <p className="font-semibold">Colunas esperadas no arquivo</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {fields.map((field) => <span key={field.id} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold">{field.source_field_name}</span>)}
+          </div>
+        </div>
+        {canManageStaging ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <input type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} className="rounded-xl border bg-white p-3 text-sm" />
+            <button type="button" onClick={handleUpload} disabled={!uploadFile || uploading || contract.status !== 'active'} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:bg-slate-300">{uploading ? 'Enviando...' : 'Enviar arquivo'}</button>
+          </div>
+        ) : <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Você não tem permissão staging.manage para enviar arquivos.</p>}
+        <div className="mt-4 rounded-2xl border bg-white p-4">
+          <h3 className="font-bold">Resumo do último lote desta integração</h3>
+          {latestSourceBatch ? (
+            <>
+              <p className="mt-2 text-sm">{uploadStatusMessage(latestSourceBatch.status)}</p>
+              <dl className="mt-3 grid gap-2 text-sm md:grid-cols-5">
+                <div><dt className="text-slate-500">Status</dt><dd className="font-semibold">{latestSourceBatch.status}</dd></div>
+                <div><dt className="text-slate-500">Recebidos</dt><dd className="font-semibold">{latestSourceBatch.total_records}</dd></div>
+                <div><dt className="text-slate-500">Válidos</dt><dd className="font-semibold">{latestSourceBatch.valid_records}</dd></div>
+                <div><dt className="text-slate-500">Rejeitados</dt><dd className="font-semibold">{latestSourceBatch.invalid_records}</dd></div>
+                <div><dt className="text-slate-500">Erros</dt><dd className="font-semibold">{latestSourceBatch.error_count}</dd></div>
+              </dl>
+              <div className="mt-3 flex flex-wrap gap-2 text-sm font-semibold">
+                <Link href={`/app/setup/staging/batches/${latestSourceBatch.id}`} className="rounded-xl border px-3 py-2">Ver detalhe do lote</Link>
+                <Link href="/app/native-data" className="rounded-xl border px-3 py-2">Dados tratados</Link>
+                <Link href="/app/indicators" className="rounded-xl border px-3 py-2">Indicadores</Link>
+              </div>
+            </>
+          ) : <p className="mt-2 text-sm text-slate-600">Nenhum arquivo enviado ainda para esta integração. Envie uma planilha para visualizar amostras reais.</p>}
+        </div>
+      </Card>
+    ) : null;
 
   const contractActions =
     !contract || fields.length < 7 ? (
@@ -925,7 +1023,7 @@ export default function IntegrationSetupPage() {
                     </select>
                   </label>
                   <div className="rounded-2xl border border-dashed bg-slate-50 p-8 text-center text-sm text-slate-500">
-                    Use Atualizar dados na lista de Integrações para enviar XLSX/CSV contra o contrato ativo.
+                    Após salvar a conexão e vincular um contrato ativo, envie XLSX/CSV nesta própria tela de setup.
                   </div>
                 </div>
               )}
@@ -941,6 +1039,7 @@ export default function IntegrationSetupPage() {
             </form>
           </Card>
           {connectionDeclared ? contractActions : null}
+          {connectionDeclared ? uploadSection : null}
         </div>
       ) : null}
       {step === 'mapping' ? (
@@ -973,6 +1072,13 @@ export default function IntegrationSetupPage() {
             </div>
           </div>
           {contractActions}
+          {uploadSection}
+          {contract && !preview ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <p className="font-semibold">Nenhum arquivo enviado ainda para esta integração. Envie uma planilha para visualizar amostras reais.</p>
+              {source?.source_type === 'spreadsheet' ? <button type="button" onClick={() => setStep('mapping')} className="mt-3 rounded-xl bg-blue-600 px-4 py-2 font-bold text-white">Enviar planilha agora</button> : null}
+            </div>
+          ) : null}
           {contract ? (
             <div className="grid gap-4 xl:grid-cols-3">
               <Card>
@@ -1178,11 +1284,11 @@ export default function IntegrationSetupPage() {
                 </p>
                 <h3 className="mt-4 font-semibold">Payload original</h3>
                 <pre className="mt-2 max-h-72 overflow-auto rounded-2xl bg-slate-950 p-3 text-xs text-slate-100">
-                  {JSON.stringify(preview?.raw_payload ?? {}, null, 2)}
+{preview ? JSON.stringify(preview.raw_payload, null, 2) : 'Nenhum arquivo enviado ainda para esta integração. Envie uma planilha para visualizar amostras reais.'}
                 </pre>
                 <h3 className="mt-4 font-semibold">Payload preparado</h3>
                 <pre className="mt-2 max-h-72 overflow-auto rounded-2xl bg-slate-950 p-3 text-xs text-slate-100">
-                  {JSON.stringify(preview?.normalized_payload ?? {}, null, 2)}
+{preview ? JSON.stringify(preview.normalized_payload, null, 2) : 'Nenhum arquivo enviado ainda para esta integração. Envie uma planilha para visualizar amostras reais.'}
                 </pre>
               </Card>
             </div>

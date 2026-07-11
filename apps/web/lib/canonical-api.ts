@@ -15,4 +15,12 @@ export async function updateFieldMapping(tenantId:string,id:string,p:Partial<Fie
 export async function listTransformationRules(tenantId:string,mappingId:string){const {data,error}=await createBrowserSupabaseClient().from('transformation_rules').select('*').eq('tenant_id',tenantId).eq('field_mapping_id',mappingId).order('sort_order'); if(error) throw error; return data as TransformationRule[];}
 export async function createTransformationRule(tenantId:string,mappingId:string,rule_type:string){const {error}=await createBrowserSupabaseClient().from('transformation_rules').insert({tenant_id:tenantId,field_mapping_id:mappingId,rule_type,rule_config:{}}); if(error) throw error;}
 export async function listValidationRules(tenantId:string,entityId:string){const {data,error}=await createBrowserSupabaseClient().from('validation_rules').select('*,canonical_field:canonical_fields!validation_rules_field_tenant_fk(field_key,name)').eq('tenant_id',tenantId).eq('canonical_entity_id',entityId); if(error) throw error; return data as ValidationRule[];}
+export async function getLatestStagingRecordForSourceContract(tenantId:string,sourceId:string,contractId:string){
+  const fetchByBatchStatus = async (status:string) => {
+    const {data,error}=await createBrowserSupabaseClient().from('staging_records').select('raw_payload,normalized_payload,created_at,staging_batch:staging_batches!inner(data_source_id,status)').eq('tenant_id',tenantId).eq('data_contract_id',contractId).eq('validation_status','valid').eq('staging_batch.data_source_id',sourceId).eq('staging_batch.status',status).order('created_at',{ascending:false}).limit(1).maybeSingle();
+    if(error) throw error;
+    return data as {raw_payload:Record<string,unknown>;normalized_payload:Record<string,unknown>}|null;
+  };
+  return (await fetchByBatchStatus('validated')) ?? (await fetchByBatchStatus('partially_valid'));
+}
 export async function getLatestStagingRecordForContract(tenantId:string,contractId:string){const {data,error}=await createBrowserSupabaseClient().from('staging_records').select('*').eq('tenant_id',tenantId).eq('data_contract_id',contractId).order('created_at',{ascending:false}).limit(1).maybeSingle(); if(error) throw error; return data as {raw_payload:Record<string,unknown>;normalized_payload:Record<string,unknown>}|null;}
