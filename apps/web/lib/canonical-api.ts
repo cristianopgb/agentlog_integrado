@@ -1,26 +1,237 @@
 import { createBrowserSupabaseClient } from './supabase';
-export type CanonicalEntity={id:string;tenant_id:string;module_key:string;entity_key:string;name:string;description:string|null;status:string;is_system:boolean;sort_order:number};
-export type CanonicalField={id:string;tenant_id:string;canonical_entity_id:string;field_key:string;name:string;description:string|null;data_type:string;is_required:boolean;is_system:boolean;sort_order:number};
-export type FieldMapping={id:string;tenant_id:string;data_contract_id:string;data_contract_field_id:string;canonical_entity_id:string;canonical_field_id:string;mapping_type:string;status:string;notes:string|null};
-export type TransformationRule={id:string;tenant_id:string;field_mapping_id:string;rule_type:string;rule_config:Record<string,unknown>;sort_order:number;is_active:boolean};
-export type ValidationRule={id:string;tenant_id:string;canonical_entity_id:string;canonical_field_id:string|null;rule_type:string;rule_config:Record<string,unknown>;severity:string;is_active:boolean;message:string|null;canonical_field?:{field_key:string;name:string}|null};
-export async function listCanonicalEntities(tenantId:string){const {data,error}=await createBrowserSupabaseClient().from('canonical_entities').select('*').eq('tenant_id',tenantId).order('sort_order'); if(error) throw error; return data as CanonicalEntity[];}
-export async function getCanonicalEntity(tenantId:string,id:string){const {data,error}=await createBrowserSupabaseClient().from('canonical_entities').select('*').eq('tenant_id',tenantId).eq('id',id).maybeSingle(); if(error) throw error; return data as CanonicalEntity|null;}
-export async function listCanonicalFields(tenantId:string,entityId:string){const {data,error}=await createBrowserSupabaseClient().from('canonical_fields').select('*').eq('tenant_id',tenantId).eq('canonical_entity_id',entityId).order('sort_order'); if(error) throw error; return data as CanonicalField[];}
-export async function createCanonicalField(tenantId:string,entityId:string,p:Partial<CanonicalField>){const {error}=await createBrowserSupabaseClient().from('canonical_fields').insert({...p,tenant_id:tenantId,canonical_entity_id:entityId}); if(error) throw error;}
-export async function updateCanonicalField(tenantId:string,id:string,p:Partial<CanonicalField>){const {error}=await createBrowserSupabaseClient().from('canonical_fields').update(p).eq('tenant_id',tenantId).eq('id',id); if(error) throw error;}
-export async function listFieldMappings(tenantId:string,contractId:string){const {data,error}=await createBrowserSupabaseClient().from('field_mappings').select('*').eq('tenant_id',tenantId).eq('data_contract_id',contractId); if(error) throw error; return data as FieldMapping[];}
-export async function upsertFieldMapping(tenantId:string,contractId:string,p:Partial<FieldMapping>){const {error}=await createBrowserSupabaseClient().from('field_mappings').upsert({...p,status:p.status??'active',tenant_id:tenantId,data_contract_id:contractId},{onConflict:'data_contract_id,data_contract_field_id'}); if(error) throw error;}
-export async function updateFieldMapping(tenantId:string,id:string,p:Partial<FieldMapping>){const {error}=await createBrowserSupabaseClient().from('field_mappings').update(p).eq('tenant_id',tenantId).eq('id',id); if(error) throw error;}
-export async function listTransformationRules(tenantId:string,mappingId:string){const {data,error}=await createBrowserSupabaseClient().from('transformation_rules').select('*').eq('tenant_id',tenantId).eq('field_mapping_id',mappingId).order('sort_order'); if(error) throw error; return data as TransformationRule[];}
-export async function createTransformationRule(tenantId:string,mappingId:string,rule_type:string){const {error}=await createBrowserSupabaseClient().from('transformation_rules').insert({tenant_id:tenantId,field_mapping_id:mappingId,rule_type,rule_config:{}}); if(error) throw error;}
-export async function listValidationRules(tenantId:string,entityId:string){const {data,error}=await createBrowserSupabaseClient().from('validation_rules').select('*,canonical_field:canonical_fields!validation_rules_field_tenant_fk(field_key,name)').eq('tenant_id',tenantId).eq('canonical_entity_id',entityId); if(error) throw error; return data as ValidationRule[];}
-export async function getLatestStagingRecordForSourceContract(tenantId:string,sourceId:string,contractId:string){
-  const fetchByBatchStatus = async (status:string) => {
-    const {data,error}=await createBrowserSupabaseClient().from('staging_records').select('raw_payload,normalized_payload,created_at,staging_batch:staging_batches!inner(data_source_id,status)').eq('tenant_id',tenantId).eq('data_contract_id',contractId).eq('validation_status','valid').eq('staging_batch.data_source_id',sourceId).eq('staging_batch.status',status).order('created_at',{ascending:false}).limit(1).maybeSingle();
-    if(error) throw error;
-    return data as {raw_payload:Record<string,unknown>;normalized_payload:Record<string,unknown>}|null;
-  };
-  return (await fetchByBatchStatus('validated')) ?? (await fetchByBatchStatus('partially_valid'));
+export type CanonicalEntity = {
+  id: string;
+  tenant_id: string;
+  module_key: string;
+  entity_key: string;
+  name: string;
+  description: string | null;
+  status: string;
+  is_system: boolean;
+  sort_order: number;
+};
+export type CanonicalField = {
+  id: string;
+  tenant_id: string;
+  canonical_entity_id: string;
+  field_key: string;
+  name: string;
+  description: string | null;
+  data_type: string;
+  is_required: boolean;
+  is_system: boolean;
+  sort_order: number;
+};
+export type FieldMapping = {
+  id: string;
+  tenant_id: string;
+  data_contract_id: string;
+  data_contract_field_id: string;
+  canonical_entity_id: string;
+  canonical_field_id: string;
+  mapping_type: string;
+  status: string;
+  notes: string | null;
+};
+export type TransformationRule = {
+  id: string;
+  tenant_id: string;
+  field_mapping_id: string;
+  rule_type: string;
+  rule_config: Record<string, unknown>;
+  sort_order: number;
+  is_active: boolean;
+};
+export type ValidationRule = {
+  id: string;
+  tenant_id: string;
+  canonical_entity_id: string;
+  canonical_field_id: string | null;
+  rule_type: string;
+  rule_config: Record<string, unknown>;
+  severity: string;
+  is_active: boolean;
+  message: string | null;
+  canonical_field?: { field_key: string; name: string } | null;
+};
+export async function listCanonicalEntities(tenantId: string) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('canonical_entities')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .order('sort_order');
+  if (error) throw error;
+  return data as CanonicalEntity[];
 }
-export async function getLatestStagingRecordForContract(tenantId:string,contractId:string){const {data,error}=await createBrowserSupabaseClient().from('staging_records').select('*').eq('tenant_id',tenantId).eq('data_contract_id',contractId).order('created_at',{ascending:false}).limit(1).maybeSingle(); if(error) throw error; return data as {raw_payload:Record<string,unknown>;normalized_payload:Record<string,unknown>}|null;}
+export async function getCanonicalEntity(tenantId: string, id: string) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('canonical_entities')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return data as CanonicalEntity | null;
+}
+export async function listCanonicalFields(tenantId: string, entityId: string) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('canonical_fields')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('canonical_entity_id', entityId)
+    .order('sort_order');
+  if (error) throw error;
+  return data as CanonicalField[];
+}
+export async function createCanonicalField(
+  tenantId: string,
+  entityId: string,
+  p: Partial<CanonicalField>,
+) {
+  const { error } = await createBrowserSupabaseClient()
+    .from('canonical_fields')
+    .insert({ ...p, tenant_id: tenantId, canonical_entity_id: entityId });
+  if (error) throw error;
+}
+export async function updateCanonicalField(
+  tenantId: string,
+  id: string,
+  p: Partial<CanonicalField>,
+) {
+  const { error } = await createBrowserSupabaseClient()
+    .from('canonical_fields')
+    .update(p)
+    .eq('tenant_id', tenantId)
+    .eq('id', id);
+  if (error) throw error;
+}
+export async function listFieldMappings(tenantId: string, contractId: string) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('field_mappings')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('data_contract_id', contractId);
+  if (error) throw error;
+  return data as FieldMapping[];
+}
+export async function upsertFieldMapping(
+  tenantId: string,
+  contractId: string,
+  p: Partial<FieldMapping>,
+) {
+  const { error } = await createBrowserSupabaseClient()
+    .from('field_mappings')
+    .upsert(
+      {
+        ...p,
+        status: p.status ?? 'active',
+        tenant_id: tenantId,
+        data_contract_id: contractId,
+      },
+      { onConflict: 'data_contract_id,data_contract_field_id' },
+    );
+  if (error) throw error;
+}
+export async function updateFieldMapping(
+  tenantId: string,
+  id: string,
+  p: Partial<FieldMapping>,
+) {
+  const { error } = await createBrowserSupabaseClient()
+    .from('field_mappings')
+    .update(p)
+    .eq('tenant_id', tenantId)
+    .eq('id', id);
+  if (error) throw error;
+}
+export async function listTransformationRules(
+  tenantId: string,
+  mappingId: string,
+) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('transformation_rules')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('field_mapping_id', mappingId)
+    .order('sort_order');
+  if (error) throw error;
+  return data as TransformationRule[];
+}
+export async function createTransformationRule(
+  tenantId: string,
+  mappingId: string,
+  rule_type: string,
+) {
+  const { error } = await createBrowserSupabaseClient()
+    .from('transformation_rules')
+    .insert({
+      tenant_id: tenantId,
+      field_mapping_id: mappingId,
+      rule_type,
+      rule_config: {},
+    });
+  if (error) throw error;
+}
+export async function listValidationRules(tenantId: string, entityId: string) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('validation_rules')
+    .select(
+      '*,canonical_field:canonical_fields!validation_rules_field_tenant_fk(field_key,name)',
+    )
+    .eq('tenant_id', tenantId)
+    .eq('canonical_entity_id', entityId);
+  if (error) throw error;
+  return data as ValidationRule[];
+}
+export async function getLatestStagingRecordForSourceContract(
+  tenantId: string,
+  sourceId: string,
+  contractId: string,
+) {
+  const supabase = createBrowserSupabaseClient();
+  const { data: batches, error: batchError } = await supabase
+    .from('staging_batches')
+    .select('id')
+    .eq('tenant_id', tenantId)
+    .eq('data_source_id', sourceId)
+    .eq('data_contract_id', contractId)
+    .in('status', ['validated', 'partially_valid'])
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (batchError) throw batchError;
+  const latestBatch = (batches as { id: string }[] | null)?.[0];
+  if (!latestBatch) return null;
+  const { data, error } = await supabase
+    .from('staging_records')
+    .select('raw_payload,normalized_payload,created_at')
+    .eq('tenant_id', tenantId)
+    .eq('data_contract_id', contractId)
+    .eq('staging_batch_id', latestBatch.id)
+    .eq('validation_status', 'valid')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data as {
+    raw_payload: Record<string, unknown>;
+    normalized_payload: Record<string, unknown>;
+  } | null;
+}
+export async function getLatestStagingRecordForContract(
+  tenantId: string,
+  contractId: string,
+) {
+  const { data, error } = await createBrowserSupabaseClient()
+    .from('staging_records')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('data_contract_id', contractId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data as {
+    raw_payload: Record<string, unknown>;
+    normalized_payload: Record<string, unknown>;
+  } | null;
+}
