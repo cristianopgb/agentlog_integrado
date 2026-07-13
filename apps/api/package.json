@@ -8,7 +8,8 @@
     "start": "node dist/main.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "bootstrap:admin": "node dist/scripts/bootstrap-admin.js"
+    "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
+    "test:file-parser": "pnpm build && node dist/staging/file-parser.local-test.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
@@ -16,7 +17,7 @@
     "@nestjs/platform-express": "^10.4.15",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "fflate": "^0.8.3"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",

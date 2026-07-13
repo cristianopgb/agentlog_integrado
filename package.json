@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Monorepo Sprint 0 do Sistema Logístico Integrado.",
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=20.11.0"
   },
