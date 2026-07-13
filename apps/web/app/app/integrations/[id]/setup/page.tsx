@@ -260,13 +260,16 @@ function entitySortOrder(entity: CanonicalEntity) {
   const index = visibleEntityOrder.indexOf(entity.entity_key);
   return index === -1 ? 999 : index;
 }
-function uploadStatusMessage(status: string) {
+function uploadStatusMessage(batch: StagingBatch) {
+  if (batch.metadata?.setup_upload === true)
+    return 'Arquivo lido com sucesso. Revise o pareamento das colunas antes de processar.';
+  const { status } = batch;
   if (status === 'validated')
     return 'Arquivo validado. O lote real já pode seguir para pareamento e normalização.';
   if (status === 'partially_valid')
     return 'Arquivo parcialmente válido. Apenas linhas válidas poderão seguir para normalização.';
   if (status === 'rejected')
-    return 'Arquivo rejeitado. Corrija a planilha conforme a configuração interna e envie novamente.';
+    return 'O arquivo enviado não corresponde ao pareamento desta integração. Revise o pareamento ou envie o modelo correto.';
   return 'Arquivo recebido. Revise o resultado do lote antes de normalizar.';
 }
 
@@ -754,13 +757,15 @@ export default function IntegrationSetupPage() {
       setLatestSourceBatch(batch);
       await load(tenantId, entityId);
       setUploadFile(null);
-      setMsg(uploadStatusMessage(batch.status));
+      setMsg(uploadStatusMessage(batch));
       setStep('mapping');
     } catch (error) {
       setMsg(
-        error instanceof Error
+        error instanceof Error &&
+          error.message ===
+            'Não foi possível ler as colunas do arquivo. Verifique o formato e tente novamente.'
           ? error.message
-          : 'Não foi possível enviar o arquivo. Revise o configuração interna e tente novamente.',
+          : 'O arquivo enviado não corresponde ao pareamento desta integração. Revise o pareamento ou envie o modelo correto.',
       );
     } finally {
       setUploading(false);
@@ -963,7 +968,7 @@ export default function IntegrationSetupPage() {
           )}
           {latestSourceBatch ? (
             <p className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm">
-              {uploadStatusMessage(latestSourceBatch.status)}
+              {uploadStatusMessage(latestSourceBatch)}
             </p>
           ) : null}
         </Card>

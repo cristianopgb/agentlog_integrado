@@ -6,6 +6,16 @@ const batchFields = 'id,tenant_id,data_source_id,data_contract_id,batch_code,sou
 const recordFields = 'id,tenant_id,staging_batch_id,data_contract_id,row_number,raw_payload,normalized_payload,validation_status,error_count,validated_at,created_at,updated_at';
 const errorFields = 'id,tenant_id,staging_batch_id,staging_record_id,data_contract_field_id,error_code,severity,field_key,source_field_name,raw_value,expected_rule,message,created_at';
 
+type ContractField = {
+  id: string;
+  field_key: string;
+  source_field_name: string;
+  data_type: string;
+  is_required: boolean;
+  allow_null: boolean;
+  date_format: string | null;
+};
+
 @Injectable()
 export class StagingService {
   constructor(private readonly supabase: SupabaseService) {}
@@ -48,9 +58,25 @@ export class StagingService {
     const contracts = await this.supabase.select<Array<{ id: string; name: string; status: string; module_key: string }>>('data_contracts', `select=id,name,status,module_key&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=eq.active&order=contract_version.desc&limit=1`);
     const contract = contracts[0];
     if (!contract) throw new BadRequestException('Não existe contrato de dados ativo para esta integração.');
-    const fields = await this.supabase.select<Array<{ id: string; field_key: string; source_field_name: string; data_type: string; is_required: boolean; allow_null: boolean; date_format: string | null }>>('data_contract_fields', `select=id,field_key,source_field_name,data_type,is_required,allow_null,date_format&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&order=sort_order.asc`);
+    let parsed: ReturnType<typeof parseTabularFile>;
+    try {
+      parsed = parseTabularFile(file.buffer, filename);
+    } catch {
+      throw new BadRequestException('Não foi possível ler as colunas do arquivo. Verifique o formato e tente novamente.');
+    }
+    const activeMappings = await this.supabase.select<Array<{ id: string }>>('field_mappings', `select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&status=eq.active&limit=1`);
+    const isSetupUpload = activeMappings.length === 0;
+    let fields = await this.supabase.select<ContractField[]>('data_contract_fields', `select=id,field_key,source_field_name,data_type,is_required,allow_null,date_format&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&order=sort_order.asc`);
+    if (isSetupUpload) {
+      fields = await this.syncSetupContractFields(tenantId, contract.id, parsed.headers);
+      const batchRows = await this.supabase.insert<Array<{ id: string }>>('staging_batches', { tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, batch_code: filename, source_reference: filename, status: 'validated', total_records: parsed.rows.length, valid_records: parsed.rows.length, invalid_records: 0, error_count: 0, metadata: { filename, file_type: extension, received_headers: parsed.headers, upload_mode: 'setup_file', setup_upload: true, message: 'Arquivo lido com sucesso. Revise o pareamento das colunas antes de processar.' }, received_at: new Date().toISOString(), validated_at: new Date().toISOString(), created_by: userId, updated_by: userId });
+      const batchId = batchRows[0]?.id;
+      if (!batchId) throw new BadRequestException('Não foi possível criar o lote de staging.');
+      const insertedRecords = parsed.rows.length ? await this.supabase.insert<Array<{ id: string; row_number: number }>>('staging_records', parsed.rows.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw, validation_status: 'valid', error_count: 0, validated_at: new Date().toISOString() }))) : [];
+      await Promise.all(insertedRecords.map((record) => this.supabase.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { validation_status: 'valid', error_count: 0, validated_at: new Date().toISOString() })));
+      return this.getBatch(tenantId, batchId);
+    }
     const allowedValues = await this.supabase.select<Array<{ data_contract_field_id: string; value: string; normalized_value: string | null; is_active: boolean }>>('data_contract_allowed_values', `select=data_contract_field_id,value,normalized_value,is_active&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&is_active=eq.true`);
-    const parsed = parseTabularFile(file.buffer, filename);
     const expected = new Set(fields.map((field) => field.source_field_name));
     const unknown = parsed.headers.filter((header) => !expected.has(header));
     const missing = fields.filter((field) => field.is_required && !parsed.headers.includes(field.source_field_name));
@@ -99,6 +125,23 @@ export class StagingService {
   }
 
   private matchesType(value: string, type: string) { if (['decimal','number','integer'].includes(type)) return !Number.isNaN(Number(value.replace(',', '.'))); if (type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isNaN(Date.parse(value)); if (type === 'datetime') return !Number.isNaN(Date.parse(value)); if (type === 'boolean') return ['true','false','0','1','sim','não','nao'].includes(value.toLowerCase()); return true; }
+  private async syncSetupContractFields(tenantId: string, contractId: string, headers: string[]) {
+    await this.supabase.delete('data_contract_allowed_values', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
+    await this.supabase.delete('data_contract_fields', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
+    const seen = new Map<string, number>();
+    const payload = headers.map((header, index) => {
+      const baseKey = this.toFieldKey(header) || `campo_${index + 1}`;
+      const count = seen.get(baseKey) ?? 0;
+      seen.set(baseKey, count + 1);
+      const fieldKey = count === 0 ? baseKey : `${baseKey}_${count + 1}`;
+      return { tenant_id: tenantId, data_contract_id: contractId, field_key: fieldKey, source_field_name: header, data_type: 'text', is_required: false, is_unique: false, allow_null: true, min_length: null, max_length: null, min_value: null, max_value: null, regex_pattern: null, date_format: null, sort_order: (index + 1) * 10 };
+    });
+    if (!payload.length) return [];
+    return this.supabase.insert<ContractField[]>('data_contract_fields', payload);
+  }
+  private toFieldKey(header: string) {
+    return header.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/_+/g, '_');
+  }
   private batchError(tenantId: string, batchId: string, code: string, sourceField: string, fieldKey: string | null, expected: string, message: string) { return { tenant_id: tenantId, staging_batch_id: batchId, error_code: code, severity: 'error', source_field_name: sourceField, field_key: fieldKey, expected_rule: expected, message }; }
   private rowError(tenantId: string, batchId: string, recordId: string | null, field: { id: string; field_key: string; source_field_name: string }, raw: unknown, code: string, message: string) { return { tenant_id: tenantId, staging_batch_id: batchId, staging_record_id: recordId, data_contract_field_id: field.id, error_code: code, severity: 'error', field_key: field.field_key, source_field_name: field.source_field_name, raw_value: raw == null ? null : String(raw), expected_rule: message, message }; }
 
