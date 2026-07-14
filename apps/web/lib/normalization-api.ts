@@ -58,9 +58,24 @@ async function api(path: string, init?: RequestInit) {
           ? body.message.join(' ')
           : String(body.message)
         : text;
-    throw new Error(message || 'API request failed.');
+    throw new Error(sanitizeApiError(message || 'API request failed.'));
   }
   return body;
+}
+
+function sanitizeApiError(message: string) {
+  const technicalFragments = [
+    'constraint',
+    'failing row',
+    'violates check',
+    'operation_records_document_type_check',
+    'stack',
+  ];
+  const lower = message.toLowerCase();
+  if (technicalFragments.some((fragment) => lower.includes(fragment))) {
+    return 'Não foi possível processar o lote porque alguns valores não seguem o padrão esperado da base nativa.';
+  }
+  return message;
 }
 
 function tryParseJson(text: string) {
