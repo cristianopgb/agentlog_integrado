@@ -55,25 +55,31 @@ const formatOptions = [
   { value: 'quantity', label: 'Quantidade' },
   { value: 'duration', label: 'Tempo' },
 ];
-const allowedFunctions = [
-  'SOMA',
-  'CONTAGEM',
-  'CONTAGEM_SE',
-  'MÉDIA',
-  'MÍNIMO',
-  'MÁXIMO',
-  'CONTAGEM_DISTINTA',
+const operationOptions = [
+  { value: 'count', label: 'Contagem' },
+  { value: 'count_distinct', label: 'Contagem distinta' },
+  { value: 'sum', label: 'Soma' },
+  { value: 'avg', label: 'Média' },
+  { value: 'min', label: 'Mínimo' },
+  { value: 'max', label: 'Máximo' },
+  { value: 'ratio', label: 'Razão' },
+  { value: 'percentage', label: 'Percentual' },
+  { value: 'group_by', label: 'Agrupamento' },
+  { value: 'time_series', label: 'Série temporal' },
+  { value: 'ranking', label: 'Ranking' },
+  { value: 'duration_avg', label: 'Tempo médio' },
 ];
-const functionLabels: Record<string, string> = {
-  SOMA: 'Soma',
-  CONTAGEM: 'Contagem',
-  CONTAGEM_SE: 'Contagem se',
-  MÉDIA: 'Média',
-  MÍNIMO: 'Mínimo',
-  MÁXIMO: 'Máximo',
-  CONTAGEM_DISTINTA: 'Contagem distinta',
+const metricOperationOptions = operationOptions.filter((o) =>
+  ['count', 'sum', 'avg', 'min', 'max'].includes(o.value),
+);
+const operationPreviewLabels: Record<string, string> = {
+  count: 'CONTAGEM',
+  count_distinct: 'CONTAGEM_DISTINTA',
+  sum: 'SOMA',
+  avg: 'MÉDIA',
+  min: 'MÍNIMO',
+  max: 'MÁXIMO',
 };
-const operators = ['+', '-', '*', '/', '(', ')'];
 const friendlyFields = [
   { key: 'freight_value', label: 'Valor do frete' },
   { key: 'gross_weight', label: 'Peso total' },
@@ -109,9 +115,13 @@ type FormState = {
   family_key: string;
   indicator_type: string;
   value_format: string;
-  formula: string;
-  selected_field: string;
-  active_function: string;
+  operation: string;
+  primary_field: string;
+  numerator_field: string;
+  denominator_field: string;
+  numerator_operation: string;
+  denominator_operation: string;
+  grouping_field: string;
   allow_dashboard_period_filter: boolean;
   default_date_field: string;
 };
@@ -122,9 +132,13 @@ const initialForm: FormState = {
   family_key: 'Operacional',
   indicator_type: 'KPI numérico',
   value_format: 'number',
-  formula: '',
-  selected_field: 'freight_value',
-  active_function: '',
+  operation: 'ratio',
+  primary_field: 'freight_value',
+  numerator_field: 'freight_value',
+  denominator_field: 'gross_weight',
+  numerator_operation: 'sum',
+  denominator_operation: 'sum',
+  grouping_field: 'customer_name',
   allow_dashboard_period_filter: true,
   default_date_field: 'issued_at',
 };
@@ -211,7 +225,8 @@ export default function IndicatorsPage() {
         .filter(Boolean) as Array<IndicatorField & { aliases: string[] }>,
     [fields],
   );
-  const validation = validateFormula(form.formula, catalog);
+  const formulaPreview = buildFormulaPreview(form, catalog);
+  const validation = validateBuilder(form, catalog);
   const payload = (status: 'draft' | 'active') => ({
     name: form.name,
     description: form.description,
@@ -222,15 +237,10 @@ export default function IndicatorsPage() {
     status,
     available_for_dashboard: status === 'active',
     available_for_reports: status === 'active',
-    calculation_config: {
-      base_table: 'operation_records',
-      operation_key: 'FÓRMULA_CONTROLADA',
-      formula: form.formula,
-      allow_dashboard_period_filter: form.allow_dashboard_period_filter,
-      default_date_field: form.default_date_field,
-    },
+    calculation_config: buildCalculationConfig(form),
+    formula_preview: formulaPreview,
   });
-  async function testFormula() {
+  async function testConfiguration() {
     if (!tenantId || !validation.ok) return;
     try {
       setCustomPreview(
@@ -238,7 +248,9 @@ export default function IndicatorsPage() {
       );
     } catch (e) {
       setMessage(
-        e instanceof Error ? e.message : 'Não foi possível testar a fórmula.',
+        e instanceof Error
+          ? e.message
+          : 'Não foi possível testar a configuração.',
       );
     }
   }
@@ -314,80 +326,76 @@ export default function IndicatorsPage() {
           validation={validation}
           preview={customPreview}
           onClose={() => setModalOpen(false)}
-          onTest={testFormula}
+          onTest={testConfiguration}
           onSave={save}
         />
       ) : null}
     </Shell>
   );
 }
-function validateFormula(
-  formula: string,
+function validateBuilder(
+  form: FormState,
   fields: Array<IndicatorField & { aliases: string[] }>,
 ) {
-  const text = formula.trim();
-  if (!text)
-    return {
-      ok: false,
-      message: 'Monte a fórmula para disponibilizar o indicador.',
-    };
-  const dangerous =
-    /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|UNION|FROM|WHERE|eval|Function|javascript|raw_payload|staging|tenant_id)\b/i;
-  if (dangerous.test(text))
-    return {
-      ok: false,
-      message: 'A fórmula contém termo bloqueado por segurança.',
-    };
-  let depth = 0;
-  for (const c of text) {
-    if (c === '(') depth++;
-    if (c === ')') depth--;
-    if (depth < 0)
-      return { ok: false, message: 'Revise os parênteses da fórmula.' };
-    if (!/[\p{L}\p{N}\s_()+\-*/,.]/u.test(c))
+  const hasField = (key: string) => fields.some((f) => f.field_key === key);
+  if (!operationOptions.some((o) => o.value === form.operation))
+    return { ok: false, message: 'Escolha uma operação disponível.' };
+  if (form.operation === 'ratio' || form.operation === 'percentage') {
+    if (!hasField(form.numerator_field) || !hasField(form.denominator_field))
       return {
         ok: false,
-        message: 'Use apenas funções, campos, números e operadores permitidos.',
+        message: 'Configure numerador e denominador pelo catálogo.',
       };
+    return {
+      ok: true,
+      message: 'Configuração válida para testar e disponibilizar.',
+    };
   }
-  if (depth !== 0)
-    return { ok: false, message: 'Revise os parênteses da fórmula.' };
-  if (/[+\-*/]\s*$|^[+\-*/]/.test(text) || /[+\-*/]\s*[+\-*/]/.test(text))
-    return { ok: false, message: 'Revise operadores soltos na fórmula.' };
-  const funcs = [...text.matchAll(/([A-ZÁÉÍÓÚÃÕÇ_]+)\s*\(/g)].map((m) => m[1]);
-  if (funcs.some((f) => !allowedFunctions.includes(f)))
-    return { ok: false, message: 'Existe função fora da lista permitida.' };
-  if (
-    allowedFunctions.some((fn) =>
-      new RegExp(`${fn}\\s*\\(\\s*\\)`, 'i').test(text),
-    )
-  )
-    return { ok: false, message: 'Complete a função selecionando um campo.' };
-  const names = fields.flatMap((f) => [f.label, f.field_key, ...f.aliases]);
-  const hasField = names.some((n) =>
-    text.toLowerCase().includes(n.toLowerCase()),
-  );
-  const unknownWords = [
-    ...text.matchAll(/[\p{L}_][\p{L}\p{N}_]*(?:\s+[\p{L}][\p{L}\p{N}_]*)*/gu),
-  ]
-    .map((m) => m[0])
-    .filter(
-      (w) =>
-        !allowedFunctions.includes(w.toUpperCase()) &&
-        w.toLowerCase() !== 'preenchido' &&
-        !names.some((n) => n.toLowerCase() === w.toLowerCase()),
-    );
-  if (unknownWords.length)
-    return { ok: false, message: 'Existe campo fora do catálogo controlado.' };
-  return hasField
-    ? { ok: true, message: 'Fórmula válida para testar e disponibilizar.' }
-    : { ok: false, message: 'Insira ao menos um campo disponível na fórmula.' };
+  if (!hasField(form.primary_field))
+    return { ok: false, message: 'Escolha um campo principal do catálogo.' };
+  return {
+    ok: true,
+    message: 'Configuração válida para testar e disponibilizar.',
+  };
 }
-function insertAtEnd(current: string, value: string) {
-  return current ? `${current} ${value}` : value;
+function buildCalculationConfig(form: FormState) {
+  const base = {
+    base_table: 'operation_records',
+    operation: form.operation,
+    operation_key: form.operation,
+    allow_dashboard_period_filter: form.allow_dashboard_period_filter,
+    default_date_field: form.default_date_field,
+  };
+  if (form.operation === 'ratio' || form.operation === 'percentage')
+    return {
+      ...base,
+      numerator: {
+        operation: form.numerator_operation,
+        source_table: 'operation_records',
+        field: form.numerator_field,
+      },
+      denominator: {
+        operation: form.denominator_operation,
+        source_table: 'operation_records',
+        field: form.denominator_field,
+      },
+    };
+  return {
+    ...base,
+    primary_field: form.primary_field,
+    grouping: { dimension_field: form.grouping_field },
+  };
 }
-function fieldTechnical(fields: IndicatorField[], key: string) {
-  return fields.find((f) => f.field_key === key);
+function buildFormulaPreview(form: FormState, fields: IndicatorField[]) {
+  const label = (key: string) =>
+    fields.find((f) => f.field_key === key)?.label ?? key;
+  const metric = (op: string, field: string) =>
+    `${operationPreviewLabels[op] ?? op}(${label(field)})`;
+  if (form.operation === 'ratio' || form.operation === 'percentage') {
+    const text = `${metric(form.numerator_operation, form.numerator_field)} / ${metric(form.denominator_operation, form.denominator_field)}`;
+    return form.operation === 'percentage' ? `${text} * 100` : text;
+  }
+  return metric(form.operation, form.primary_field);
 }
 function Shell({ children }: { children: ReactNode }) {
   return (
@@ -585,7 +593,7 @@ function CustomSection({
         {!items.length ? (
           <EmptyState
             title="Nenhum indicador personalizado"
-            description="Use o botão Criar novo indicador para montar uma fórmula controlada."
+            description="Use o botão Criar novo indicador para montar um cálculo por seletores controlados."
           />
         ) : null}
         <PreviewBox preview={preview} />
@@ -612,22 +620,10 @@ function CreatorModal({
   onTest: () => void;
   onSave: (s: 'draft' | 'active') => void;
 }) {
-  const selected = fieldTechnical(fields, form.selected_field);
-  const append = (v: string) =>
-    setForm({ ...form, formula: insertAtEnd(form.formula, v) });
-  const insertField = () => {
-    if (!selected) return;
-    const token = form.active_function
-      ? `${form.active_function}(${selected.label})`
-      : selected.label;
-    setForm({
-      ...form,
-      formula: insertAtEnd(form.formula, token),
-      active_function: '',
-    });
-  };
-  const chooseFunction = (fn: string) =>
-    setForm({ ...form, active_function: fn });
+  const formulaPreview = buildFormulaPreview(form, fields);
+  const numericFields = fields.filter(
+    (f) => f.is_measure || f.data_type === 'number',
+  );
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-4">
       <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
@@ -719,115 +715,87 @@ function CreatorModal({
               </div>
             </section>
             <section className="grid content-start gap-4">
-              <div>
-                <h3 className="font-bold text-slate-900">Campos disponíveis</h3>
+              <div className="rounded-2xl border border-slate-200 p-3">
+                <h3 className="font-bold text-slate-900">Builder controlado</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Selecione operação e campos do catálogo. Não existe campo
+                  editável de fórmula.
+                </p>
+              </div>
+              <Select
+                label="Operação principal"
+                value={form.operation}
+                onChange={(v) => setForm({ ...form, operation: v })}
+                options={operationOptions}
+              />
+              {form.operation === 'ratio' || form.operation === 'percentage' ? (
+                <div className="grid gap-3 rounded-2xl border border-slate-200 p-3">
+                  <p className="text-sm font-bold text-slate-700">Numerador</p>
+                  <Select
+                    label="Agregação do numerador"
+                    value={form.numerator_operation}
+                    onChange={(v) =>
+                      setForm({ ...form, numerator_operation: v })
+                    }
+                    options={metricOperationOptions}
+                  />
+                  <Select
+                    label="Campo do numerador"
+                    value={form.numerator_field}
+                    onChange={(v) => setForm({ ...form, numerator_field: v })}
+                    options={numericFields.map((f) => ({
+                      value: f.field_key,
+                      label: f.label,
+                    }))}
+                  />
+                  <p className="text-sm font-bold text-slate-700">
+                    Denominador
+                  </p>
+                  <Select
+                    label="Agregação do denominador"
+                    value={form.denominator_operation}
+                    onChange={(v) =>
+                      setForm({ ...form, denominator_operation: v })
+                    }
+                    options={metricOperationOptions}
+                  />
+                  <Select
+                    label="Campo do denominador"
+                    value={form.denominator_field}
+                    onChange={(v) => setForm({ ...form, denominator_field: v })}
+                    options={numericFields.map((f) => ({
+                      value: f.field_key,
+                      label: f.label,
+                    }))}
+                  />
+                </div>
+              ) : (
                 <Select
-                  label="Escolha um campo"
-                  value={form.selected_field}
-                  onChange={(v) => setForm({ ...form, selected_field: v })}
+                  label="Campo principal"
+                  value={form.primary_field}
+                  onChange={(v) => setForm({ ...form, primary_field: v })}
                   options={fields.map((f) => ({
                     value: f.field_key,
                     label: f.label,
                   }))}
                 />
-                {selected ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    {form.active_function
-                      ? `Selecione um campo para inserir como ${form.active_function}(${selected.label}).`
-                      : selected.label}
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
-                  onClick={insertField}
-                >
-                  Inserir campo
-                </button>
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-700">Funções</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Clique em uma função e depois selecione um campo. A função
-                  será inserida como um bloco independente.
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {allowedFunctions.map((fn) => (
-                    <button
-                      type="button"
-                      key={fn}
-                      className={`rounded-lg px-3 py-1 text-sm font-semibold ${
-                        form.active_function === fn
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-blue-50 text-blue-700'
-                      }`}
-                      onClick={() => chooseFunction(fn)}
-                    >
-                      {functionLabels[fn]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-700">
-                  Operadores e constantes
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {operators.map((op) => (
-                    <button
-                      type="button"
-                      key={op}
-                      className="rounded-lg bg-slate-100 px-3 py-1 font-mono"
-                      onClick={() => append(op)}
-                    >
-                      {op}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className="rounded-lg bg-slate-100 px-3 py-1 font-mono"
-                    onClick={() => append('1000')}
-                  >
-                    1000
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-slate-100 px-3 py-1"
-                    onClick={() => append('preenchido')}
-                  >
-                    preenchido
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-bold text-slate-700">
-                  Fórmula
-                </label>
-                <p className="mt-1 text-sm text-slate-600">
-                  Monte blocos independentes. Exemplo: SOMA(Valor do frete) /
-                  CONTAGEM(Entregas).
-                </p>
-                <div className="mt-2 flex rounded-xl border border-slate-200">
-                  <span className="px-3 py-3 font-bold text-slate-500">=</span>
-                  <textarea
-                    className="min-h-32 flex-1 rounded-r-xl p-3 font-mono text-sm outline-none"
-                    value={form.formula}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        formula: e.target.value,
-                        active_function: '',
-                      })
-                    }
-                  />
-                </div>
-              </div>
+              )}
+              {['group_by', 'ranking'].includes(form.operation) ? (
+                <Select
+                  label="Agrupamento"
+                  value={form.grouping_field}
+                  onChange={(v) => setForm({ ...form, grouping_field: v })}
+                  options={fields
+                    .filter((f) => f.is_dimension)
+                    .map((f) => ({ value: f.field_key, label: f.label }))}
+                />
+              ) : null}
               <div>
                 <p className="text-xs font-semibold uppercase text-slate-400">
-                  Pré-visualização da fórmula
+                  Fórmula somente leitura gerada pelo sistema
                 </p>
                 <div className="mt-1 rounded-xl bg-slate-50 p-3 font-mono text-sm text-slate-800">
-                  = {form.formula || 'Monte sua fórmula'}
+                  = {formulaPreview}
                 </div>
                 <p
                   className={`mt-2 rounded-xl p-3 text-sm ${validation.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}
@@ -846,7 +814,7 @@ function CreatorModal({
             className="rounded-xl bg-blue-600 px-4 py-2 font-bold text-white disabled:opacity-50"
             onClick={onTest}
           >
-            Testar fórmula
+            Testar configuração
           </button>
           <button
             type="button"
@@ -933,13 +901,13 @@ function PreviewBox({ preview }: { preview: CustomPreview | null }) {
         <b>Fórmula interpretada:</b> {preview.formula_preview}
       </p>
       <p className="text-slate-600">
-        {preview.message || 'Fórmula testada com segurança.'}
+        {preview.message || 'Configuração válida.'}
       </p>
     </div>
   );
 }
 function format(v: unknown) {
-  if (v === null || v === undefined) return 'Sem valor disponível';
+  if (v === null || v === undefined) return 'Sem dados suficientes';
   return typeof v === 'number'
     ? Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v)
     : String(v);
@@ -948,7 +916,7 @@ function formatLabel(v: string) {
   return formatOptions.find((f) => f.value === v)?.label ?? v;
 }
 function statusLabel(v: string) {
-  return v === 'draft' ? 'Rascunho' : v === 'active' ? 'Disponível' : 'Inativo';
+  return v === 'draft' ? 'Rascunho' : v === 'active' ? 'Ativo' : 'Inativo';
 }
 function date(v: string) {
   return new Date(v).toLocaleString('pt-BR');

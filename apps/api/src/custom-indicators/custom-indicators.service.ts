@@ -13,19 +13,18 @@ type TableName =
   | 'warehouse_records'
   | 'team_records';
 type Operation =
-  | 'CONTAGEM'
-  | 'CONTAGEM_DISTINTA'
-  | 'SOMA'
-  | 'MÉDIA'
-  | 'MÍNIMO'
-  | 'MÁXIMO'
-  | 'PERCENTUAL'
-  | 'RAZÃO_DIVISÃO'
-  | 'DISTRIBUIÇÃO_POR_CATEGORIA'
-  | 'SÉRIE_TEMPORAL'
-  | 'RANKING'
-  | 'TEMPO_MÉDIO_ENTRE_DATAS'
-  | 'FÓRMULA_CONTROLADA';
+  | 'count'
+  | 'count_distinct'
+  | 'sum'
+  | 'avg'
+  | 'min'
+  | 'max'
+  | 'ratio'
+  | 'percentage'
+  | 'group_by'
+  | 'time_series'
+  | 'ranking'
+  | 'duration_avg';
 type Field = {
   id: string;
   tenant_id: string | null;
@@ -41,29 +40,24 @@ type Field = {
   is_measure: boolean;
   is_active: boolean;
 };
-type MetricOperation = 'CONTAGEM' | 'SOMA' | 'MÉDIA' | 'MÍNIMO' | 'MÁXIMO';
-type FormulaNode =
-  | { type: 'number'; value: number }
-  | { type: 'field'; field: string; label: string }
-  | { type: 'function'; name: string; args: FormulaNode[] }
-  | {
-      type: 'binary';
-      operator: '+' | '-' | '*' | '/';
-      left: FormulaNode;
-      right: FormulaNode;
-    }
-  | { type: 'literal'; value: string };
+type MetricOperation = 'count' | 'sum' | 'avg' | 'min' | 'max';
+type MetricConfig = {
+  operation: MetricOperation;
+  source_table: TableName;
+  field: string;
+};
 type Config = {
   base_table: TableName;
   operation_key: Operation;
+  operation: Operation;
+  numerator?: MetricConfig;
+  denominator?: MetricConfig;
   primary_field?: string;
   secondary_field?: string;
   numerator_field?: string;
   denominator_field?: string;
   numerator_operation?: MetricOperation;
   denominator_operation?: MetricOperation;
-  formula?: string;
-  formula_ast?: FormulaNode;
   allow_dashboard_period_filter?: boolean;
   default_date_field?: string;
   filters?: Array<{
@@ -90,19 +84,18 @@ const tables = [
   'team_records',
 ] as const;
 const ops = [
-  'CONTAGEM',
-  'CONTAGEM_DISTINTA',
-  'SOMA',
-  'MÉDIA',
-  'MÍNIMO',
-  'MÁXIMO',
-  'PERCENTUAL',
-  'RAZÃO_DIVISÃO',
-  'DISTRIBUIÇÃO_POR_CATEGORIA',
-  'SÉRIE_TEMPORAL',
-  'RANKING',
-  'TEMPO_MÉDIO_ENTRE_DATAS',
-  'FÓRMULA_CONTROLADA',
+  'count',
+  'count_distinct',
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'ratio',
+  'percentage',
+  'group_by',
+  'time_series',
+  'ranking',
+  'duration_avg',
 ];
 const statuses = ['draft', 'active', 'inactive'];
 const formats = [
@@ -133,16 +126,7 @@ const filterOps = [
   'preenchido',
   'não preenchido',
 ];
-const metricOps = ['CONTAGEM', 'SOMA', 'MÉDIA', 'MÍNIMO', 'MÁXIMO'];
-const formulaFns = [
-  'SOMA',
-  'CONTAGEM',
-  'CONTAGEM_SE',
-  'MÉDIA',
-  'MÍNIMO',
-  'MÁXIMO',
-  'CONTAGEM_DISTINTA',
-];
+const metricOps = ['count', 'sum', 'avg', 'min', 'max'];
 const numericSemantics = ['money', 'weight', 'quantity', 'decimal', 'number'];
 const dimensionSemantics = [
   'text',
@@ -165,6 +149,22 @@ const blockedFields = [
   'deleted_at',
   'staging',
 ];
+const freeFormulaError =
+  'Fórmula livre não é permitida. Monte o indicador usando os campos e operações disponíveis.';
+const operationCatalogAliases: Record<Operation | MetricOperation, string[]> = {
+  count: ['count', 'CONTAGEM'],
+  count_distinct: ['count_distinct', 'CONTAGEM_DISTINTA'],
+  sum: ['sum', 'SOMA'],
+  avg: ['avg', 'MÉDIA'],
+  min: ['min', 'MÍNIMO'],
+  max: ['max', 'MÁXIMO'],
+  ratio: ['ratio', 'RAZÃO_DIVISÃO'],
+  percentage: ['percentage', 'PERCENTUAL'],
+  group_by: ['group_by', 'DISTRIBUIÇÃO_POR_CATEGORIA'],
+  time_series: ['time_series', 'SÉRIE_TEMPORAL'],
+  ranking: ['ranking', 'RANKING'],
+  duration_avg: ['duration_avg', 'TEMPO_MÉDIO_ENTRE_DATAS'],
+};
 const friendlyCatalog: Array<{
   field: string;
   label: string;
@@ -363,20 +363,32 @@ export class CustomIndicatorsService {
   }
   private config(c: Record<string, unknown>): Config {
     const table = String(c.base_table || 'operation_records');
-    const op = String(c.operation_key || 'FÓRMULA_CONTROLADA');
+    if (
+      'formula' in c ||
+      'formula_ast' in c ||
+      c.operation_key === 'FÓRMULA_CONTROLADA'
+    )
+      throw new BadRequestException(freeFormulaError);
+    const op = String(c.operation ?? c.operation_key ?? 'count');
     if (!tables.includes(table as TableName))
       throw new BadRequestException('Base inválida.');
     if (!ops.includes(op)) throw new BadRequestException('Operação inválida.');
+    const numerator = this.metricConfig(c.numerator);
+    const denominator = this.metricConfig(c.denominator);
     return {
       base_table: table as TableName,
       operation_key: op as Operation,
+      operation: op as Operation,
+      numerator,
+      denominator,
       primary_field: c.primary_field as string,
       secondary_field: c.secondary_field as string,
-      numerator_field: c.numerator_field as string,
-      denominator_field: c.denominator_field as string,
-      numerator_operation: this.metricOp(c.numerator_operation),
-      denominator_operation: this.metricOp(c.denominator_operation),
-      formula: typeof c.formula === 'string' ? c.formula : undefined,
+      numerator_field: numerator?.field ?? (c.numerator_field as string),
+      denominator_field: denominator?.field ?? (c.denominator_field as string),
+      numerator_operation:
+        numerator?.operation ?? this.metricOp(c.numerator_operation),
+      denominator_operation:
+        denominator?.operation ?? this.metricOp(c.denominator_operation),
       allow_dashboard_period_filter: c.allow_dashboard_period_filter === true,
       default_date_field: c.default_date_field as string,
       filters: Array.isArray(c.filters) ? (c.filters as Config['filters']) : [],
@@ -385,19 +397,9 @@ export class CustomIndicatorsService {
     };
   }
   private async validateDraft(tenantId: string, cfg: Config) {
-    if (
-      cfg.operation_key === 'FÓRMULA_CONTROLADA' &&
-      !String(cfg.formula ?? '').trim()
-    )
-      return {
-        cat: await this.catalog(tenantId),
-        by: new Map<string, Field>(),
-      };
     return this.validate(tenantId, cfg);
   }
   private async validate(tenantId: string, cfg: Config) {
-    if (cfg.operation_key === 'FÓRMULA_CONTROLADA')
-      return this.validateFormulaConfig(tenantId, cfg);
     const cat = await this.catalog(tenantId);
     const by = new Map(
       cat
@@ -419,6 +421,18 @@ export class CustomIndicatorsService {
     for (const f of used)
       if (!by.has(f))
         throw new BadRequestException('Campo fora do catálogo controlado.');
+    for (const f of used) {
+      const field = by.get(f);
+      if (!field) continue;
+      const aliases = operationCatalogAliases[cfg.operation_key] ?? [
+        cfg.operation_key,
+      ];
+      if (
+        !aliases.some((op) => field.allowed_operations.includes(op)) &&
+        !['ratio', 'percentage'].includes(cfg.operation_key)
+      )
+        throw new BadRequestException('Operação fora da whitelist do campo.');
+    }
     const primary = cfg.primary_field ? by.get(cfg.primary_field) : undefined;
     const secondary = cfg.secondary_field
       ? by.get(cfg.secondary_field)
@@ -430,7 +444,7 @@ export class CustomIndicatorsService {
       ? by.get(cfg.grouping.dimension_field)
       : undefined;
     if (
-      ['SOMA', 'MÉDIA', 'MÍNIMO', 'MÁXIMO'].includes(cfg.operation_key) &&
+      ['sum', 'avg', 'min', 'max'].includes(cfg.operation_key) &&
       !this.numeric(primary)
     )
       throw new BadRequestException(
@@ -438,14 +452,14 @@ export class CustomIndicatorsService {
           ? `${primary.label} é um campo de texto e não pode ser usado em ${cfg.operation_key}.`
           : 'Escolha um campo numérico para esta operação.',
       );
-    if (cfg.operation_key === 'CONTAGEM' && !primary)
+    if (cfg.operation_key === 'count' && !primary)
       throw new BadRequestException('Escolha um campo para contagem.');
-    if (cfg.operation_key === 'CONTAGEM_DISTINTA' && !this.dimension(primary))
+    if (cfg.operation_key === 'count_distinct' && !this.dimension(primary))
       throw new BadRequestException(
         'Escolha uma dimensão para contagem distinta.',
       );
     if (
-      ['RAZÃO_DIVISÃO', 'PERCENTUAL'].includes(cfg.operation_key) &&
+      ['ratio', 'percentage'].includes(cfg.operation_key) &&
       (!this.metric(
         cfg.numerator_operation,
         by.get(cfg.numerator_field ?? ''),
@@ -458,7 +472,7 @@ export class CustomIndicatorsService {
       throw new BadRequestException(
         'Para razão, configure numerador e denominador com métricas compatíveis.',
       );
-    if (cfg.operation_key === 'DISTRIBUIÇÃO_POR_CATEGORIA') {
+    if (cfg.operation_key === 'group_by') {
       if (!this.metric(cfg.grouping?.metric_operation, metric))
         throw new BadRequestException(
           'Escolha uma métrica compatível para a distribuição.',
@@ -468,7 +482,7 @@ export class CustomIndicatorsService {
           'Para distribuição, escolha uma dimensão de agrupamento.',
         );
     }
-    if (cfg.operation_key === 'SÉRIE_TEMPORAL') {
+    if (cfg.operation_key === 'time_series') {
       if (!this.date(primary))
         throw new BadRequestException('Série temporal exige um campo de data.');
       if (!this.metric(cfg.grouping?.metric_operation, metric))
@@ -477,7 +491,7 @@ export class CustomIndicatorsService {
         );
     }
     if (
-      cfg.operation_key === 'TEMPO_MÉDIO_ENTRE_DATAS' &&
+      cfg.operation_key === 'duration_avg' &&
       (!this.date(primary) || !this.date(secondary))
     )
       throw new BadRequestException(
@@ -494,25 +508,6 @@ export class CustomIndicatorsService {
     }
     return { cat, by };
   }
-  private async validateFormulaConfig(tenantId: string, cfg: Config) {
-    if (cfg.base_table !== 'operation_records')
-      throw new BadRequestException(
-        'Indicadores personalizados usam somente campos operacionais tratados nesta sprint.',
-      );
-    if ((cfg.filters ?? []).length || cfg.period)
-      throw new BadRequestException(
-        'Filtros complexos não fazem parte da criação do indicador.',
-      );
-    const cat = await this.catalog(tenantId);
-    const by = this.formulaFieldMap(cat);
-    if (cfg.default_date_field && !by.has(cfg.default_date_field))
-      throw new BadRequestException(
-        'Campo de data padrão fora do catálogo controlado.',
-      );
-    cfg.formula_ast = this.parseFormula(String(cfg.formula ?? ''), by);
-    cfg.formula = this.formatFormula(cfg.formula_ast);
-    return { cat, by };
-  }
   private async previewConfig(
     tenantId: string,
     cfg: Config,
@@ -527,29 +522,32 @@ export class CustomIndicatorsService {
       );
       if (!rows.length)
         return this.result(
-          'empty',
+          'insufficient_data',
           null,
           [],
           [],
           0,
           cfg,
           by,
-          'Dados ainda não disponíveis para este indicador.',
+          'Configuração válida, mas ainda não há dados suficientes para calcular este indicador. Verifique se os campos escolhidos estão mapeados e preenchidos na base tratada.',
         );
       const r = this.calculate(rows, cfg);
+      const status = r.value === null ? 'insufficient_data' : 'success';
       const res = this.result(
-        'success',
+        status,
         r.value,
         r.series,
         r.table,
         rows.length,
         cfg,
         by,
-        'Fórmula testada com segurança.',
+        status === 'success'
+          ? 'Configuração válida e calculada com dados tratados.'
+          : 'Configuração válida, mas ainda não há dados suficientes para calcular este indicador. Verifique se os campos escolhidos estão mapeados e preenchidos na base tratada.',
       );
       await this.log(tenantId, indicatorId, userId, res);
       return res;
-    } catch {
+    } catch (e) {
       return this.result(
         'failed',
         null,
@@ -558,30 +556,30 @@ export class CustomIndicatorsService {
         0,
         cfg,
         new Map(),
-        'Não foi possível calcular este indicador. Revise a fórmula.',
+        e instanceof Error
+          ? e.message
+          : 'Não foi possível calcular este indicador. Revise os seletores.',
       );
     }
   }
   private calculate(rows: Record<string, unknown>[], c: Config) {
-    if (c.operation_key === 'FÓRMULA_CONTROLADA')
-      return {
-        value: this.evalNode(c.formula_ast as FormulaNode, rows),
-        series: [],
-        table: [],
-      };
     const f = c.primary_field ?? 'id';
     const nums = rows.map((r) => Number(r[f])).filter(Number.isFinite);
-    if (c.operation_key === 'CONTAGEM')
+    if (c.operation_key === 'count')
       return { value: rows.length, series: [], table: [] };
-    if (c.operation_key === 'CONTAGEM_DISTINTA')
+    if (c.operation_key === 'count_distinct')
       return {
         value: new Set(rows.map((r) => r[f])).size,
         series: [],
         table: [],
       };
-    if (c.operation_key === 'SOMA')
-      return { value: nums.reduce((a, b) => a + b, 0), series: [], table: [] };
-    if (c.operation_key === 'MÉDIA')
+    if (c.operation_key === 'sum')
+      return {
+        value: nums.length ? nums.reduce((a, b) => a + b, 0) : null,
+        series: [],
+        table: [],
+      };
+    if (c.operation_key === 'avg')
       return {
         value: nums.length
           ? nums.reduce((a, b) => a + b, 0) / nums.length
@@ -589,22 +587,19 @@ export class CustomIndicatorsService {
         series: [],
         table: [],
       };
-    if (c.operation_key === 'MÍNIMO')
+    if (c.operation_key === 'min')
       return {
         value: nums.length ? Math.min(...nums) : null,
         series: [],
         table: [],
       };
-    if (c.operation_key === 'MÁXIMO')
+    if (c.operation_key === 'max')
       return {
         value: nums.length ? Math.max(...nums) : null,
         series: [],
         table: [],
       };
-    if (
-      c.operation_key === 'RAZÃO_DIVISÃO' ||
-      c.operation_key === 'PERCENTUAL'
-    ) {
+    if (c.operation_key === 'ratio' || c.operation_key === 'percentage') {
       const n = this.aggregate(rows, c.numerator_operation, c.numerator_field);
       const d = this.aggregate(
         rows,
@@ -613,7 +608,7 @@ export class CustomIndicatorsService {
       );
       return {
         value: d
-          ? (n / d) * (c.operation_key === 'PERCENTUAL' ? 100 : 1)
+          ? (n / d) * (c.operation_key === 'percentage' ? 100 : 1)
           : null,
         series: [],
         table: [],
@@ -621,218 +616,21 @@ export class CustomIndicatorsService {
     }
     return { value: null, series: [], table: [] };
   }
-  private formulaFieldMap(cat: Field[]) {
-    const allowed = new Map<string, Field>();
-    for (const item of friendlyCatalog) {
-      const field = cat.find(
-        (f) =>
-          f.base_table === 'operation_records' &&
-          f.field_key === item.field &&
-          !blockedFields.includes(f.field_key),
-      );
-      if (field) allowed.set(field.field_key, { ...field, label: item.label });
-    }
-    return allowed;
-  }
-  private parseFormula(input: string, by: Map<string, Field>): FormulaNode {
-    const text = input.trim();
-    if (!text) throw new BadRequestException('Fórmula obrigatória.');
-    if (
-      /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|UNION|FROM|WHERE|eval|Function|javascript|raw_payload|staging|tenant_id)\b/i.test(
-        text,
-      )
-    )
-      throw new BadRequestException('Fórmula contém termo bloqueado.');
-    const tokens = this.tokenize(text, by);
-    let i = 0;
-    const peek = () => tokens[i];
-    const take = () => tokens[i++];
-    const expr = (): FormulaNode => {
-      let node = term();
-      while (peek() === '+' || peek() === '-')
-        node = {
-          type: 'binary',
-          operator: take() as '+' | '-',
-          left: node,
-          right: term(),
-        };
-      return node;
-    };
-    const term = (): FormulaNode => {
-      let node = factor();
-      while (peek() === '*' || peek() === '/')
-        node = {
-          type: 'binary',
-          operator: take() as '*' | '/',
-          left: node,
-          right: factor(),
-        };
-      return node;
-    };
-    const factor = (): FormulaNode => {
-      const t = take();
-      if (!t) throw new BadRequestException('Fórmula incompleta.');
-      if (t === '(') {
-        const n = expr();
-        if (take() !== ')')
-          throw new BadRequestException('Parênteses inválidos.');
-        return n;
-      }
-      if (/^\d+(\.\d+)?$/.test(t)) return { type: 'number', value: Number(t) };
-      const fn = String(t).toUpperCase();
-      if (formulaFns.includes(fn)) {
-        if (take() !== '(') throw new BadRequestException('Função inválida.');
-        const args: FormulaNode[] = [];
-        if (peek() !== ')') {
-          do {
-            args.push(expr());
-          } while (peek() === ',' && take());
-        }
-        if (take() !== ')')
-          throw new BadRequestException('Função com parênteses inválidos.');
-        this.validateFunctionNode(fn, args, by);
-        return { type: 'function', name: fn, args };
-      }
-      const field = [...by.values()].find(
-        (f) =>
-          f.label === t ||
-          f.field_key === t ||
-          (
-            friendlyCatalog.find((x) => x.field === f.field_key)?.aliases ?? []
-          ).includes(t),
-      );
-      if (field)
-        return { type: 'field', field: field.field_key, label: field.label };
-      if (t.toLowerCase() === 'preenchido')
-        return { type: 'literal', value: 'preenchido' };
-      throw new BadRequestException('Campo fora do catálogo controlado.');
-    };
-    const parsed = expr();
-    if (i !== tokens.length) throw new BadRequestException('Fórmula inválida.');
-    return parsed;
-  }
-  private tokenize(text: string, by: Map<string, Field>) {
-    const labels = [...by.values()]
-      .flatMap((f) => [
-        f.label,
-        f.field_key,
-        ...(friendlyCatalog.find((x) => x.field === f.field_key)?.aliases ??
-          []),
-      ])
-      .sort((a, b) => b.length - a.length);
-    const tokens: string[] = [];
-    let i = 0;
-    while (i < text.length) {
-      if (/\s/.test(text[i])) {
-        i++;
-        continue;
-      }
-      const single = '()+-*/,';
-      if (single.includes(text[i])) {
-        tokens.push(text[i++]);
-        continue;
-      }
-      const label = labels.find((l) =>
-        text.slice(i).toLowerCase().startsWith(l.toLowerCase()),
-      );
-      if (label) {
-        tokens.push(label);
-        i += label.length;
-        continue;
-      }
-      const m = text.slice(i).match(/^\d+(?:[.,]\d+)?|^[A-ZÁÉÍÓÚÃÕÇ_]+/i);
-      if (!m)
-        throw new BadRequestException(
-          'Use apenas funções, campos, números e operadores permitidos.',
-        );
-      tokens.push(m[0].replace(',', '.'));
-      i += m[0].length;
-    }
-    return tokens;
-  }
-  private validateFunctionNode(
-    name: string,
-    args: FormulaNode[],
-    by: Map<string, Field>,
-  ) {
-    if (name === 'CONTAGEM_SE') {
-      if (args.length !== 2)
-        throw new BadRequestException('CONTAGEM_SE exige campo e condição.');
-      if (args[0].type !== 'field' || args[1].type !== 'literal')
-        throw new BadRequestException(
-          'CONTAGEM_SE exige campo e condição controlada.',
-        );
-      return;
-    }
-    if (args.length !== 1)
-      throw new BadRequestException(`${name} exige um argumento.`);
-    if (args[0].type !== 'field')
-      throw new BadRequestException(`${name} exige um campo do catálogo.`);
-    if (['SOMA', 'MÉDIA', 'MÍNIMO', 'MÁXIMO'].includes(name)) {
-      if (!this.numeric(by.get(args[0].field)))
-        throw new BadRequestException(`${name} exige campo numérico.`);
-    }
-    if (name === 'CONTAGEM_DISTINTA' && !this.dimension(by.get(args[0].field)))
-      throw new BadRequestException(
-        'CONTAGEM_DISTINTA exige campo dimensional.',
-      );
-  }
-  private firstField(node: FormulaNode): string | undefined {
-    if (node.type === 'field') return node.field;
-    if (node.type === 'function')
-      return node.args.map((a) => this.firstField(a)).find(Boolean);
-    if (node.type === 'binary')
-      return this.firstField(node.left) ?? this.firstField(node.right);
-    return undefined;
-  }
-  private evalNode(
-    node: FormulaNode,
-    rows: Record<string, unknown>[],
-  ): number | null {
-    if (node.type === 'number') return node.value;
-    if (node.type === 'field') return this.aggregate(rows, 'SOMA', node.field);
-    if (node.type === 'literal') return null;
-    if (node.type === 'binary') {
-      const l = this.evalNode(node.left, rows);
-      const r = this.evalNode(node.right, rows);
-      if (l === null || r === null) return null;
-      if (node.operator === '+') return l + r;
-      if (node.operator === '-') return l - r;
-      if (node.operator === '*') return l * r;
-      return r === 0 ? null : l / r;
-    }
-    const field = this.firstField(node);
-    if (node.name === 'CONTAGEM') return rows.length;
-    if (node.name === 'CONTAGEM_DISTINTA')
-      return new Set(rows.map((r) => String(r[field ?? '']))).size;
-    if (node.name === 'CONTAGEM_SE')
-      return rows.filter((r) => {
-        const v = r[field ?? ''];
-        return v !== null && v !== undefined && v !== '';
-      }).length;
-    return this.aggregate(rows, node.name as MetricOperation, field);
-  }
-  private formula(c: Config) {
-    return c.operation_key === 'FÓRMULA_CONTROLADA'
-      ? String(c.formula ?? '')
-      : `${c.operation_key}(${c.primary_field ?? 'Registros'})`;
-  }
-  private formatFormula(node: FormulaNode): string {
-    if (node.type === 'number') return String(node.value);
-    if (node.type === 'field') return node.label;
-    if (node.type === 'literal') return node.value;
-    if (node.type === 'function')
-      return `${node.name}(${node.args.map((arg) => this.formatFormula(arg)).join(', ')})`;
-    const left = this.formatFormula(node.left);
-    const right =
-      node.right.type === 'binary'
-        ? `(${this.formatFormula(node.right)})`
-        : this.formatFormula(node.right);
-    return `${left} ${node.operator} ${right}`;
-  }
   private metricOp(value: unknown): MetricOperation {
-    const op = String(value ?? 'SOMA');
-    return metricOps.includes(op) ? (op as MetricOperation) : 'SOMA';
+    const op = String(value ?? 'sum');
+    return metricOps.includes(op) ? (op as MetricOperation) : 'sum';
+  }
+  private metricConfig(value: unknown): MetricConfig | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const v = value as Record<string, unknown>;
+    const source = String(v.source_table ?? 'operation_records');
+    if (!tables.includes(source as TableName))
+      throw new BadRequestException('Base inválida.');
+    return {
+      operation: this.metricOp(v.operation),
+      source_table: source as TableName,
+      field: String(v.field ?? ''),
+    };
   }
   private numeric(field?: Field) {
     return (
@@ -859,21 +657,21 @@ export class CustomIndicatorsService {
     );
   }
   private metric(op: unknown, field?: Field) {
-    return String(op) === 'CONTAGEM' ? !!field : this.numeric(field);
+    return String(op) === 'count' ? !!field : this.numeric(field);
   }
   private aggregate(
     rows: Record<string, unknown>[],
     op?: MetricOperation,
     field?: string,
   ) {
-    if (op === 'CONTAGEM') return rows.length;
+    if (op === 'count') return rows.length;
     const nums = rows
       .map((r) => Number(r[field ?? '']))
       .filter(Number.isFinite);
-    if (op === 'MÉDIA')
-      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-    if (op === 'MÍNIMO') return nums.length ? Math.min(...nums) : 0;
-    if (op === 'MÁXIMO') return nums.length ? Math.max(...nums) : 0;
+    if (!nums.length) return 0;
+    if (op === 'avg') return nums.reduce((a, b) => a + b, 0) / nums.length;
+    if (op === 'min') return Math.min(...nums);
+    if (op === 'max') return Math.max(...nums);
     return nums.reduce((a, b) => a + b, 0);
   }
   private result(
@@ -886,16 +684,16 @@ export class CustomIndicatorsService {
     by: Map<string, Field>,
     message: string,
   ) {
-    const used = this.usedFields(cfg.formula_ast).concat(
-      [
-        cfg.primary_field,
-        cfg.secondary_field,
-        cfg.numerator_field,
-        cfg.denominator_field,
-        cfg.grouping?.dimension_field,
-        cfg.grouping?.metric_field,
-      ].filter(Boolean) as string[],
-    );
+    const used = [
+      cfg.primary_field,
+      cfg.secondary_field,
+      cfg.numerator_field,
+      cfg.denominator_field,
+      cfg.numerator?.field,
+      cfg.denominator?.field,
+      cfg.grouping?.dimension_field,
+      cfg.grouping?.metric_field,
+    ].filter(Boolean) as string[];
     return {
       status,
       value,
@@ -911,14 +709,37 @@ export class CustomIndicatorsService {
       message,
     };
   }
-  private usedFields(node?: FormulaNode): string[] {
-    if (!node) return [];
-    if (node.type === 'field') return [node.field];
-    if (node.type === 'function')
-      return node.args.flatMap((a) => this.usedFields(a));
-    if (node.type === 'binary')
-      return [...this.usedFields(node.left), ...this.usedFields(node.right)];
-    return [];
+  private formula(c: Config) {
+    const label = (field?: string) =>
+      friendlyCatalog.find((f) => f.field === field)?.label ??
+      field ??
+      'Registros';
+    const metric = (
+      m?: MetricConfig,
+      fallbackOp?: MetricOperation,
+      fallbackField?: string,
+    ) =>
+      `${this.operationLabel(m?.operation ?? fallbackOp ?? 'count')}(${label(m?.field ?? fallbackField)})`;
+    if (c.operation_key === 'ratio' || c.operation_key === 'percentage') {
+      const text = `${metric(c.numerator, c.numerator_operation, c.numerator_field)} / ${metric(c.denominator, c.denominator_operation, c.denominator_field)}`;
+      return c.operation_key === 'percentage' ? `${text} * 100` : text;
+    }
+    return metric(
+      undefined,
+      c.operation_key as MetricOperation,
+      c.primary_field,
+    );
+  }
+  private operationLabel(op: MetricOperation) {
+    return (
+      {
+        count: 'CONTAGEM',
+        sum: 'SOMA',
+        avg: 'MÉDIA',
+        min: 'MÍNIMO',
+        max: 'MÁXIMO',
+      } as Record<MetricOperation, string>
+    )[op];
   }
   private async catalog(tenantId: string) {
     return this.supabase.select<Field[]>(
