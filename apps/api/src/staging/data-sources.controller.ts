@@ -1,4 +1,4 @@
-import { Controller, Delete, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthenticatedRequest, AuthGuard } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
@@ -20,7 +20,13 @@ export class DataSourceUploadsController {
   @Patch(':sourceId/inactivate')
   @RequirePermission('integrations.manage')
   inactivate(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string, @Req() req: AuthenticatedRequest) {
-    return this.service.inactivateDataSource(tenantId, sourceId, req.user.id);
+    return this.service.archiveDataSource(tenantId, sourceId, req.user.id, 'inactive');
+  }
+
+  @Patch(':sourceId/status')
+  @RequirePermission('integrations.manage')
+  status(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string, @Req() req: AuthenticatedRequest, @Body() body: { status?: string }) {
+    return this.service.archiveDataSource(tenantId, sourceId, req.user.id, body.status);
   }
 
   @Delete(':sourceId')

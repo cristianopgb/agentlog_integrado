@@ -117,7 +117,12 @@ export class StagingService {
     return this.getBatch(tenantId, batchId);
   }
 
-  inactivateDataSource(tenantId: string, sourceId: string, userId: string) { return this.supabase.update('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, { status: 'inactive', updated_by: userId }); }
+  async archiveDataSource(tenantId: string, sourceId: string, userId: string, status = 'archived') {
+    if (!['archived','inactive'].includes(String(status))) throw new BadRequestException('Status de arquivamento inválido.');
+    await this.ensureExists('data_sources', tenantId, sourceId, 'Integração não encontrada para este tenant.');
+    const rows = await this.supabase.update<Record<string, unknown>[]>('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, { status: String(status), updated_by: userId });
+    return { ...(rows[0] ?? {}), message: 'Esta integração possui histórico vinculado e foi arquivada para preservar a rastreabilidade.' };
+  }
   async deleteDataSourceIfUnused(tenantId: string, sourceId: string) {
     const batches = await this.supabase.select<unknown[]>('staging_batches', `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&limit=1`);
     if (batches.length) throw new BadRequestException('Integração com lotes vinculados só pode ser inativada.');

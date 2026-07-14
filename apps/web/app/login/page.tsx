@@ -56,7 +56,7 @@ export default function LoginPage() {
           <label className="mt-8 block text-sm font-semibold text-slate-700">E-mail</label>
           <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           <label className="mt-5 block text-sm font-semibold text-slate-700">Senha</label>
-          <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           {error ? <p className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
           <button className="mt-7 w-full rounded-2xl bg-slate-950 px-4 py-3 font-semibold text-white shadow-lg shadow-slate-300 transition hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70" disabled={loading} type="submit">
             {loading ? 'Entrando...' : 'Entrar'}

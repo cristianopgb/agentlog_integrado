@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
@@ -23,5 +23,5 @@ export class NativeIndicatorsController {
 
   @Post(':indicatorKey/preview')
   @RequirePermission('indicators.preview')
-  preview(@Param('tenantId') tenantId: string, @Param('indicatorKey') indicatorKey: string, @Req() request: AuthenticatedRequest) { return this.service.preview(tenantId, indicatorKey, request.user.id, true); }
+  preview(@Param('tenantId') tenantId: string, @Param('indicatorKey') indicatorKey: string, @Req() request: AuthenticatedRequest, @Body() body: Record<string, unknown> = {}) { return this.service.preview(tenantId, indicatorKey, request.user.id, true, body); }
 }

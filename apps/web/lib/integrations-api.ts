@@ -420,7 +420,7 @@ export async function listIntegrations(
     .order('created_at', { ascending: false });
   if (batchError) throw batchError;
 
-  return ((sources ?? []) as IntegrationSource[]).map((source) => {
+  return ((sources ?? []) as IntegrationSource[]).filter((source) => !['archived','inactive'].includes(source.status)).map((source) => {
     const contract =
       ((contracts ?? []) as DataContract[]).find(
         (item) => item.data_source_id === source.id,
@@ -718,11 +718,14 @@ export async function uploadIntegrationFile(
     { method: 'POST', body: form },
   );
 }
-export function inactivateIntegration(tenantId: string, sourceId: string) {
-  return api(`/tenants/${tenantId}/data-sources/${sourceId}/inactivate`, {
+export function archiveIntegration(tenantId: string, sourceId: string) {
+  return api(`/tenants/${tenantId}/data-sources/${sourceId}/status`, {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'archived' }),
   });
 }
+export const inactivateIntegration = archiveIntegration;
 export function deleteIntegration(tenantId: string, sourceId: string) {
   return api(`/tenants/${tenantId}/data-sources/${sourceId}`, {
     method: 'DELETE',

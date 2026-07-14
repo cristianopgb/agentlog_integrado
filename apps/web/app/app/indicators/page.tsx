@@ -24,6 +24,7 @@ import {
   type Indicator,
   type IndicatorField,
   type IndicatorPreview,
+  type IndicatorPreviewFilters,
 } from '../../../lib/indicators-api';
 
 const moduleLabels: Record<string, string> = {
@@ -430,8 +431,30 @@ function NativeSection({
   preview: IndicatorPreview | null;
   setPreview: (p: IndicatorPreview) => void;
 }) {
+  const [filters, setFilters] = useState<IndicatorPreviewFilters>({ scope: 'all' });
   return (
     <Card className="overflow-x-auto">
+      <div className="mb-4 grid gap-3 rounded-2xl bg-slate-50 p-4 md:grid-cols-4">
+        <label className="text-sm font-semibold">Escopo
+          <select className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.scope ?? 'all'} onChange={(e) => setFilters({ scope: e.target.value })}>
+            <option value="all">Todos os dados</option>
+            <option value="last_batch">Último lote</option>
+            <option value="source">Integração</option>
+            <option value="period">Período</option>
+          </select>
+        </label>
+        {filters.scope === 'source' ? <label className="text-sm font-semibold">ID da integração
+          <input className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.source_data_source_id ?? ''} onChange={(e) => setFilters({ ...filters, source_data_source_id: e.target.value })} placeholder="source_data_source_id" />
+        </label> : null}
+        {filters.scope === 'period' ? <>
+          <label className="text-sm font-semibold">De
+            <input type="date" className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.date_from ?? ''} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} />
+          </label>
+          <label className="text-sm font-semibold">Até
+            <input type="date" className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.date_to ?? ''} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} />
+          </label>
+        </> : null}
+      </div>
       <table className="min-w-[62rem] text-left text-sm">
         <thead>
           <tr className="text-xs uppercase text-slate-500">
@@ -465,7 +488,7 @@ function NativeSection({
                   onClick={async () =>
                     tenantId &&
                     setPreview(
-                      await previewIndicator(tenantId, i.indicator_key),
+                      await previewIndicator(tenantId, i.indicator_key, filters),
                     )
                   }
                 >
@@ -496,6 +519,7 @@ function CustomSection({
   setMessage: (m: string) => void;
 }) {
   const [preview, setPreview] = useState<CustomPreview | null>(null);
+  const [filters, setFilters] = useState<IndicatorPreviewFilters>({ scope: 'all' });
   async function status(id: string, s: 'active' | 'inactive') {
     if (!tenantId) return;
     try {
@@ -517,6 +541,23 @@ function CustomSection({
         </button>
       </div>
       <Card className="overflow-x-auto">
+        <div className="mb-4 grid gap-3 rounded-2xl bg-slate-50 p-4 md:grid-cols-4">
+          <label className="text-sm font-semibold">Escopo da prévia
+            <select className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.scope ?? 'all'} onChange={(e) => setFilters({ scope: e.target.value })}>
+              <option value="all">Todos os dados</option>
+              <option value="last_batch">Último lote</option>
+              <option value="source">Integração</option>
+              <option value="period">Período</option>
+            </select>
+          </label>
+          {filters.scope === 'source' ? <label className="text-sm font-semibold">ID da integração
+            <input className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.source_data_source_id ?? ''} onChange={(e) => setFilters({ ...filters, source_data_source_id: e.target.value })} />
+          </label> : null}
+          {filters.scope === 'period' ? <>
+            <label className="text-sm font-semibold">De<input type="date" className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.date_from ?? ''} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} /></label>
+            <label className="text-sm font-semibold">Até<input type="date" className="mt-1 w-full rounded-xl border p-2 font-normal" value={filters.date_to ?? ''} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} /></label>
+          </> : null}
+        </div>
         <table className="min-w-[72rem] text-left text-sm">
           <thead>
             <tr className="text-xs uppercase text-slate-500">
@@ -554,7 +595,7 @@ function CustomSection({
                     onClick={async () =>
                       tenantId &&
                       setPreview(
-                        await previewSavedCustomIndicator(tenantId, i.id),
+                        await previewSavedCustomIndicator(tenantId, i.id, filters),
                       )
                     }
                   >
@@ -926,12 +967,11 @@ function PreviewBox({ preview }: { preview: CustomPreview | null }) {
       <p>
         <b>Valor calculado:</b> {format(preview.value)}
       </p>
-      <p>
-        <b>Registros considerados:</b> {preview.records_considered}
-      </p>
-      <p>
-        <b>Fórmula interpretada:</b> {preview.formula_preview}
-      </p>
+      <p><b>Registros no escopo:</b> {preview.records_considered}</p>
+      <p><b>Registros usados no cálculo:</b> {preview.records_used ?? preview.records_considered}</p>
+      <p><b>Registros ignorados por falta de dados:</b> {preview.records_ignored_missing_data ?? 0}</p>
+      {preview.scope ? <p><b>Escopo usado:</b> {preview.scope.scope}{preview.scope.source_data_source_name ? ` · ${preview.scope.source_data_source_name}` : ''}</p> : null}
+      {'formula_preview' in preview ? <p><b>Fórmula interpretada:</b> {preview.formula_preview}</p> : null}
       <p className="text-slate-600">
         {preview.message || 'Fórmula testada com segurança.'}
       </p>

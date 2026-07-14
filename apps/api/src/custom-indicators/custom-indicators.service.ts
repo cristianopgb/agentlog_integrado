@@ -308,11 +308,11 @@ export class CustomIndicatorsService {
       userId,
     );
   }
-  async previewSaved(tenantId: string, id: string, userId: string) {
+  async previewSaved(tenantId: string, id: string, userId: string, filters: Record<string, unknown> = {}) {
     const row = (await this.get(tenantId, id)) as {
       calculation_config: Config;
     };
-    return this.previewConfig(tenantId, row.calculation_config, id, userId);
+    return this.previewConfig(tenantId, row.calculation_config, id, userId, filters);
   }
   private async get(tenantId: string, id: string) {
     const rows = await this.supabase.select<Record<string, unknown>[]>(
@@ -518,13 +518,16 @@ export class CustomIndicatorsService {
     cfg: Config,
     indicatorId?: string,
     userId?: string,
+    filters: Record<string, unknown> = {},
   ) {
     try {
       const { by } = await this.validate(tenantId, cfg);
-      const rows = await this.supabase.select<Record<string, unknown>[]>(
+      let rows = await this.supabase.select<Record<string, unknown>[]>(
         cfg.base_table,
         `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&limit=10000`,
       );
+      const scope = await this.previewScope(tenantId, rows, filters);
+      rows = scope.rows;
       if (!rows.length)
         return this.result(
           'empty',
@@ -535,6 +538,8 @@ export class CustomIndicatorsService {
           cfg,
           by,
           'Dados ainda não disponíveis para este indicador.',
+          0,
+          scope.scope,
         );
       const r = this.calculate(rows, cfg);
       const res = this.result(
@@ -545,7 +550,9 @@ export class CustomIndicatorsService {
         rows.length,
         cfg,
         by,
-        'Fórmula testada com segurança.',
+        this.scopeMessage(scope.scope, r.ignored),
+        r.ignored,
+        scope.scope,
       );
       await this.log(tenantId, indicatorId, userId, res);
       return res;
@@ -559,6 +566,8 @@ export class CustomIndicatorsService {
         cfg,
         new Map(),
         'Não foi possível calcular este indicador. Revise a fórmula.',
+        0,
+        { scope: 'all' },
       );
     }
   }
@@ -568,19 +577,21 @@ export class CustomIndicatorsService {
         value: this.evalNode(c.formula_ast as FormulaNode, rows),
         series: [],
         table: [],
+        ignored: this.ignoredRows(rows, this.usedFields(c.formula_ast)),
       };
     const f = c.primary_field ?? 'id';
     const nums = rows.map((r) => Number(r[f])).filter(Number.isFinite);
     if (c.operation_key === 'CONTAGEM')
-      return { value: rows.length, series: [], table: [] };
+      return { value: rows.length, series: [], table: [], ignored: 0 };
     if (c.operation_key === 'CONTAGEM_DISTINTA')
       return {
         value: new Set(rows.map((r) => r[f])).size,
         series: [],
         table: [],
+        ignored: 0,
       };
     if (c.operation_key === 'SOMA')
-      return { value: nums.reduce((a, b) => a + b, 0), series: [], table: [] };
+      return { value: nums.reduce((a, b) => a + b, 0), series: [], table: [], ignored: rows.length - nums.length };
     if (c.operation_key === 'MÉDIA')
       return {
         value: nums.length
@@ -588,18 +599,21 @@ export class CustomIndicatorsService {
           : null,
         series: [],
         table: [],
+        ignored: 0,
       };
     if (c.operation_key === 'MÍNIMO')
       return {
         value: nums.length ? Math.min(...nums) : null,
         series: [],
         table: [],
+        ignored: 0,
       };
     if (c.operation_key === 'MÁXIMO')
       return {
         value: nums.length ? Math.max(...nums) : null,
         series: [],
         table: [],
+        ignored: 0,
       };
     if (
       c.operation_key === 'RAZÃO_DIVISÃO' ||
@@ -617,9 +631,10 @@ export class CustomIndicatorsService {
           : null,
         series: [],
         table: [],
+        ignored: 0,
       };
     }
-    return { value: null, series: [], table: [] };
+    return { value: null, series: [], table: [], ignored: 0 };
   }
   private formulaFieldMap(cat: Field[]) {
     const allowed = new Map<string, Field>();
@@ -876,6 +891,9 @@ export class CustomIndicatorsService {
     if (op === 'MÁXIMO') return nums.length ? Math.max(...nums) : 0;
     return nums.reduce((a, b) => a + b, 0);
   }
+  private ignoredRows(rows: Record<string, unknown>[], fields: string[]) { const unique = [...new Set(fields)]; if (!unique.length) return 0; return rows.filter((row) => unique.some((field) => row[field] === null || row[field] === undefined || row[field] === '')).length; }
+  private async previewScope(tenantId: string, rows: Record<string, unknown>[], filters: Record<string, unknown>) { const scope: Record<string, unknown> = { scope: String(filters.scope ?? 'all') }; let next = rows; if (scope.scope === 'last_batch') { const batches = await this.supabase.select<Array<{ id: string }>>('staging_batches', `select=id&tenant_id=eq.${tenantId}&order=created_at.desc&limit=1`); scope.source_staging_batch_id = batches[0]?.id; next = scope.source_staging_batch_id ? next.filter((r) => r.source_staging_batch_id === scope.source_staging_batch_id) : []; } if (typeof filters.source_data_source_id === 'string') { scope.source_data_source_id = filters.source_data_source_id; next = next.filter((r) => r.source_data_source_id === filters.source_data_source_id); } if (typeof filters.source_staging_batch_id === 'string') { scope.source_staging_batch_id = filters.source_staging_batch_id; next = next.filter((r) => r.source_staging_batch_id === filters.source_staging_batch_id); } if (typeof filters.date_from === 'string') { scope.date_from = filters.date_from; next = next.filter((r) => String(r.issued_at ?? r.updated_at ?? '') >= String(filters.date_from)); } if (typeof filters.date_to === 'string') { scope.date_to = filters.date_to; next = next.filter((r) => String(r.issued_at ?? r.updated_at ?? '') <= String(filters.date_to)); } return { rows: next, scope }; }
+  private scopeMessage(scope: Record<string, unknown>, ignored: number) { const parts = [scope.scope === 'last_batch' ? 'Cálculo realizado usando somente o último lote processado.' : scope.source_data_source_id ? 'Cálculo realizado usando somente a integração selecionada.' : (scope.date_from || scope.date_to) ? 'Cálculo realizado usando somente o período selecionado.' : 'Cálculo realizado usando todos os dados tratados disponíveis para este tenant.']; if (ignored > 0) parts.push(`${ignored} registros foram ignorados porque não possuem os campos necessários para este indicador.`); return parts.join(' '); }
   private result(
     status: string,
     value: unknown,
@@ -885,6 +903,8 @@ export class CustomIndicatorsService {
     cfg: Config,
     by: Map<string, Field>,
     message: string,
+    ignored = 0,
+    scope: Record<string, unknown> = { scope: 'all' },
   ) {
     const used = this.usedFields(cfg.formula_ast).concat(
       [
@@ -908,6 +928,9 @@ export class CustomIndicatorsService {
         label: by.get(f)?.label ?? f,
       })),
       filters_used: [],
+      records_used: Math.max(records - ignored, 0),
+      records_ignored_missing_data: ignored,
+      scope,
       message,
     };
   }
