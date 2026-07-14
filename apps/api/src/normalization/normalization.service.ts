@@ -19,6 +19,7 @@ type RecordRow = {
   tenant_id: string;
   staging_batch_id: string;
   validation_status: string;
+  raw_payload: Record<string, unknown> | null;
   normalized_payload: Record<string, unknown> | null;
 };
 type Mapping = {
@@ -34,6 +35,7 @@ type Mapping = {
     id: string;
     data_contract_id: string;
     field_key: string;
+    source_field_name: string;
   } | null;
   canonical_field: {
     id: string;
@@ -408,11 +410,16 @@ export class NormalizationService {
           const rawValue =
             mapping.mapping_type === 'default_value'
               ? this.defaultFromNotes(mapping)
-              : record.normalized_payload?.[
-                  mapping.data_contract_field.field_key
-                ];
+              : this.valueFromRecord(record, mapping);
           if (rawValue === undefined || rawValue === null || rawValue === '') {
             partial = true;
+            await addWarning(
+              'SOURCE_VALUE_NOT_FOUND',
+              'Valor da coluna pareada não foi encontrado no staging.',
+              { source_field_name: mapping.data_contract_field.source_field_name, field_key: mapping.data_contract_field.field_key },
+              record.id,
+              mapping,
+            );
             continue;
           }
           const converted = this.convertValue(
@@ -429,46 +436,31 @@ export class NormalizationService {
             );
             continue;
           }
-          const targetEntity = legacyEntities.has(entityKey)
-            ? 'operation_records'
-            : entityKey;
-          const targetField = aliases[fieldKey as string] ?? fieldKey;
-          if (targetEntity === 'operation_records') {
-            if (operationColumns.has(targetField))
-              buckets.operation_records[targetField] = converted.value;
-            else
-              await addError(
-                'INVALID_CANONICAL_FIELD',
-                'Campo não pertence à base operacional nativa.',
-                { field_key: fieldKey },
-                record.id,
-                mapping,
-              );
-          } else {
-            if (!enabledModules.has(entityModule[targetEntity])) {
-              await addError(
-                'MODULE_NOT_ENABLED',
-                'Módulo da extensão não está habilitado para o tenant.',
-                { module_key: entityModule[targetEntity] },
-                record.id,
-                mapping,
-              );
-              continue;
-            }
-            if (extensionColumns[targetEntity]?.has(targetField))
-              buckets[targetEntity] = {
-                ...(buckets[targetEntity] ?? {}),
-                [targetField]: converted.value,
-              };
-            else
-              await addError(
-                'INVALID_CANONICAL_FIELD',
-                'Campo não pertence à extensão nativa.',
-                { field_key: fieldKey },
-                record.id,
-                mapping,
-              );
+          const resolved = this.resolveTarget(entityKey, fieldKey as string);
+          if (!resolved) {
+            await addWarning(
+              'TARGET_FIELD_NOT_FOUND',
+              'Campo mapeado não corresponde a uma coluna nativa conhecida.',
+              { entity_key: entityKey, field_key: fieldKey },
+              record.id,
+              mapping,
+            );
+            continue;
           }
+          if (resolved.entity !== 'operation_records' && !enabledModules.has(entityModule[resolved.entity])) {
+            await addWarning(
+              'INVALID_TARGET_ENTITY',
+              'Módulo da extensão não está habilitado para o tenant.',
+              { module_key: entityModule[resolved.entity] },
+              record.id,
+              mapping,
+            );
+            continue;
+          }
+          buckets[resolved.entity] = {
+            ...(buckets[resolved.entity] ?? {}),
+            [resolved.field]: converted.value,
+          };
         }
         if (
           Object.keys(buckets.operation_records).length === 0 &&
@@ -582,7 +574,7 @@ export class NormalizationService {
   private getValidRecords(tenantId: string, batchId: string) {
     return this.supabase.select<RecordRow[]>(
       'staging_records',
-      `select=id,tenant_id,staging_batch_id,validation_status,normalized_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&normalized_payload=not.is.null&order=row_number.asc`,
+      `select=id,tenant_id,staging_batch_id,validation_status,raw_payload,normalized_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&order=row_number.asc`,
     );
   }
   private async loadMappings(
@@ -607,7 +599,7 @@ export class NormalizationService {
       };
     const rows = await this.supabase.select<Mapping[]>(
       'field_mappings',
-      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
+      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key,source_field_name),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
     );
     const activeRows = rows.filter(
       (mapping) => mapping.status === 'active' || !mapping.status,
@@ -636,6 +628,29 @@ export class NormalizationService {
       activeMappingsFoundCount: activeRows.length,
     };
   }
+  private valueFromRecord(record: RecordRow, mapping: Mapping) {
+    const field = mapping.data_contract_field;
+    if (!field) return undefined;
+    const normalizedByKey = record.normalized_payload?.[field.field_key];
+    if (normalizedByKey !== undefined) return normalizedByKey;
+    const rawBySourceName = record.raw_payload?.[field.source_field_name];
+    if (rawBySourceName !== undefined) return rawBySourceName;
+    return record.raw_payload?.[field.field_key];
+  }
+  private resolveTarget(entityKey: string, fieldKey: string) {
+    const aliased = aliases[fieldKey] ?? fieldKey;
+    if (legacyEntities.has(entityKey) || entityKey === 'operation_records') {
+      return operationColumns.has(aliased) ? { entity: 'operation_records', field: aliased } : null;
+    }
+    if (extensionEntities.has(entityKey) && extensionColumns[entityKey]?.has(fieldKey)) {
+      return { entity: entityKey, field: fieldKey };
+    }
+    if (operationColumns.has(aliased)) {
+      return { entity: 'operation_records', field: aliased };
+    }
+    return null;
+  }
+
   private errorDetails(error: unknown) {
     return error instanceof Error ? { message: error.message } : { error };
   }
@@ -773,7 +788,7 @@ export class NormalizationService {
       return Number.isInteger(n) ? { ok: true, value: n } : { ok: false };
     }
     if (dataType === 'decimal') {
-      const n = Number(value);
+      const n = Number(String(value).replace(',', '.'));
       return Number.isFinite(n) ? { ok: true, value: n } : { ok: false };
     }
     if (dataType === 'boolean') {
