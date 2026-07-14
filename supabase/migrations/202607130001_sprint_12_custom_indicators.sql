@@ -99,3 +99,33 @@ with field_seed(module_key, base_table, field_key, label, data_type, semantic_ty
 insert into public.indicator_field_catalog (tenant_id,module_key,base_table,field_key,label,data_type,semantic_type,allowed_operations,allowed_filters,is_dimension,is_measure)
 select null,module_key,base_table,field_key,label,data_type,semantic_type,allowed_operations,allowed_filters,is_dimension,is_measure from field_seed
 on conflict (tenant_id, base_table, field_key) do update set label=excluded.label, data_type=excluded.data_type, semantic_type=excluded.semantic_type, allowed_operations=excluded.allowed_operations, allowed_filters=excluded.allowed_filters, is_dimension=excluded.is_dimension, is_measure=excluded.is_measure, is_active=true, updated_at=now();
+
+-- Sprint 12 hardening: disable legacy free-form formula indicators safely.
+update public.custom_indicator_definitions
+set status = 'draft',
+    operation_key = 'count',
+    calculation_config = jsonb_build_object(
+      'base_table', coalesce(nullif(base_table, ''), 'operation_records'),
+      'operation', 'count',
+      'operation_key', 'count',
+      'legacy_free_formula_disabled', true
+    ),
+    formula_preview = 'Indicador legado com fórmula livre desativado. Recrie usando seletores controlados.',
+    available_for_dashboard = false,
+    available_for_reports = false,
+    updated_at = now()
+where operation_key = 'FÓRMULA_CONTROLADA'
+   or calculation_config ? 'formula'
+   or calculation_config ? 'formula_ast';
+
+alter table public.custom_indicator_definitions
+  drop constraint if exists custom_indicator_definitions_operation_key_controlled_chk;
+alter table public.custom_indicator_definitions
+  add constraint custom_indicator_definitions_operation_key_controlled_chk
+  check (operation_key in ('count','count_distinct','sum','avg','min','max','ratio','percentage','group_by','time_series','ranking','duration_avg'));
+
+alter table public.custom_indicator_definitions
+  drop constraint if exists custom_indicator_definitions_no_free_formula_chk;
+alter table public.custom_indicator_definitions
+  add constraint custom_indicator_definitions_no_free_formula_chk
+  check (not (calculation_config ? 'formula') and not (calculation_config ? 'formula_ast'));
