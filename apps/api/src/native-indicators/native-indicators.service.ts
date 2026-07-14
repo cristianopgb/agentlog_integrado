@@ -7,11 +7,12 @@ type FieldGroup = { key: string; label: string; any_of: FieldRef[] };
 type Definition = { id: string; module_key: string; family_key: string; indicator_key: string; name: string; description: string | null; indicator_type: string; visualization_type: string; value_format: string; calculation_type: string; calculation_config: Record<string, unknown>; required_fields: FieldGroup[]; optional_fields: FieldGroup[]; availability_rules: Record<string, unknown>; sort_order: number };
 type TableName = keyof typeof tableColumns;
 
-type Preview = { status: Status; value: unknown; series: Array<Record<string, unknown>>; table: Array<Record<string, unknown>>; records_considered: number; missing_fields: string[]; available_fields: string[]; message: string };
+type PreviewScope = { scope: string; source_data_source_id?: string; source_data_source_name?: string | null; source_staging_batch_id?: string; date_from?: string; date_to?: string; status?: string; data_quality_status?: string };
+type Preview = { status: Status; value: unknown; series: Array<Record<string, unknown>>; table: Array<Record<string, unknown>>; records_considered: number; records_used: number; records_ignored_missing_data: number; scope: PreviewScope; missing_fields: string[]; available_fields: string[]; message: string };
 
 const allowedTables = ['operation_records', 'transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records'] as const;
 const tableColumns = {
-  operation_records: new Set(['id','document_type','customer_name','customer_document','origin_state','destination_state','status','occurrence_status','gross_weight','cubed_weight','volume_count','total_value','freight_value','issued_at','expected_date','completed_at','data_quality_status','updated_at','delivery_number','driver_name','vehicle_plate']),
+  operation_records: new Set(['id','source_data_source_id','source_staging_batch_id','document_type','customer_name','customer_document','origin_state','destination_state','status','occurrence_status','gross_weight','cubed_weight','volume_count','total_value','freight_value','issued_at','expected_date','completed_at','data_quality_status','updated_at','delivery_number','driver_name','vehicle_plate']),
   transport_records: new Set(['id','transport_status','route_name','collected_at','delivered_at','delivery_performance_status','sla_status','updated_at']),
   attendance_records: new Set(['id','ticket_number','channel','occurrence_type','occurrence_reason','priority','attendance_status','opened_at','resolved_at','sla_due_at','updated_at']),
   finance_records: new Set(['id','billing_status','proof_of_delivery_status','ready_to_bill','blocked_amount','block_status','extra_cost_value','discount_value','total_amount','due_at','paid_at','updated_at']),
@@ -42,15 +43,15 @@ export class NativeIndicatorsService {
     return { ...this.publicDefinition(definition), availability, preview };
   }
 
-  async preview(tenantId: string, indicatorKey: string, userId?: string, log = false): Promise<Preview> {
+  async preview(tenantId: string, indicatorKey: string, userId?: string, log = false, filters: Record<string, unknown> = {}): Promise<Preview> {
     const definition = await this.definition(indicatorKey);
     let result: Preview;
     try {
       const availability = await this.availability(tenantId, definition);
-      if (availability.status === 'empty' || availability.status === 'unavailable') result = { status: availability.status, value: null, series: [], table: [], records_considered: 0, missing_fields: availability.missing_fields, available_fields: availability.available_fields, message: this.longMessage(availability.status) };
-      else result = await this.calculate(tenantId, definition, availability.status);
+      if (availability.status === 'empty' || availability.status === 'unavailable') result = { status: availability.status, value: null, series: [], table: [], records_considered: 0, records_used: 0, records_ignored_missing_data: 0, scope: { scope: 'all' }, missing_fields: availability.missing_fields, available_fields: availability.available_fields, message: this.longMessage(availability.status) };
+      else result = await this.calculate(tenantId, definition, availability.status, filters);
     } catch {
-      result = { status: 'failed', value: null, series: [], table: [], records_considered: 0, missing_fields: [], available_fields: [], message: 'Não foi possível calcular este indicador agora.' };
+      result = { status: 'failed', value: null, series: [], table: [], records_considered: 0, records_used: 0, records_ignored_missing_data: 0, scope: { scope: 'all' }, missing_fields: [], available_fields: [], message: 'Não foi possível calcular este indicador agora.' };
     }
     if (log) await this.log(tenantId, definition.id, userId, result);
     return result;
@@ -81,12 +82,14 @@ export class NativeIndicatorsService {
     return { available: false, label: group.label, labels: [] };
   }
 
-  private async calculate(tenantId: string, d: Definition, status: Status): Promise<Preview> {
+  private async calculate(tenantId: string, d: Definition, status: Status, filters: Record<string, unknown>): Promise<Preview> {
     const cfg = d.calculation_config ?? {}; const table = this.safeTable(String(cfg.table)); const calc = d.calculation_type;
     const field = cfg.field ? this.safeField(table, String(cfg.field)) : 'id'; const rows = await this.rows(tenantId, table);
-    const filtered = rows.filter((row) => this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined));
+    const scoped = await this.applyPreviewScope(tenantId, rows, filters);
+    const filtered = scoped.rows.filter((row) => this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined));
     const nums = filtered.map((r) => Number(r[field])).filter(Number.isFinite);
-    const base = { status, missing_fields: [], available_fields: [field], records_considered: filtered.length, message: status === 'partial' ? this.longMessage('partial') : this.longMessage('available') };
+    const ignored = filtered.length - nums.length;
+    const base = { status, missing_fields: [], available_fields: [field], records_considered: filtered.length, records_used: calc === 'count' ? filtered.length : nums.length, records_ignored_missing_data: calc === 'count' ? 0 : ignored, scope: scoped.scope, message: this.scopeMessage(scoped.scope, ignored) };
     if (calc === 'count') return { ...base, value: filtered.length, series: [], table: [] };
     if (calc === 'sum') return { ...base, value: nums.reduce((a, b) => a + b, 0), series: [], table: [] };
     if (calc === 'avg') return { ...base, value: nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0, series: [], table: [] };
@@ -96,12 +99,30 @@ export class NativeIndicatorsService {
     if (calc === 'group_by' || calc === 'ranking') return { ...base, value: null, series: this.group(filtered, table, cfg), table: this.group(filtered, table, cfg) };
     if (calc === 'duration_avg') return { ...base, value: this.avgDuration(filtered, table, cfg), series: [], table: [] };
     if (calc === 'percentage' || calc === 'ratio') return { ...base, value: this.percentage(filtered, d.indicator_key), series: [], table: [] };
-    return { status: 'unavailable', value: null, series: [], table: [], records_considered: 0, missing_fields: [], available_fields: [], message: 'Este indicador ainda não possui cálculo habilitado nesta versão.' };
+    return { status: 'unavailable', value: null, series: [], table: [], records_considered: 0, records_used: 0, records_ignored_missing_data: 0, scope: { scope: 'all' }, missing_fields: [], available_fields: [], message: 'Este indicador ainda não possui cálculo habilitado nesta versão.' };
   }
 
   private group(rows: Record<string, unknown>[], table: TableName, cfg: Record<string, unknown>) { const gf = this.safeField(table, String(cfg.group_field ?? cfg.field)); const af = cfg.aggregation_field && tableColumns[table].has(String(cfg.aggregation_field)) ? String(cfg.aggregation_field) : undefined; const map = new Map<string, number>(); rows.forEach((r) => { const label = String(r[gf] ?? 'Não informado'); const value = af ? Number(r[af]) || 0 : 1; map.set(label, (map.get(label) ?? 0) + value); }); return [...map.entries()].map(([label, value]) => ({ label, value })).sort((a,b)=>b.value-a.value).slice(0, Number(cfg.limit) || 20); }
   private avgDuration(rows: Record<string, unknown>[], table: TableName, cfg: Record<string, unknown>) { const start = this.safeField(table, String(cfg.start_field ?? cfg.field)); const end = tableColumns[table].has(String(cfg.end_field)) ? String(cfg.end_field) : 'updated_at'; const diffs = rows.map((r) => Date.parse(String(r[end])) - Date.parse(String(r[start]))).filter(Number.isFinite).filter((n) => n >= 0); return diffs.length ? diffs.reduce((a,b)=>a+b,0) / diffs.length / 3600000 : 0; }
   private percentage(rows: Record<string, unknown>[], key: string) { if (!rows.length) return 0; if (key.includes('otd') || key.includes('sla')) return Math.round((rows.filter((r) => (r.completed_at && r.expected_date && String(r.completed_at) <= String(r.expected_date)) || ['met','on_time','cumprido'].includes(String(r.sla_status))).length / rows.length) * 10000) / 100; return 100; }
+  private async applyPreviewScope(tenantId: string, rows: Record<string, unknown>[], filters: Record<string, unknown>) {
+    const scope: PreviewScope = { scope: String(filters.scope ?? 'all') };
+    let next = rows;
+    if (scope.scope === 'last_batch') {
+      const batches = await this.supabase.select<Array<{ id: string }>>('staging_batches', `select=id&tenant_id=eq.${tenantId}&order=created_at.desc&limit=1`);
+      scope.source_staging_batch_id = batches[0]?.id;
+      next = scope.source_staging_batch_id ? next.filter((r) => r.source_staging_batch_id === scope.source_staging_batch_id) : [];
+    }
+    if (typeof filters.source_data_source_id === 'string') { scope.source_data_source_id = filters.source_data_source_id; next = next.filter((r) => r.source_data_source_id === filters.source_data_source_id); }
+    if (typeof filters.source_staging_batch_id === 'string') { scope.source_staging_batch_id = filters.source_staging_batch_id; next = next.filter((r) => r.source_staging_batch_id === filters.source_staging_batch_id); }
+    if (typeof filters.status === 'string') { scope.status = filters.status; next = next.filter((r) => r.status === filters.status); }
+    if (typeof filters.data_quality_status === 'string') { scope.data_quality_status = filters.data_quality_status; next = next.filter((r) => r.data_quality_status === filters.data_quality_status); }
+    if (typeof filters.date_from === 'string') { scope.date_from = filters.date_from; next = next.filter((r) => String(r.issued_at ?? r.updated_at ?? '') >= String(filters.date_from)); }
+    if (typeof filters.date_to === 'string') { scope.date_to = filters.date_to; next = next.filter((r) => String(r.issued_at ?? r.updated_at ?? '') <= String(filters.date_to)); }
+    if (scope.source_data_source_id) { const src = await this.supabase.select<Array<{ name: string }>>('data_sources', `select=name&tenant_id=eq.${tenantId}&id=eq.${scope.source_data_source_id}&limit=1`); scope.source_data_source_name = src[0]?.name ?? null; }
+    return { rows: next, scope };
+  }
+  private scopeMessage(scope: PreviewScope, ignored: number) { const parts = [scope.scope === 'last_batch' ? 'Cálculo realizado usando somente o último lote processado.' : scope.source_data_source_id ? 'Cálculo realizado usando somente a integração selecionada.' : (scope.date_from || scope.date_to) ? 'Cálculo realizado usando somente o período selecionado.' : 'Cálculo realizado usando todos os dados tratados disponíveis para este tenant.']; if (ignored > 0) parts.push(`${ignored} registros foram ignorados porque não possuem os campos necessários para este indicador.`); return parts.join(' '); }
   private matchesWhere(row: Record<string, unknown>, where?: Record<string, unknown>) { if (!where) return true; return Object.entries(where).every(([k, v]) => row[k] === v); }
   private async rows(tenantId: string, table: TableName) { return this.supabase.select<Record<string, unknown>[]>(table, `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&limit=10000`); }
   private async countRows(tenantId: string, table: TableName, extra?: string) { const q = [`select=id`, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null']; if (extra) q.push(extra); const rows = await this.supabase.select<Array<{ id: string }>>(table, `${q.join('&')}&limit=10000`); return rows.length; }
