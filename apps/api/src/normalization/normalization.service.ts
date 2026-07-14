@@ -246,6 +246,31 @@ const aliases: Record<string, string> = {
   delivered_at: 'completed_at',
 };
 
+const allowedDocumentTypes = new Set([
+  'cte',
+  'nfe',
+  'nf',
+  'order',
+  'delivery',
+  'manifest',
+  'other',
+]);
+const allowedDataQualityStatuses = new Set([
+  'valid',
+  'invalid',
+  'partial',
+  'manual_review',
+]);
+const controlledFields = new Set([
+  'document_type',
+  'status',
+  'data_quality_status',
+  'occurrence_status',
+  'delivery_performance_status',
+  'sla_status',
+  'transport_status',
+]);
+
 @Injectable()
 export class NormalizationService {
   constructor(private readonly supabase: SupabaseService) {}
@@ -457,9 +482,29 @@ export class NormalizationService {
             );
             continue;
           }
+          const canonical = this.normalizeControlledValue(
+            resolved.field,
+            converted.value,
+          );
+          if (!canonical.ok) {
+            await addWarning(
+              canonical.code,
+              canonical.message,
+              {
+                field: resolved.field,
+                received_value: converted.value,
+                expected_values: canonical.expected,
+                user_message: canonical.message,
+              },
+              record.id,
+              mapping,
+            );
+            partial = true;
+            continue;
+          }
           buckets[resolved.entity] = {
             ...(buckets[resolved.entity] ?? {}),
-            [resolved.field]: converted.value,
+            [resolved.field]: canonical.value,
           };
         }
         if (
@@ -538,8 +583,13 @@ export class NormalizationService {
       );
     } catch (error) {
       await addError(
-        'UNKNOWN_ERROR',
-        error instanceof Error ? error.message : 'Erro desconhecido.',
+        'INVALID_CANONICAL_VALUE',
+        'Não foi possível processar o lote porque alguns valores não seguem o padrão esperado da base nativa.',
+        {
+          internal_error: this.errorDetails(error),
+          user_detail:
+            'Revise os valores controlados do lote e tente processar novamente.',
+        },
       );
       return this.finish(run.id, 'failed', counters, errorSummary);
     }
@@ -679,9 +729,9 @@ export class NormalizationService {
       source_payload_hash: createHash('sha256')
         .update(JSON.stringify(record.normalized_payload ?? {}))
         .digest('hex'),
-      data_quality_status: partial
-        ? 'partial'
-        : String(values.data_quality_status ?? 'valid'),
+      data_quality_status: this.normalizeDataQualityStatus(
+        partial ? 'partial' : values.data_quality_status,
+      ),
     };
     const existing = await this.findOperation(tenantId, base);
     if (existing) {
@@ -773,6 +823,140 @@ export class NormalizationService {
       source_staging_record_id: record.id,
     });
   }
+  private normalizeControlledValue(
+    field: string,
+    value: unknown,
+  ):
+    | { ok: true; value: unknown }
+    | { ok: false; code: string; message: string; expected: string[] } {
+    if (!controlledFields.has(field)) return { ok: true, value };
+    if (field === 'document_type') {
+      const normalized = this.normalizeDocumentType(value);
+      if (normalized === null || allowedDocumentTypes.has(normalized)) {
+        return { ok: true, value: normalized };
+      }
+      return {
+        ok: false,
+        code: 'DOCUMENT_TYPE_NOT_ALLOWED',
+        message:
+          'Tipo de documento recebeu um valor que não pôde ser convertido para o padrão interno.',
+        expected: [...allowedDocumentTypes],
+      };
+    }
+    if (field === 'data_quality_status') {
+      const normalized = this.normalizeDataQualityStatus(value);
+      if (normalized === null || allowedDataQualityStatuses.has(normalized)) {
+        return { ok: true, value: normalized };
+      }
+      return {
+        ok: false,
+        code: 'INVALID_CANONICAL_VALUE',
+        message:
+          'Qualidade do dado recebeu um valor que não pôde ser convertido para o padrão interno.',
+        expected: [...allowedDataQualityStatuses],
+      };
+    }
+    const normalized = this.normalizeStatusValue(value);
+    if (normalized === null || this.isAllowedStatus(field, normalized)) {
+      return { ok: true, value: normalized };
+    }
+    return {
+      ok: false,
+      code: 'STATUS_NOT_ALLOWED',
+      message:
+        'Status recebeu um valor que não pôde ser convertido para o padrão interno.',
+      expected: this.expectedStatuses(field),
+    };
+  }
+
+  private normalizeDocumentType(value: unknown) {
+    const key = this.normalizeKey(value);
+    if (!key) return null;
+    const map: Record<string, string> = {
+      cte: 'cte',
+      conhecimentodetransporte: 'cte',
+      nf: 'nf',
+      notafiscal: 'nf',
+      nfe: 'nfe',
+      pedido: 'order',
+      order: 'order',
+      entrega: 'delivery',
+      delivery: 'delivery',
+      manifesto: 'manifest',
+      mdfe: 'manifest',
+    };
+    return map[key] ?? 'other';
+  }
+
+  private normalizeDataQualityStatus(value: unknown) {
+    const key = this.normalizeKey(value);
+    if (!key) return 'valid';
+    const map: Record<string, string> = {
+      valid: 'valid',
+      valido: 'valid',
+      valida: 'valid',
+      invalid: 'invalid',
+      invalido: 'invalid',
+      invalida: 'invalid',
+      partial: 'partial',
+      parcial: 'partial',
+      manualreview: 'manual_review',
+      revisaomanual: 'manual_review',
+    };
+    return map[key] ?? String(value);
+  }
+
+  private normalizeStatusValue(value: unknown) {
+    const key = this.normalizeKey(value);
+    if (!key) return null;
+    const map: Record<string, string> = {
+      delivered: 'delivered',
+      entregue: 'delivered',
+      finalizado: 'delivered',
+      concluido: 'delivered',
+      pending: 'pending',
+      pendente: 'pending',
+      canceled: 'canceled',
+      cancelled: 'canceled',
+      cancelado: 'canceled',
+      delayed: 'delayed',
+      atrasado: 'delayed',
+      intransit: 'in_transit',
+      emtransito: 'in_transit',
+      ontime: 'on_time',
+      noprazo: 'on_time',
+      met: 'met',
+      cumprido: 'met',
+      notmet: 'not_met',
+      descumprido: 'not_met',
+      open: 'open',
+      aberto: 'open',
+      resolved: 'resolved',
+      resolvido: 'resolved',
+    };
+    return map[key] ?? String(value).trim().toLowerCase();
+  }
+
+  private isAllowedStatus(field: string, value: string) {
+    return this.expectedStatuses(field).includes(value);
+  }
+
+  private expectedStatuses(field: string) {
+    if (field === 'sla_status') return ['met', 'not_met', 'on_time', 'delayed'];
+    if (field === 'occurrence_status') return ['open', 'resolved', 'pending', 'canceled'];
+    if (field === 'delivery_performance_status') return ['delivered', 'pending', 'canceled', 'delayed', 'on_time'];
+    return ['delivered', 'pending', 'canceled', 'delayed', 'in_transit', 'on_time'];
+  }
+
+  private normalizeKey(value: unknown) {
+    return String(value ?? '')
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
+  }
+
   private defaultFromNotes(mapping: Mapping) {
     const match = mapping.notes && /default=([^;]+)/.exec(mapping.notes);
     return match?.[1] ?? null;
