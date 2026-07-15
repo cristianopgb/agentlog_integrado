@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'crypto';
@@ -273,6 +274,8 @@ const controlledFields = new Set([
 
 @Injectable()
 export class NormalizationService {
+  private readonly logger = new Logger(NormalizationService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   listRuns(tenantId: string) {
@@ -316,6 +319,46 @@ export class NormalizationService {
       error_records: 0,
     };
     const errorSummary: Record<string, number> = {};
+    const insertNormalizationIssue = async (
+      code: string,
+      message: string,
+      details: Record<string, unknown>,
+      recordId: string | null | undefined,
+      mapping: Mapping | undefined,
+      severity: 'error' | 'warning',
+    ) => {
+      errorSummary[code] = (errorSummary[code] ?? 0) + 1;
+      try {
+        await this.supabase.insert('normalization_errors', {
+          tenant_id: tenantId,
+          normalization_run_id: run.id,
+          staging_batch_id: batchId,
+          staging_record_id: recordId ?? null,
+          field_mapping_id: mapping?.id ?? null,
+          canonical_entity_key: mapping?.canonical_entity?.entity_key ?? null,
+          canonical_field_key: mapping?.canonical_field?.field_key ?? null,
+          error_code: code,
+          error_message: message,
+          details: { ...details, severity },
+        });
+      } catch (error) {
+        const logDetails = this.errorDetails(error);
+        errorSummary.NORMALIZATION_ERROR_LOG_FAILED =
+          (errorSummary.NORMALIZATION_ERROR_LOG_FAILED ?? 0) + 1;
+        this.logger.error(
+          `Falha ao registrar ${severity} de normalização ${code} para o lote ${batchId}.`,
+          JSON.stringify({
+            tenant_id: tenantId,
+            normalization_run_id: run.id,
+            staging_batch_id: batchId,
+            staging_record_id: recordId ?? null,
+            error_code: code,
+            severity,
+            log_error: logDetails,
+          }),
+        );
+      }
+    };
     const addError = async (
       code: string,
       message: string,
@@ -324,19 +367,14 @@ export class NormalizationService {
       mapping?: Mapping,
     ) => {
       counters.error_records += 1;
-      errorSummary[code] = (errorSummary[code] ?? 0) + 1;
-      await this.supabase.insert('normalization_errors', {
-        tenant_id: tenantId,
-        normalization_run_id: run.id,
-        staging_batch_id: batchId,
-        staging_record_id: recordId ?? null,
-        field_mapping_id: mapping?.id ?? null,
-        canonical_entity_key: mapping?.canonical_entity?.entity_key ?? null,
-        canonical_field_key: mapping?.canonical_field?.field_key ?? null,
-        error_code: code,
-        error_message: message,
+      await insertNormalizationIssue(
+        code,
+        message,
         details,
-      });
+        recordId,
+        mapping,
+        'error',
+      );
     };
     const addWarning = async (
       code: string,
@@ -344,20 +382,15 @@ export class NormalizationService {
       details: Record<string, unknown> = {},
       recordId?: string | null,
       mapping?: Mapping,
-    ) => {
-      await this.supabase.insert('normalization_errors', {
-        tenant_id: tenantId,
-        normalization_run_id: run.id,
-        staging_batch_id: batchId,
-        staging_record_id: recordId ?? null,
-        field_mapping_id: mapping?.id ?? null,
-        canonical_entity_key: mapping?.canonical_entity?.entity_key ?? null,
-        canonical_field_key: mapping?.canonical_field?.field_key ?? null,
-        error_code: code,
-        error_message: message,
-        details: { ...details, severity: 'warning' },
-      });
-    };
+    ) =>
+      insertNormalizationIssue(
+        code,
+        message,
+        details,
+        recordId,
+        mapping,
+        'warning',
+      );
     try {
       const mappingsResult = await this.loadMappings(
         tenantId,
@@ -441,7 +474,11 @@ export class NormalizationService {
             await addWarning(
               'SOURCE_VALUE_NOT_FOUND',
               'Valor da coluna pareada não foi encontrado no staging.',
-              { source_field_name: mapping.data_contract_field.source_field_name, field_key: mapping.data_contract_field.field_key },
+              {
+                source_field_name:
+                  mapping.data_contract_field.source_field_name,
+                field_key: mapping.data_contract_field.field_key,
+              },
               record.id,
               mapping,
             );
@@ -472,7 +509,10 @@ export class NormalizationService {
             );
             continue;
           }
-          if (resolved.entity !== 'operation_records' && !enabledModules.has(entityModule[resolved.entity])) {
+          if (
+            resolved.entity !== 'operation_records' &&
+            !enabledModules.has(entityModule[resolved.entity])
+          ) {
             await addWarning(
               'INVALID_TARGET_ENTITY',
               'Módulo da extensão não está habilitado para o tenant.',
@@ -487,18 +527,29 @@ export class NormalizationService {
             converted.value,
           );
           if (!canonical.ok) {
-            await addWarning(
-              canonical.code,
-              canonical.message,
-              {
-                field: resolved.field,
-                received_value: converted.value,
-                expected_values: canonical.expected,
-                user_message: canonical.message,
-              },
-              record.id,
-              mapping,
-            );
+            const details = {
+              field: resolved.field,
+              received_value: converted.value,
+              expected_values: canonical.expected,
+              user_message: canonical.message,
+            };
+            if (mapping.canonical_field.is_required) {
+              await addError(
+                canonical.code,
+                canonical.message,
+                details,
+                record.id,
+                mapping,
+              );
+            } else {
+              await addWarning(
+                canonical.code,
+                canonical.message,
+                details,
+                record.id,
+                mapping,
+              );
+            }
             partial = true;
             continue;
           }
@@ -690,9 +741,14 @@ export class NormalizationService {
   private resolveTarget(entityKey: string, fieldKey: string) {
     const aliased = aliases[fieldKey] ?? fieldKey;
     if (legacyEntities.has(entityKey) || entityKey === 'operation_records') {
-      return operationColumns.has(aliased) ? { entity: 'operation_records', field: aliased } : null;
+      return operationColumns.has(aliased)
+        ? { entity: 'operation_records', field: aliased }
+        : null;
     }
-    if (extensionEntities.has(entityKey) && extensionColumns[entityKey]?.has(fieldKey)) {
+    if (
+      extensionEntities.has(entityKey) &&
+      extensionColumns[entityKey]?.has(fieldKey)
+    ) {
       return { entity: entityKey, field: fieldKey };
     }
     if (operationColumns.has(aliased)) {
@@ -943,9 +999,18 @@ export class NormalizationService {
 
   private expectedStatuses(field: string) {
     if (field === 'sla_status') return ['met', 'not_met', 'on_time', 'delayed'];
-    if (field === 'occurrence_status') return ['open', 'resolved', 'pending', 'canceled'];
-    if (field === 'delivery_performance_status') return ['delivered', 'pending', 'canceled', 'delayed', 'on_time'];
-    return ['delivered', 'pending', 'canceled', 'delayed', 'in_transit', 'on_time'];
+    if (field === 'occurrence_status')
+      return ['open', 'resolved', 'pending', 'canceled'];
+    if (field === 'delivery_performance_status')
+      return ['delivered', 'pending', 'canceled', 'delayed', 'on_time'];
+    return [
+      'delivered',
+      'pending',
+      'canceled',
+      'delayed',
+      'in_transit',
+      'on_time',
+    ];
   }
 
   private normalizeKey(value: unknown) {
