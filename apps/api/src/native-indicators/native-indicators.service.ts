@@ -46,6 +46,16 @@ type Preview = {
   missing_fields: string[];
   available_fields: string[];
   message: string;
+  calculation_type: string;
+  debug?: {
+    indicator_key: string;
+    calculation_type: string;
+    records_considered: number;
+    records_used: number;
+    value: unknown;
+    table_length: number;
+    series_length: number;
+  };
 };
 
 const allowedTables = [
@@ -212,7 +222,7 @@ export class NativeIndicatorsService {
       if (
         availability.status === 'empty' ||
         availability.status === 'unavailable'
-      )
+      ) {
         result = {
           status: availability.status,
           value: null,
@@ -225,8 +235,9 @@ export class NativeIndicatorsService {
           missing_fields: availability.missing_fields,
           available_fields: availability.available_fields,
           message: this.longMessage(availability.status),
+          calculation_type: definition.calculation_type,
         };
-      else
+      } else
         result = await this.calculate(
           tenantId,
           definition,
@@ -246,8 +257,12 @@ export class NativeIndicatorsService {
         missing_fields: [],
         available_fields: [],
         message: 'Não foi possível calcular este indicador agora.',
+        calculation_type: definition.calculation_type,
       };
+      result.calculation_type = definition.calculation_type;
     }
+    result.calculation_type = definition.calculation_type;
+    result.debug = this.previewDebug(definition, result);
     if (log) await this.log(tenantId, definition.id, userId, result);
     return result;
   }
@@ -360,17 +375,17 @@ export class NativeIndicatorsService {
     const filtered = scoped.rows.filter((row) =>
       this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined),
     );
-    const nums = filtered.map((r) => Number(r[field])).filter(Number.isFinite);
-    const ignored = filtered.length - nums.length;
+    const ignored = this.ignoredForCalculation(filtered, table, cfg, calc, field);
     const base = {
       status,
       missing_fields: [],
       available_fields: this.configFields(table, cfg, field),
       records_considered: filtered.length,
-      records_used: calc === 'count' ? filtered.length : nums.length,
+      records_used: calc === 'count' ? filtered.length : Math.max(filtered.length - ignored, 0),
       records_ignored_missing_data: calc === 'count' ? 0 : ignored,
       scope: scoped.scope,
       message: this.scopeMessage(scoped.scope, ignored),
+      calculation_type: calc,
     };
     if (calc === 'count')
       return {
@@ -502,9 +517,53 @@ export class NativeIndicatorsService {
       available_fields: [],
       message:
         'Este indicador ainda não possui cálculo habilitado nesta versão.',
+      calculation_type: calc,
     };
   }
 
+  private previewDebug(d: Definition, result: Preview) {
+    return {
+      indicator_key: d.indicator_key,
+      calculation_type: d.calculation_type,
+      records_considered: result.records_considered,
+      records_used: result.records_used,
+      value: result.value,
+      table_length: result.table.length,
+      series_length: result.series.length,
+    };
+  }
+  private ignoredForCalculation(
+    rows: Record<string, unknown>[],
+    table: TableName,
+    cfg: Record<string, unknown>,
+    calc: string,
+    field: string,
+  ) {
+    if (calc === 'count') return 0;
+    if (['sum', 'avg', 'min', 'max'].includes(calc))
+      return rows.filter((r) => !Number.isFinite(Number(r[field]))).length;
+    if (calc === 'ratio') {
+      const numerator = this.metricConfig(table, cfg.numerator as Record<string, unknown> | undefined);
+      const denominator = this.metricConfig(table, cfg.denominator as Record<string, unknown> | undefined);
+      if (!numerator || !denominator) return rows.length;
+      return rows.filter((r) => !Number.isFinite(this.rowMetric(r, numerator)) || !Number.isFinite(this.rowMetric(r, denominator))).length;
+    }
+    if (calc === 'percentage') {
+      const denominatorCfg = cfg.denominator as Record<string, unknown> | undefined;
+      const denominatorRows = this.filteredRowsByConfig(rows, table, denominatorCfg?.filter ?? cfg.denominator_filter);
+      return rows.length - denominatorRows.length;
+    }
+    if (calc === 'time_series') {
+      const df = this.safeField(table, String(cfg.date_field ?? cfg.group_field ?? cfg.field));
+      return rows.filter((r) => !this.dateBucket(r[df], String(cfg.granularity ?? 'day'))).length;
+    }
+    if (calc === 'group_by' || calc === 'ranking') {
+      const gf = this.safeField(table, String(cfg.group_field ?? cfg.field));
+      const agg = this.metricConfig(table, cfg.aggregation as Record<string, unknown> | undefined, cfg.aggregation_field ? String(cfg.aggregation_field) : undefined);
+      return rows.filter((r) => !this.hasValue(r[gf]) || (agg ? !Number.isFinite(this.rowMetric(r, agg)) : false)).length;
+    }
+    return 0;
+  }
   private group(
     rows: Record<string, unknown>[],
     table: TableName,
