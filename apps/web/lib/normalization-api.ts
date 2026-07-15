@@ -73,7 +73,7 @@ function sanitizeApiError(message: string) {
   ];
   const lower = message.toLowerCase();
   if (technicalFragments.some((fragment) => lower.includes(fragment))) {
-    return 'Não foi possível processar o lote porque alguns valores não seguem o padrão esperado da base nativa.';
+    return 'Não foi possível processar alguns valores do lote. Revise os avisos da normalização.';
   }
   return message;
 }
