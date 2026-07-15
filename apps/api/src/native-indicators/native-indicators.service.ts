@@ -7,17 +7,17 @@ type FieldGroup = { key: string; label: string; any_of: FieldRef[] };
 type Definition = { id: string; module_key: string; family_key: string; indicator_key: string; name: string; description: string | null; indicator_type: string; visualization_type: string; value_format: string; calculation_type: string; calculation_config: Record<string, unknown>; required_fields: FieldGroup[]; optional_fields: FieldGroup[]; availability_rules: Record<string, unknown>; sort_order: number };
 type TableName = keyof typeof tableColumns;
 
-type PreviewScope = { scope: string; source_data_source_id?: string; source_data_source_name?: string | null; source_staging_batch_id?: string; date_from?: string; date_to?: string; status?: string; data_quality_status?: string };
+type PreviewScope = { scope: string; source_data_source_id?: string; source_data_source_name?: string | null; source_staging_batch_id?: string; date_from?: string; date_to?: string; status?: string; data_quality_status?: string; include_archived?: boolean };
 type Preview = { status: Status; value: unknown; series: Array<Record<string, unknown>>; table: Array<Record<string, unknown>>; records_considered: number; records_used: number; records_ignored_missing_data: number; scope: PreviewScope; missing_fields: string[]; available_fields: string[]; message: string };
 
 const allowedTables = ['operation_records', 'transport_records', 'attendance_records', 'finance_records', 'warehouse_records', 'team_records'] as const;
 const tableColumns = {
   operation_records: new Set(['id','source_data_source_id','source_staging_batch_id','document_type','customer_name','customer_document','origin_state','destination_state','status','occurrence_status','gross_weight','cubed_weight','volume_count','total_value','freight_value','issued_at','expected_date','completed_at','data_quality_status','updated_at','delivery_number','driver_name','vehicle_plate']),
-  transport_records: new Set(['id','transport_status','route_name','collected_at','delivered_at','delivery_performance_status','sla_status','updated_at']),
-  attendance_records: new Set(['id','ticket_number','channel','occurrence_type','occurrence_reason','priority','attendance_status','opened_at','resolved_at','sla_due_at','updated_at']),
-  finance_records: new Set(['id','billing_status','proof_of_delivery_status','ready_to_bill','blocked_amount','block_status','extra_cost_value','discount_value','total_amount','due_at','paid_at','updated_at']),
-  warehouse_records: new Set(['id','product_code','sku','product_name','warehouse_code','location_code','quantity_available','quantity_reserved','quantity_blocked','last_movement_type','last_movement_at','warehouse_status','updated_at']),
-  team_records: new Set(['id','employee_code','employee_name','department_name','position_name','team_status','admission_date','termination_date','workload_hours','overtime_hours','worked_at','updated_at']),
+  transport_records: new Set(['id','operation_record_id','transport_status','route_name','collected_at','delivered_at','delivery_performance_status','sla_status','updated_at']),
+  attendance_records: new Set(['id','operation_record_id','ticket_number','channel','occurrence_type','occurrence_reason','priority','attendance_status','opened_at','resolved_at','sla_due_at','updated_at']),
+  finance_records: new Set(['id','operation_record_id','billing_status','proof_of_delivery_status','ready_to_bill','blocked_amount','block_status','extra_cost_value','discount_value','total_amount','due_at','paid_at','updated_at']),
+  warehouse_records: new Set(['id','operation_record_id','product_code','sku','product_name','warehouse_code','location_code','quantity_available','quantity_reserved','quantity_blocked','last_movement_type','last_movement_at','warehouse_status','updated_at']),
+  team_records: new Set(['id','operation_record_id','employee_code','employee_name','department_name','position_name','team_status','admission_date','termination_date','workload_hours','overtime_hours','worked_at','updated_at']),
 } satisfies Record<string, Set<string>>;
 
 @Injectable()
@@ -47,7 +47,7 @@ export class NativeIndicatorsService {
     const definition = await this.definition(indicatorKey);
     let result: Preview;
     try {
-      const availability = await this.availability(tenantId, definition);
+      const availability = await this.availability(tenantId, definition, filters);
       if (availability.status === 'empty' || availability.status === 'unavailable') result = { status: availability.status, value: null, series: [], table: [], records_considered: 0, records_used: 0, records_ignored_missing_data: 0, scope: { scope: 'all' }, missing_fields: availability.missing_fields, available_fields: availability.available_fields, message: this.longMessage(availability.status) };
       else result = await this.calculate(tenantId, definition, availability.status, filters);
     } catch {
@@ -61,31 +61,33 @@ export class NativeIndicatorsService {
   private async definition(indicatorKey: string) { const rows = await this.supabase.select<Definition[]>('native_indicator_definitions', `select=*&indicator_key=eq.${indicatorKey}&status=eq.active&limit=1`); if (!rows[0]) throw new NotFoundException('Indicador nativo não encontrado.'); return rows[0]; }
   private publicDefinition(d: Definition) { return { id: d.id, module_key: d.module_key, family_key: d.family_key, indicator_key: d.indicator_key, name: d.name, description: d.description, indicator_type: d.indicator_type, visualization_type: d.visualization_type, value_format: d.value_format, calculation_type: d.calculation_type, required_fields: d.required_fields ?? [], optional_fields: d.optional_fields ?? [], sort_order: d.sort_order }; }
 
-  private async availability(tenantId: string, d: Definition) {
+  private async availability(tenantId: string, d: Definition, filters: Record<string, unknown> = {}) {
     const table = this.safeTable(String(d.calculation_config?.table ?? 'operation_records'));
-    const total = await this.countRows(tenantId, table);
+    const scopeRows = await this.scopedRows(tenantId, table, filters);
+    const total = scopeRows.rows.length;
     if (!total) return { status: 'empty' as Status, records_considered: 0, missing_fields: [], available_fields: [], message: this.shortMessage('empty') };
     const required = d.required_fields ?? [];
-    const results = await Promise.all(required.map((group) => this.groupAvailable(tenantId, group)));
+    const results = await Promise.all(required.map((group) => this.groupAvailable(tenantId, group, filters)));
     const available = results.filter((r) => r.available).flatMap((r) => r.labels);
     const missing = results.filter((r) => !r.available).map((r) => r.label);
-    const status: Status = missing.length === 0 ? 'available' : (available.length > 0 && d.availability_rules?.partial_if_any_required ? 'partial' : 'unavailable');
+    const status: Status = missing.length === 0 ? 'available' : (available.length > 0 ? 'partial' : 'unavailable');
     return { status, records_considered: total, missing_fields: missing, available_fields: available, message: this.shortMessage(status) };
   }
 
-  private async groupAvailable(tenantId: string, group: FieldGroup) {
+  private async groupAvailable(tenantId: string, group: FieldGroup, filters: Record<string, unknown>) {
     for (const ref of group.any_of ?? []) {
       const table = this.safeTable(ref.table); const field = this.safeField(table, ref.field);
-      const count = await this.countRows(tenantId, table, `${field}=not.is.null`);
-      if (count > 0) return { available: true, label: group.label, labels: [`${table}.${field}`] };
+      const scoped = await this.scopedRows(tenantId, table, filters);
+      const count = scoped.rows.filter((r) => this.hasValue(r[field])).length;
+      if (count > 0) return { available: true, label: group.label, labels: [`${table}.${field} (${count} registros)`] };
     }
     return { available: false, label: group.label, labels: [] };
   }
 
   private async calculate(tenantId: string, d: Definition, status: Status, filters: Record<string, unknown>): Promise<Preview> {
     const cfg = d.calculation_config ?? {}; const table = this.safeTable(String(cfg.table)); const calc = d.calculation_type;
-    const field = cfg.field ? this.safeField(table, String(cfg.field)) : 'id'; const rows = await this.rows(tenantId, table);
-    const scoped = await this.applyPreviewScope(tenantId, rows, filters);
+    const field = cfg.field ? this.safeField(table, String(cfg.field)) : 'id';
+    const scoped = await this.scopedRows(tenantId, table, filters);
     const filtered = scoped.rows.filter((row) => this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined));
     const nums = filtered.map((r) => Number(r[field])).filter(Number.isFinite);
     const ignored = filtered.length - nums.length;
@@ -105,13 +107,18 @@ export class NativeIndicatorsService {
   private group(rows: Record<string, unknown>[], table: TableName, cfg: Record<string, unknown>) { const gf = this.safeField(table, String(cfg.group_field ?? cfg.field)); const af = cfg.aggregation_field && tableColumns[table].has(String(cfg.aggregation_field)) ? String(cfg.aggregation_field) : undefined; const map = new Map<string, number>(); rows.forEach((r) => { const label = String(r[gf] ?? 'Não informado'); const value = af ? Number(r[af]) || 0 : 1; map.set(label, (map.get(label) ?? 0) + value); }); return [...map.entries()].map(([label, value]) => ({ label, value })).sort((a,b)=>b.value-a.value).slice(0, Number(cfg.limit) || 20); }
   private avgDuration(rows: Record<string, unknown>[], table: TableName, cfg: Record<string, unknown>) { const start = this.safeField(table, String(cfg.start_field ?? cfg.field)); const end = tableColumns[table].has(String(cfg.end_field)) ? String(cfg.end_field) : 'updated_at'; const diffs = rows.map((r) => Date.parse(String(r[end])) - Date.parse(String(r[start]))).filter(Number.isFinite).filter((n) => n >= 0); return diffs.length ? diffs.reduce((a,b)=>a+b,0) / diffs.length / 3600000 : 0; }
   private percentage(rows: Record<string, unknown>[], key: string) { if (!rows.length) return 0; if (key.includes('otd') || key.includes('sla')) return Math.round((rows.filter((r) => (r.completed_at && r.expected_date && String(r.completed_at) <= String(r.expected_date)) || ['met','on_time','cumprido'].includes(String(r.sla_status))).length / rows.length) * 10000) / 100; return 100; }
-  private async applyPreviewScope(tenantId: string, rows: Record<string, unknown>[], filters: Record<string, unknown>) {
-    const scope: PreviewScope = { scope: String(filters.scope ?? 'all') };
-    let next = rows;
+  private async scopedRows(tenantId: string, table: TableName, filters: Record<string, unknown>): Promise<{ rows: Record<string, unknown>[]; scope: PreviewScope }> {
+    const scope: PreviewScope = { scope: String(filters.scope ?? 'all'), include_archived: filters.include_archived === true };
+    let next = await this.rows(tenantId, table, scope.include_archived);
+    if (table !== 'operation_records') {
+      const operationScope = await this.scopedRows(tenantId, 'operation_records', filters);
+      const opIds = new Set(operationScope.rows.map((r) => String(r.id)));
+      return { rows: next.filter((r) => opIds.has(String(r.operation_record_id))), scope: operationScope.scope };
+    }
     if (scope.scope === 'last_batch') {
-      const batches = await this.supabase.select<Array<{ id: string }>>('staging_batches', `select=id&tenant_id=eq.${tenantId}&order=created_at.desc&limit=1`);
-      scope.source_staging_batch_id = batches[0]?.id;
-      next = scope.source_staging_batch_id ? next.filter((r) => r.source_staging_batch_id === scope.source_staging_batch_id) : [];
+      const batchId = this.latestBatchId(next);
+      scope.source_staging_batch_id = batchId;
+      next = batchId ? next.filter((r) => r.source_staging_batch_id === batchId) : [];
     }
     if (typeof filters.source_data_source_id === 'string') { scope.source_data_source_id = filters.source_data_source_id; next = next.filter((r) => r.source_data_source_id === filters.source_data_source_id); }
     if (typeof filters.source_staging_batch_id === 'string') { scope.source_staging_batch_id = filters.source_staging_batch_id; next = next.filter((r) => r.source_staging_batch_id === filters.source_staging_batch_id); }
@@ -122,9 +129,26 @@ export class NativeIndicatorsService {
     if (scope.source_data_source_id) { const src = await this.supabase.select<Array<{ name: string }>>('data_sources', `select=name&tenant_id=eq.${tenantId}&id=eq.${scope.source_data_source_id}&limit=1`); scope.source_data_source_name = src[0]?.name ?? null; }
     return { rows: next, scope };
   }
+  private latestBatchId(rows: Record<string, unknown>[]) { return [...rows].filter((r) => typeof r.source_staging_batch_id === 'string').sort((a,b)=>String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))[0]?.source_staging_batch_id as string | undefined; }
+  private hasValue(v: unknown) { return v !== null && v !== undefined && v !== ''; }
+  private async activeSourceIds(tenantId: string) { const rows = await this.supabase.select<Array<{ id: string }>>('data_sources', `select=id&tenant_id=eq.${tenantId}&status=eq.active&limit=10000`); return rows.map((r) => r.id); }
+
   private scopeMessage(scope: PreviewScope, ignored: number) { const parts = [scope.scope === 'last_batch' ? 'Cálculo realizado usando somente o último lote processado.' : scope.source_data_source_id ? 'Cálculo realizado usando somente a integração selecionada.' : (scope.date_from || scope.date_to) ? 'Cálculo realizado usando somente o período selecionado.' : 'Cálculo realizado usando todos os dados tratados disponíveis para este tenant.']; if (ignored > 0) parts.push(`${ignored} registros foram ignorados porque não possuem os campos necessários para este indicador.`); return parts.join(' '); }
   private matchesWhere(row: Record<string, unknown>, where?: Record<string, unknown>) { if (!where) return true; return Object.entries(where).every(([k, v]) => row[k] === v); }
-  private async rows(tenantId: string, table: TableName) { return this.supabase.select<Record<string, unknown>[]>(table, `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&limit=10000`); }
+  private async rows(tenantId: string, table: TableName, includeArchived = false): Promise<Record<string, unknown>[]> {
+    const filters = [`select=*`, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null'];
+    if (!includeArchived) {
+      const ids = await this.activeSourceIds(tenantId);
+      if (!ids.length) return [];
+      if (table === 'operation_records') filters.push(`source_data_source_id=in.(${ids.map((id) => `"${id}"`).join(',')})`);
+    }
+    const rows = await this.supabase.select<Record<string, unknown>[]>(table, `${filters.join('&')}&limit=10000`);
+    if (!includeArchived && table !== 'operation_records') {
+      const opIds = new Set((await this.rows(tenantId, 'operation_records', false)).map((r) => String(r.id)));
+      return rows.filter((r) => opIds.has(String(r.operation_record_id)));
+    }
+    return rows;
+  }
   private async countRows(tenantId: string, table: TableName, extra?: string) { const q = [`select=id`, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null']; if (extra) q.push(extra); const rows = await this.supabase.select<Array<{ id: string }>>(table, `${q.join('&')}&limit=10000`); return rows.length; }
   private safeTable(table: string): TableName { if ((allowedTables as readonly string[]).includes(table)) return table as TableName; return 'operation_records'; }
   private safeField(table: TableName, field: string) { const clean = field.includes('.') ? field.split('.').pop() ?? field : field; if (!tableColumns[table].has(clean)) throw new Error('Campo não permitido para indicador nativo.'); return clean; }

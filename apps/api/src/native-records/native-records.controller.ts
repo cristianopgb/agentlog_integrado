@@ -11,8 +11,13 @@ export class NativeRecordsController {
   constructor(private readonly service: NativeRecordsService) {}
 
   @Get()
-  list(@Param('tenantId') tenantId: string, @Query('search') search?: string, @Query('quality') quality?: string, @Query('source') source?: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
-    return this.service.list(tenantId, { search, quality, source, limit, offset });
+  list(@Param('tenantId') tenantId: string, @Query('search') search?: string, @Query('quality') quality?: string, @Query('source') source?: string, @Query('source_id') source_id?: string, @Query('batch_id') batch_id?: string, @Query('date_from') date_from?: string, @Query('date_to') date_to?: string, @Query('include_archived') include_archived?: string, @Query('limit') limit?: string, @Query('offset') offset?: string) {
+    return this.service.list(tenantId, { search, quality, source, source_id, batch_id, date_from, date_to, include_archived, limit, offset });
+  }
+
+  @Get('filters')
+  filters(@Param('tenantId') tenantId: string, @Query('include_archived') includeArchived?: string) {
+    return this.service.filters(tenantId, includeArchived === 'true');
   }
 
   @Get(':recordId')
