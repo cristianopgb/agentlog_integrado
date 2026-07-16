@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 type Status = 'available' | 'partial' | 'waiting_data' | 'empty' | 'failed';
 type FieldRef = { table: TableName; field: string };
+type ValueRef = FieldRef | { coalesce: FieldRef[] };
 type FieldGroup = { key: string; label: string; any_of: FieldRef[] };
 type Definition = {
   id: string;
@@ -466,7 +467,15 @@ export class NativeIndicatorsService {
     return Object.fromEntries([...tableColumns[table]].map((field) => [this.key(table, field), row[field]]));
   }
 
-  private valueRef(cfg: Record<string, unknown>, fallbackTable: TableName, fallbackField: string): FieldRef {
+  private valueRef(cfg: Record<string, unknown>, fallbackTable: TableName, fallbackField: string): ValueRef {
+    if (Array.isArray(cfg.coalesce)) {
+      const refs = cfg.coalesce.map((item) => this.fieldRef(item as Record<string, unknown>, fallbackTable, fallbackField));
+      return { coalesce: refs };
+    }
+    return this.fieldRef(cfg, fallbackTable, fallbackField);
+  }
+
+  private fieldRef(cfg: Record<string, unknown>, fallbackTable: TableName, fallbackField: string): FieldRef {
     const table = this.safeTable(String(cfg.table ?? fallbackTable));
     return { table, field: this.safeField(table, String(cfg.field ?? fallbackField)) };
   }
@@ -485,14 +494,29 @@ export class NativeIndicatorsService {
   }
 
   private key(table: TableName, field: string) { return `${table}.${field}`; }
-  private valueAt(row: JoinedRow, ref: FieldRef) { return row[this.key(ref.table, ref.field)]; }
+  private valueAt(row: JoinedRow, ref: ValueRef): unknown {
+    if ('coalesce' in ref) {
+      for (const item of ref.coalesce) {
+        const value: unknown = this.valueAt(row, item);
+        if (this.hasValue(value)) return value;
+      }
+      return null;
+    }
+    return row[this.key(ref.table, ref.field)];
+  }
+
+  private numericValue(value: unknown) {
+    if (!this.hasValue(value)) return Number.NaN;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : Number.NaN;
+  }
 
   private aggregateJoined(rows: JoinedRow[], metric: FieldRef & { operation?: string }) {
     if (metric.operation === 'count') {
       const used = rows.filter((r) => this.hasValue(this.valueAt(r, metric))).length;
       return { value: used, used };
     }
-    const nums = rows.map((r) => Number(this.valueAt(r, metric))).filter(Number.isFinite);
+    const nums = rows.map((r) => this.numericValue(this.valueAt(r, metric))).filter(Number.isFinite);
     if (metric.operation === 'avg') return { value: nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null, used: nums.length };
     if (metric.operation === 'min') return { value: nums.length ? Math.min(...nums) : null, used: nums.length };
     if (metric.operation === 'max') return { value: nums.length ? Math.max(...nums) : null, used: nums.length };
@@ -506,7 +530,7 @@ export class NativeIndicatorsService {
     rows.forEach((row) => {
       const labelValue = this.valueAt(row, dimension);
       if (!this.hasValue(labelValue)) return;
-      const value = metric.operation === 'count' ? 1 : Number(this.valueAt(row, metric));
+      const value = metric.operation === 'count' ? 1 : this.numericValue(this.valueAt(row, metric));
       if (!Number.isFinite(value)) return;
       const current = map.get(String(labelValue)) ?? { values: [], records: 0 };
       current.values.push(value); current.records += 1; map.set(String(labelValue), current);
@@ -527,12 +551,15 @@ export class NativeIndicatorsService {
     const unit = String(cfg.unit ?? 'hours');
     const diffs = rows.map((row) => {
       for (const pair of fallback) {
-        const start = pair.start; const end = pair.end;
-        if (!start?.field || !end?.field) continue;
-        const startTable = this.safeTable(String(start.table ?? 'operation_records'));
-        const endTable = this.safeTable(String(end.table ?? 'operation_records'));
-        const diff = Date.parse(String(this.valueAt(row, { table: endTable, field: this.safeField(endTable, String(end.field)) }))) - Date.parse(String(this.valueAt(row, { table: startTable, field: this.safeField(startTable, String(start.field)) })));
-        if (Number.isFinite(diff) && diff >= 0) return diff;
+        const start = pair.start as Record<string, unknown> | undefined;
+        const end = pair.end as Record<string, unknown> | undefined;
+        const hasStart = typeof start?.field === 'string' || Array.isArray(start?.coalesce);
+        const hasEnd = typeof end?.field === 'string' || Array.isArray(end?.coalesce);
+        if (!hasStart || !hasEnd) continue;
+        const startRef = this.valueRef(start, 'operation_records', String(start.field ?? 'updated_at'));
+        const endRef = this.valueRef(end, 'operation_records', String(end.field ?? 'updated_at'));
+        const diff = Date.parse(String(this.valueAt(row, endRef))) - Date.parse(String(this.valueAt(row, startRef)));
+        if (Number.isFinite(diff) && (cfg.positive_only === true ? diff > 0 : diff >= 0)) return diff;
       }
       return Number.NaN;
     }).filter(Number.isFinite);
@@ -542,9 +569,15 @@ export class NativeIndicatorsService {
   }
 
   private ratioJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
-    const n = this.aggregateJoined(rows, this.metricRef(cfg.numerator as Record<string, unknown> | undefined, 'sum'));
-    const d = this.aggregateJoined(rows, this.metricRef(cfg.denominator as Record<string, unknown> | undefined, 'sum'));
-    return { value: Number(d.value) ? Number(n.value) / Number(d.value) : null, used: Math.min(n.used, d.used) };
+    const numerator = this.metricRef(cfg.numerator as Record<string, unknown> | undefined, 'sum');
+    const denominator = this.metricRef(cfg.denominator as Record<string, unknown> | undefined, 'sum');
+    const valid = rows.map((row) => ({
+      n: this.numericValue(this.valueAt(row, numerator)),
+      d: this.numericValue(this.valueAt(row, denominator)),
+    })).filter((row) => Number.isFinite(row.n) && Number.isFinite(row.d) && row.d !== 0);
+    const numeratorValue = valid.reduce((sum, row) => sum + row.n, 0);
+    const denominatorValue = valid.reduce((sum, row) => sum + row.d, 0);
+    return { value: denominatorValue ? numeratorValue / denominatorValue : null, used: valid.length };
   }
 
   private percentageJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
@@ -560,7 +593,7 @@ export class NativeIndicatorsService {
     const map = new Map<string, { values: number[]; records: number }>();
     rows.forEach((row) => {
       const label = this.dateBucket(this.valueAt(row, dateRef), granularity); if (!label) return;
-      const value = metric.operation === 'count' ? 1 : Number(this.valueAt(row, metric)); if (!Number.isFinite(value)) return;
+      const value = metric.operation === 'count' ? 1 : this.numericValue(this.valueAt(row, metric)); if (!Number.isFinite(value)) return;
       const current = map.get(label) ?? { values: [], records: 0 }; current.values.push(value); current.records += 1; map.set(label, current);
     });
     return [...map.entries()].map(([label, data]) => ({ label, period: label, value: this.finishAggregation(data.values, metric.operation), records: data.records })).sort((a, b) => a.label.localeCompare(b.label)).slice(0, Number(cfg.limit) || 100);
@@ -574,16 +607,16 @@ export class NativeIndicatorsService {
 
   private matchesJoinedCondition(row: JoinedRow, condition: Record<string, unknown>) {
     const table = this.safeTable(String(condition.table ?? 'operation_records'));
-    const field = this.safeField(table, String(condition.field));
-    const value = this.valueAt(row, { table, field });
+    const value = this.valueAt(row, this.valueRef(condition, table, String(condition.field ?? 'id')));
     const operator = String(condition.operator ?? 'eq');
-    const compare = typeof condition.compare_field === 'string' ? this.valueAt(row, { table, field: this.safeField(table, condition.compare_field) }) : condition.value;
+    const compare = typeof condition.compare_field === 'string' ? this.valueAt(row, this.valueRef({ table: condition.compare_table ?? table, field: condition.compare_field }, table, condition.compare_field)) : condition.value;
     if (operator === 'not_null') return this.hasValue(value);
     if (operator === 'is_null') return !this.hasValue(value);
     if (operator === 'eq') return value === compare;
     if (operator === 'neq') return value !== compare;
     if (operator === 'in') return Array.isArray(condition.value) && condition.value.includes(value);
     if (operator === 'not_in') return Array.isArray(condition.value) && !condition.value.includes(value);
+    if (operator === 'lt_today') return this.comparable(value) !== null && Number(this.comparable(value)) < Date.now();
     if (['lt','lte','gt','gte','lt_field','lte_field','gt_field','gte_field'].includes(operator)) {
       const left = this.comparable(value); const right = this.comparable(compare);
       if (left === null || right === null) return false;
