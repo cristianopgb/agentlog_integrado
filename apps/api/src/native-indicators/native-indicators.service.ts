@@ -34,6 +34,7 @@ type PreviewScope = {
   data_quality_status?: string;
   include_archived?: boolean;
 };
+type JoinedRow = Record<string, unknown> & { __operation: Record<string, unknown> };
 type Preview = {
   status: Status;
   value: unknown;
@@ -47,6 +48,7 @@ type Preview = {
   available_fields: string[];
   message: string;
   calculation_type: string;
+  display_value?: string | null;
   debug?: {
     indicator_key: string;
     calculation_type: string;
@@ -91,17 +93,23 @@ const tableColumns = {
     'delivery_number',
     'driver_name',
     'vehicle_plate',
+    'deleted_at',
   ]),
   transport_records: new Set([
     'id',
     'operation_record_id',
     'transport_status',
     'route_name',
+    'trip_number',
+    'vehicle_type',
+    'driver_phone',
     'collected_at',
     'delivered_at',
     'delivery_performance_status',
     'sla_status',
+    'cost_center',
     'updated_at',
+    'deleted_at',
   ]),
   attendance_records: new Set([
     'id',
@@ -115,7 +123,8 @@ const tableColumns = {
     'opened_at',
     'resolved_at',
     'sla_due_at',
-    'updated_at',
+     'updated_at',
+    'deleted_at',
   ]),
   finance_records: new Set([
     'id',
@@ -130,7 +139,8 @@ const tableColumns = {
     'total_amount',
     'due_at',
     'paid_at',
-    'updated_at',
+     'updated_at',
+    'deleted_at',
   ]),
   warehouse_records: new Set([
     'id',
@@ -146,7 +156,8 @@ const tableColumns = {
     'last_movement_type',
     'last_movement_at',
     'warehouse_status',
-    'updated_at',
+     'updated_at',
+    'deleted_at',
   ]),
   team_records: new Set([
     'id',
@@ -161,7 +172,8 @@ const tableColumns = {
     'workload_hours',
     'overtime_hours',
     'worked_at',
-    'updated_at',
+     'updated_at',
+    'deleted_at',
   ]),
 } satisfies Record<string, Set<string>>;
 
@@ -297,7 +309,29 @@ export class NativeIndicatorsService {
       required_fields: d.required_fields ?? [],
       optional_fields: d.optional_fields ?? [],
       sort_order: d.sort_order,
+      rationale: this.rationale(d),
+      native_data_used: this.configFieldsFromRefs(d.calculation_config ?? {}),
     };
+  }
+
+  private rationale(d: Definition) {
+    const cfg = d.calculation_config ?? {};
+    const field = this.friendly(String((cfg.metric as Record<string, unknown> | undefined)?.field ?? cfg.field ?? 'registros'));
+    const dimension = this.friendly(String((cfg.dimension as Record<string, unknown> | undefined)?.field ?? cfg.group_field ?? 'dimensão'));
+    if (d.calculation_type === 'sum') return `Somatório de ${field} nos registros tratados ativos.`;
+    if (d.calculation_type === 'avg') return `Média de ${field} nos registros tratados ativos.`;
+    if (d.calculation_type === 'count') return 'Conta os registros tratados ativos no escopo selecionado.';
+    if (d.calculation_type === 'count_distinct') return `Conta valores distintos de ${field} nos registros tratados ativos.`;
+    if (d.calculation_type === 'ratio') return 'Divide a métrica numeradora pela métrica denominadora definida na regra.';
+    if (d.calculation_type === 'group_by' || d.calculation_type === 'ranking') return `Calcula a métrica selecionada agrupando por ${dimension}.`;
+    if (d.calculation_type === 'duration_avg') return 'Calcula a média do tempo entre datas disponíveis na base nativa.';
+    if (d.calculation_type === 'percentage') return 'Calcula o percentual do subconjunto definido sobre o universo válido.';
+    if (d.calculation_type === 'time_series') return 'Calcula a evolução por período usando registros tratados ativos.';
+    return 'Calcula o indicador conforme a configuração nativa controlada.';
+  }
+
+  private friendly(field: string) {
+    return ({ id: 'registros', gross_weight: 'peso bruto', freight_value: 'valor do frete', volume_count: 'volumes', total_value: 'valor total', cubed_weight: 'peso cubado', customer_name: 'cliente', document_type: 'tipo de documento', origin_state: 'UF de origem', destination_state: 'UF de destino', route_name: 'rota', vehicle_type: 'tipo de veículo', driver_name: 'motorista', vehicle_plate: 'veículo', delivered_at: 'data de entrega', completed_at: 'data de conclusão', expected_date: 'data prevista' } as Record<string, string>)[field] ?? field.replaceAll('_', ' ');
   }
 
   private async availability(
@@ -368,157 +402,218 @@ export class NativeIndicatorsService {
     filters: Record<string, unknown>,
   ): Promise<Preview> {
     const cfg = d.calculation_config ?? {};
-    const table = this.safeTable(String(cfg.table));
     const calc = d.calculation_type;
-    const field = cfg.field ? this.safeField(table, String(cfg.field)) : 'id';
-    const scoped = await this.scopedRows(tenantId, table, filters);
-    const filtered = scoped.rows.filter((row) =>
+    const scoped = await this.scopedRows(tenantId, 'operation_records', filters);
+    const joined = await this.joinedRows(tenantId, scoped.rows, filters);
+    const filtered = joined.filter((row) =>
       this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined),
     );
-    const ignored = this.ignoredForCalculation(filtered, table, cfg, calc, field);
     const base = {
       status,
       missing_fields: [],
-      available_fields: this.configFields(table, cfg, field),
+      available_fields: this.configFieldsFromRefs(cfg),
       records_considered: filtered.length,
-      records_used: calc === 'count' ? filtered.length : Math.max(filtered.length - ignored, 0),
-      records_ignored_missing_data: calc === 'count' ? 0 : ignored,
+      records_used: filtered.length,
+      records_ignored_missing_data: 0,
       scope: scoped.scope,
-      message: this.scopeMessage(scoped.scope, ignored),
+      message: this.scopeMessage(scoped.scope, 0),
       calculation_type: calc,
     };
-    if (calc === 'count')
-      return {
-        ...base,
-        value: filtered.length,
-        series: [],
-        table: [],
-        records_used: filtered.length,
-        records_ignored_missing_data: 0,
-      };
-    if (calc === 'sum')
-      return {
-        ...base,
-        value: this.aggregate(filtered, table, { operation: 'sum', field }),
-        series: [],
-        table: [],
-      };
-    if (calc === 'avg')
-      return {
-        ...base,
-        value: this.aggregate(filtered, table, { operation: 'avg', field }),
-        series: [],
-        table: [],
-      };
-    if (calc === 'min')
-      return {
-        ...base,
-        value: this.aggregate(filtered, table, { operation: 'min', field }),
-        series: [],
-        table: [],
-      };
-    if (calc === 'max')
-      return {
-        ...base,
-        value: this.aggregate(filtered, table, { operation: 'max', field }),
-        series: [],
-        table: [],
-      };
-    if (calc === 'latest')
-      return {
-        ...base,
-        value: null,
-        series: [],
-        table: filtered
-          .sort((a, b) =>
-            String(b.updated_at ?? '').localeCompare(
-              String(a.updated_at ?? ''),
-            ),
-          )
-          .slice(0, Number(cfg.limit) || 10),
-      };
+    if (calc === 'count') return { ...base, value: filtered.length, series: [], table: [] };
+    if (calc === 'count_distinct') {
+      const ref = this.valueRef(cfg, 'operation_records', 'id');
+      const values = new Set(filtered.map((r) => this.valueAt(r, ref)).filter((v) => this.hasValue(v)).map(String));
+      return { ...base, value: values.size, series: [], table: [], records_used: values.size, records_ignored_missing_data: filtered.length - values.size };
+    }
+    if (['sum', 'avg', 'min', 'max'].includes(calc)) {
+      const metric = this.metricRef(cfg, calc);
+      const agg = this.aggregateJoined(filtered, metric);
+      return { ...base, value: agg.value, series: [], table: [], records_used: agg.used, records_ignored_missing_data: filtered.length - agg.used, message: this.scopeMessage(scoped.scope, filtered.length - agg.used) };
+    }
     if (calc === 'group_by' || calc === 'ranking') {
-      const grouped = this.group(filtered, table, cfg);
-      return {
-        ...base,
-        value: grouped.length ? (grouped[0]?.value ?? null) : null,
-        series: grouped,
-        table: grouped,
-        records_used: grouped.reduce(
-          (sum, row) => sum + Number(row.records ?? 0),
-          0,
-        ),
-        records_ignored_missing_data:
-          filtered.length -
-          grouped.reduce((sum, row) => sum + Number(row.records ?? 0), 0),
-      };
+      const grouped = this.groupJoined(filtered, cfg);
+      const used = grouped.reduce((sum, row) => sum + Number(row.records ?? 0), 0);
+      return { ...base, value: grouped[0]?.value ?? null, series: grouped, table: grouped, records_used: used, records_ignored_missing_data: filtered.length - used, message: this.scopeMessage(scoped.scope, filtered.length - used) };
     }
     if (calc === 'duration_avg') {
-      const duration = this.avgDuration(filtered, table, cfg);
-      return {
-        ...base,
-        value: duration.value,
-        series: [],
-        table: [],
-        records_used: duration.used,
-        records_ignored_missing_data: filtered.length - duration.used,
-      };
+      const duration = this.avgDurationJoined(filtered, cfg);
+      const ignored = filtered.length - duration.used;
+      return { ...base, value: duration.value, display_value: duration.display_value, series: [], table: [], records_used: duration.used, records_ignored_missing_data: ignored, message: duration.used ? this.scopeMessage(scoped.scope, ignored) : 'Ainda não há par de datas suficiente para calcular este indicador.' } as Preview;
     }
     if (calc === 'ratio') {
-      const ratio = this.ratio(filtered, table, cfg);
-      return {
-        ...base,
-        value: ratio.value,
-        series: [],
-        table: [],
-        records_used: ratio.used,
-        records_ignored_missing_data: filtered.length - ratio.used,
-      };
+      const ratio = this.ratioJoined(filtered, cfg);
+      return { ...base, value: ratio.value, series: [], table: [], records_used: ratio.used, records_ignored_missing_data: filtered.length - ratio.used };
     }
     if (calc === 'percentage') {
-      const pct = this.percentage(filtered, table, cfg);
-      return {
-        ...base,
-        value: pct.value,
-        series: [],
-        table: [],
-        records_used: pct.used,
-        records_ignored_missing_data: filtered.length - pct.used,
-      };
+      const pct = this.percentageJoined(filtered, cfg);
+      return { ...base, value: pct.value, series: [], table: [], records_used: pct.used, records_ignored_missing_data: filtered.length - pct.used };
     }
     if (calc === 'time_series') {
-      const series = this.timeSeries(filtered, table, cfg);
-      return {
-        ...base,
-        value: series.length
-          ? (series[series.length - 1]?.value ?? null)
-          : null,
-        series,
-        table: series,
-        records_used: series.reduce(
-          (sum, row) => sum + Number(row.records ?? 0),
-          0,
-        ),
-        records_ignored_missing_data:
-          filtered.length -
-          series.reduce((sum, row) => sum + Number(row.records ?? 0), 0),
-      };
+      const series = this.timeSeriesJoined(filtered, cfg);
+      const used = series.reduce((sum, row) => sum + Number(row.records ?? 0), 0);
+      return { ...base, value: series.at(-1)?.value ?? null, series, table: series, records_used: used, records_ignored_missing_data: filtered.length - used };
     }
-    return {
-      status: 'unavailable',
-      value: null,
-      series: [],
-      table: [],
-      records_considered: 0,
-      records_used: 0,
-      records_ignored_missing_data: 0,
-      scope: { scope: 'all' },
-      missing_fields: [],
-      available_fields: [],
-      message:
-        'Este indicador ainda não possui cálculo habilitado nesta versão.',
-      calculation_type: calc,
+    return { ...base, status: 'unavailable', value: null, series: [], table: [], message: 'Este indicador ainda não possui cálculo habilitado nesta versão.' };
+  }
+
+  private async joinedRows(tenantId: string, operations: Record<string, unknown>[], filters: Record<string, unknown>): Promise<JoinedRow[]> {
+    const rows = operations.map((operation) => ({ __operation: operation, ...this.prefixRow('operation_records', operation) })) as JoinedRow[];
+    for (const table of allowedTables) {
+      if (table === 'operation_records') continue;
+      const scoped = await this.scopedRows(tenantId, table, filters);
+      const byOperation = new Map(scoped.rows.map((row) => [String(row.operation_record_id), row]));
+      rows.forEach((row) => Object.assign(row, this.prefixRow(table, byOperation.get(String(row.__operation.id)) ?? {})));
+    }
+    return rows;
+  }
+
+  private prefixRow(table: TableName, row: Record<string, unknown>) {
+    return Object.fromEntries([...tableColumns[table]].map((field) => [this.key(table, field), row[field]]));
+  }
+
+  private valueRef(cfg: Record<string, unknown>, fallbackTable: TableName, fallbackField: string): FieldRef {
+    const table = this.safeTable(String(cfg.table ?? fallbackTable));
+    return { table, field: this.safeField(table, String(cfg.field ?? fallbackField)) };
+  }
+
+  private metricRef(cfg: Record<string, unknown> | undefined, fallbackOperation = 'sum') {
+    const source = cfg ?? {};
+    const metric = (source.metric as Record<string, unknown> | undefined) ?? source;
+    const table = this.safeTable(String(metric.table ?? source.table ?? 'operation_records'));
+    return { table, field: this.safeField(table, String(metric.field ?? source.field ?? 'id')), operation: String(metric.aggregation ?? metric.operation ?? fallbackOperation) };
+  }
+
+  private dimensionRef(cfg: Record<string, unknown>) {
+    const dimension = (cfg.dimension as Record<string, unknown> | undefined) ?? cfg;
+    const table = this.safeTable(String(dimension.table ?? cfg.table ?? 'operation_records'));
+    return { table, field: this.safeField(table, String(dimension.field ?? cfg.group_field ?? cfg.field ?? 'id')) };
+  }
+
+  private key(table: TableName, field: string) { return `${table}.${field}`; }
+  private valueAt(row: JoinedRow, ref: FieldRef) { return row[this.key(ref.table, ref.field)]; }
+
+  private aggregateJoined(rows: JoinedRow[], metric: FieldRef & { operation?: string }) {
+    if (metric.operation === 'count') {
+      const used = rows.filter((r) => this.hasValue(this.valueAt(r, metric))).length;
+      return { value: used, used };
+    }
+    const nums = rows.map((r) => Number(this.valueAt(r, metric))).filter(Number.isFinite);
+    if (metric.operation === 'avg') return { value: nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null, used: nums.length };
+    if (metric.operation === 'min') return { value: nums.length ? Math.min(...nums) : null, used: nums.length };
+    if (metric.operation === 'max') return { value: nums.length ? Math.max(...nums) : null, used: nums.length };
+    return { value: nums.reduce((a, b) => a + b, 0), used: nums.length };
+  }
+
+  private groupJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
+    const dimension = this.dimensionRef(cfg);
+    const metric = this.metricRef((cfg.metric as Record<string, unknown> | undefined) ?? cfg, 'count');
+    const map = new Map<string, { values: number[]; records: number }>();
+    rows.forEach((row) => {
+      const labelValue = this.valueAt(row, dimension);
+      if (!this.hasValue(labelValue)) return;
+      const value = metric.operation === 'count' ? 1 : Number(this.valueAt(row, metric));
+      if (!Number.isFinite(value)) return;
+      const current = map.get(String(labelValue)) ?? { values: [], records: 0 };
+      current.values.push(value); current.records += 1; map.set(String(labelValue), current);
+    });
+    return [...map.entries()].map(([label, data]) => ({ label, value: this.finishAggregation(data.values, metric.operation), records: data.records })).sort((a, b) => Number(b.value) - Number(a.value)).slice(0, Number(cfg.limit) || 20);
+  }
+
+  private finishAggregation(values: number[], operation?: string) {
+    if (operation === 'avg') return values.reduce((a, b) => a + b, 0) / values.length;
+    if (operation === 'min') return Math.min(...values);
+    if (operation === 'max') return Math.max(...values);
+    return values.reduce((a, b) => a + b, 0);
+  }
+
+  private avgDurationJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
+    const pairs = Array.isArray(cfg.date_pairs) ? cfg.date_pairs as Array<Record<string, Record<string, string>>> : [];
+    const fallback = pairs.length ? pairs : [{ start: { table: cfg.table ?? 'operation_records', field: cfg.start_field ?? cfg.field }, end: { table: cfg.table ?? 'operation_records', field: cfg.end_field } }];
+    const unit = String(cfg.unit ?? 'hours');
+    const diffs = rows.map((row) => {
+      for (const pair of fallback) {
+        const start = pair.start; const end = pair.end;
+        if (!start?.field || !end?.field) continue;
+        const startTable = this.safeTable(String(start.table ?? 'operation_records'));
+        const endTable = this.safeTable(String(end.table ?? 'operation_records'));
+        const diff = Date.parse(String(this.valueAt(row, { table: endTable, field: this.safeField(endTable, String(end.field)) }))) - Date.parse(String(this.valueAt(row, { table: startTable, field: this.safeField(startTable, String(start.field)) })));
+        if (Number.isFinite(diff) && diff >= 0) return diff;
+      }
+      return Number.NaN;
+    }).filter(Number.isFinite);
+    const divisor = unit === 'days' ? 86400000 : 3600000;
+    const value = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length / divisor : null;
+    return { value, used: diffs.length, display_value: value === null ? null : unit === 'days' ? `${value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} dias` : value >= 24 ? `${(value / 24).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} dias` : `${value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} horas` };
+  }
+
+  private ratioJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
+    const n = this.aggregateJoined(rows, this.metricRef(cfg.numerator as Record<string, unknown> | undefined, 'sum'));
+    const d = this.aggregateJoined(rows, this.metricRef(cfg.denominator as Record<string, unknown> | undefined, 'sum'));
+    return { value: Number(d.value) ? Number(n.value) / Number(d.value) : null, used: Math.min(n.used, d.used) };
+  }
+
+  private percentageJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
+    const denominator = this.filteredJoinedRows(rows, (cfg.denominator as Record<string, unknown> | undefined)?.filter ?? cfg.denominator_filter);
+    const numerator = this.filteredJoinedRows(denominator, (cfg.numerator as Record<string, unknown> | undefined)?.filter ?? cfg.numerator_filter);
+    return { value: denominator.length ? Math.round((numerator.length / denominator.length) * 10000) / 100 : null, used: denominator.length };
+  }
+
+  private timeSeriesJoined(rows: JoinedRow[], cfg: Record<string, unknown>) {
+    const dateRef = this.valueRef({ table: cfg.table, field: cfg.date_field ?? cfg.group_field ?? cfg.field }, 'operation_records', 'updated_at');
+    const metric = this.metricRef(cfg.aggregation as Record<string, unknown> | undefined, 'count');
+    const granularity = String(cfg.granularity ?? 'day');
+    const map = new Map<string, { values: number[]; records: number }>();
+    rows.forEach((row) => {
+      const label = this.dateBucket(this.valueAt(row, dateRef), granularity); if (!label) return;
+      const value = metric.operation === 'count' ? 1 : Number(this.valueAt(row, metric)); if (!Number.isFinite(value)) return;
+      const current = map.get(label) ?? { values: [], records: 0 }; current.values.push(value); current.records += 1; map.set(label, current);
+    });
+    return [...map.entries()].map(([label, data]) => ({ label, period: label, value: this.finishAggregation(data.values, metric.operation), records: data.records })).sort((a, b) => a.label.localeCompare(b.label)).slice(0, Number(cfg.limit) || 100);
+  }
+
+  private filteredJoinedRows(rows: JoinedRow[], filter: unknown) {
+    if (!filter) return rows;
+    const filters = Array.isArray(filter) ? filter : [filter];
+    return rows.filter((row) => filters.every((item) => this.matchesJoinedCondition(row, item as Record<string, unknown>)));
+  }
+
+  private matchesJoinedCondition(row: JoinedRow, condition: Record<string, unknown>) {
+    const table = this.safeTable(String(condition.table ?? 'operation_records'));
+    const field = this.safeField(table, String(condition.field));
+    const value = this.valueAt(row, { table, field });
+    const operator = String(condition.operator ?? 'eq');
+    const compare = typeof condition.compare_field === 'string' ? this.valueAt(row, { table, field: this.safeField(table, condition.compare_field) }) : condition.value;
+    if (operator === 'not_null') return this.hasValue(value);
+    if (operator === 'is_null') return !this.hasValue(value);
+    if (operator === 'eq') return value === compare;
+    if (operator === 'neq') return value !== compare;
+    if (operator === 'in') return Array.isArray(condition.value) && condition.value.includes(value);
+    if (operator === 'not_in') return Array.isArray(condition.value) && !condition.value.includes(value);
+    if (['lt','lte','gt','gte','lt_field','lte_field','gt_field','gte_field'].includes(operator)) {
+      const left = this.comparable(value); const right = this.comparable(compare);
+      if (left === null || right === null) return false;
+      if (operator.startsWith('lt')) return left < right; if (operator.startsWith('lte')) return left <= right; if (operator.startsWith('gt')) return left > right; return left >= right;
+    }
+    return false;
+  }
+
+  private comparable(value: unknown) {
+    if (!this.hasValue(value)) return null;
+    const date = Date.parse(String(value)); if (Number.isFinite(date) && /[-:T]/.test(String(value))) return date;
+    const num = Number(value); return Number.isFinite(num) ? num : String(value);
+  }
+
+  private configFieldsFromRefs(cfg: Record<string, unknown>) {
+    const labels = new Set<string>();
+    const visit = (v: unknown) => {
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v && typeof v === 'object') {
+        const obj = v as Record<string, unknown>;
+        if (typeof obj.table === 'string' && typeof obj.field === 'string') labels.add(`${obj.table}.${obj.field}`);
+        Object.values(obj).forEach(visit);
+      }
     };
+    visit(cfg); return [...labels];
   }
 
   private previewDebug(d: Definition, result: Preview) {
