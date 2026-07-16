@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 
-type Status = 'available' | 'partial' | 'unavailable' | 'empty' | 'failed';
+type Status = 'available' | 'partial' | 'waiting_data' | 'empty' | 'failed';
 type FieldRef = { table: TableName; field: string };
 type FieldGroup = { key: string; label: string; any_of: FieldRef[] };
 type Definition = {
@@ -25,9 +25,6 @@ type TableName = keyof typeof tableColumns;
 
 type PreviewScope = {
   scope: string;
-  source_data_source_id?: string;
-  source_data_source_name?: string | null;
-  source_staging_batch_id?: string;
   date_from?: string;
   date_to?: string;
   status?: string;
@@ -71,8 +68,6 @@ const allowedTables = [
 const tableColumns = {
   operation_records: new Set([
     'id',
-    'source_data_source_id',
-    'source_staging_batch_id',
     'document_type',
     'customer_name',
     'customer_document',
@@ -201,7 +196,7 @@ export class NativeIndicatorsService {
       total: defs.length,
       available: statuses.filter((s) => s.status === 'available').length,
       partial: statuses.filter((s) => s.status === 'partial').length,
-      unavailable: statuses.filter((s) => s.status === 'unavailable').length,
+      waiting_data: statuses.filter((s) => s.status === 'waiting_data').length,
       empty: statuses.filter((s) => s.status === 'empty').length,
     };
   }
@@ -233,17 +228,17 @@ export class NativeIndicatorsService {
       );
       if (
         availability.status === 'empty' ||
-        availability.status === 'unavailable'
+        availability.status === 'waiting_data'
       ) {
         result = {
           status: availability.status,
           value: null,
           series: [],
           table: [],
-          records_considered: 0,
+          records_considered: availability.records_considered,
           records_used: 0,
           records_ignored_missing_data: 0,
-          scope: { scope: 'all' },
+          scope: availability.scope,
           missing_fields: availability.missing_fields,
           available_fields: availability.available_fields,
           message: this.longMessage(availability.status),
@@ -318,16 +313,16 @@ export class NativeIndicatorsService {
     const cfg = d.calculation_config ?? {};
     const field = this.friendly(String((cfg.metric as Record<string, unknown> | undefined)?.field ?? cfg.field ?? 'registros'));
     const dimension = this.friendly(String((cfg.dimension as Record<string, unknown> | undefined)?.field ?? cfg.group_field ?? 'dimensão'));
-    if (d.calculation_type === 'sum') return `Somatório de ${field} nos registros tratados ativos.`;
-    if (d.calculation_type === 'avg') return `Média de ${field} nos registros tratados ativos.`;
-    if (d.calculation_type === 'count') return 'Conta os registros tratados ativos no escopo selecionado.';
-    if (d.calculation_type === 'count_distinct') return `Conta valores distintos de ${field} nos registros tratados ativos.`;
-    if (d.calculation_type === 'ratio') return 'Divide a métrica numeradora pela métrica denominadora definida na regra.';
-    if (d.calculation_type === 'group_by' || d.calculation_type === 'ranking') return `Calcula a métrica selecionada agrupando por ${dimension}.`;
-    if (d.calculation_type === 'duration_avg') return 'Calcula a média do tempo entre datas disponíveis na base nativa.';
-    if (d.calculation_type === 'percentage') return 'Calcula o percentual do subconjunto definido sobre o universo válido.';
-    if (d.calculation_type === 'time_series') return 'Calcula a evolução por período usando registros tratados ativos.';
-    return 'Calcula o indicador conforme a configuração nativa controlada.';
+    if (d.calculation_type === 'sum') return `Soma o campo nativo de ${field} nos registros da base nativa dentro do escopo selecionado.`;
+    if (d.calculation_type === 'avg') return `Calcula a média do campo nativo de ${field} nos registros da base nativa dentro do escopo selecionado.`;
+    if (d.calculation_type === 'count') return 'Conta registros existentes na base nativa dentro do escopo selecionado.';
+    if (d.calculation_type === 'count_distinct') return `Conta valores distintos do campo nativo de ${field} na base nativa.`;
+    if (d.calculation_type === 'ratio') return 'Divide métricas calculadas exclusivamente sobre campos da base nativa.';
+    if (d.calculation_type === 'group_by' || d.calculation_type === 'ranking') return `Calcula a métrica nativa selecionada agrupando pelo campo nativo de ${dimension}.`;
+    if (d.calculation_type === 'duration_avg') return 'Calcula a média do tempo entre campos nativos de data disponíveis na base nativa.';
+    if (d.calculation_type === 'percentage') return 'Calcula o percentual usando numerador e denominador definidos por campos nativos.';
+    if (d.calculation_type === 'time_series') return 'Calcula a evolução por período usando campos nativos de data da base nativa.';
+    return 'Calcula o indicador conforme configuração controlada sobre a base nativa.';
   }
 
   private friendly(field: string) {
@@ -351,6 +346,7 @@ export class NativeIndicatorsService {
         missing_fields: [],
         available_fields: [],
         message: this.shortMessage('empty'),
+        scope: scopeRows.scope,
       };
     const required = d.required_fields ?? [];
     const results = await Promise.all(
@@ -365,13 +361,14 @@ export class NativeIndicatorsService {
         ? 'available'
         : available.length > 0
           ? 'partial'
-          : 'unavailable';
+          : 'waiting_data';
     return {
       status,
       records_considered: total,
       missing_fields: missing,
       available_fields: available,
       message: this.shortMessage(status),
+      scope: scopeRows.scope,
     };
   }
 
@@ -405,9 +402,7 @@ export class NativeIndicatorsService {
     const calc = d.calculation_type;
     const scoped = await this.scopedRows(tenantId, 'operation_records', filters);
     const joined = await this.joinedRows(tenantId, scoped.rows, filters);
-    const filtered = joined.filter((row) =>
-      this.matchesWhere(row, cfg.where as Record<string, unknown> | undefined),
-    );
+    const filtered = this.filteredJoinedRows(joined, cfg.filter ?? cfg.where);
     const base = {
       status,
       missing_fields: [],
@@ -453,7 +448,7 @@ export class NativeIndicatorsService {
       const used = series.reduce((sum, row) => sum + Number(row.records ?? 0), 0);
       return { ...base, value: series.at(-1)?.value ?? null, series, table: series, records_used: used, records_ignored_missing_data: filtered.length - used };
     }
-    return { ...base, status: 'unavailable', value: null, series: [], table: [], message: 'Este indicador ainda não possui cálculo habilitado nesta versão.' };
+    return { ...base, status: 'waiting_data', value: null, series: [], table: [], message: 'Este indicador está aguardando dados nativos compatíveis para cálculo.' };
   }
 
   private async joinedRows(tenantId: string, operations: Record<string, unknown>[], filters: Record<string, unknown>): Promise<JoinedRow[]> {
@@ -938,25 +933,6 @@ export class NativeIndicatorsService {
         scope: operationScope.scope,
       };
     }
-    if (scope.scope === 'last_batch') {
-      const batchId = this.latestBatchId(next);
-      scope.source_staging_batch_id = batchId;
-      next = batchId
-        ? next.filter((r) => r.source_staging_batch_id === batchId)
-        : [];
-    }
-    if (typeof filters.source_data_source_id === 'string') {
-      scope.source_data_source_id = filters.source_data_source_id;
-      next = next.filter(
-        (r) => r.source_data_source_id === filters.source_data_source_id,
-      );
-    }
-    if (typeof filters.source_staging_batch_id === 'string') {
-      scope.source_staging_batch_id = filters.source_staging_batch_id;
-      next = next.filter(
-        (r) => r.source_staging_batch_id === filters.source_staging_batch_id,
-      );
-    }
     if (typeof filters.status === 'string') {
       scope.status = filters.status;
       next = next.filter((r) => r.status === filters.status);
@@ -982,42 +958,17 @@ export class NativeIndicatorsService {
           String(r.issued_at ?? r.updated_at ?? '') <= String(filters.date_to),
       );
     }
-    if (scope.source_data_source_id) {
-      const src = await this.supabase.select<Array<{ name: string }>>(
-        'data_sources',
-        `select=name&tenant_id=eq.${tenantId}&id=eq.${scope.source_data_source_id}&limit=1`,
-      );
-      scope.source_data_source_name = src[0]?.name ?? null;
-    }
     return { rows: next, scope };
-  }
-  private latestBatchId(rows: Record<string, unknown>[]) {
-    return [...rows]
-      .filter((r) => typeof r.source_staging_batch_id === 'string')
-      .sort((a, b) =>
-        String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')),
-      )[0]?.source_staging_batch_id as string | undefined;
   }
   private hasValue(v: unknown) {
     return v !== null && v !== undefined && v !== '';
   }
-  private async activeSourceIds(tenantId: string) {
-    const rows = await this.supabase.select<Array<{ id: string }>>(
-      'data_sources',
-      `select=id&tenant_id=eq.${tenantId}&status=eq.active&limit=10000`,
-    );
-    return rows.map((r) => r.id);
-  }
 
   private scopeMessage(scope: PreviewScope, ignored: number) {
     const parts = [
-      scope.scope === 'last_batch'
-        ? 'Cálculo realizado usando somente o último lote processado.'
-        : scope.source_data_source_id
-          ? 'Cálculo realizado usando somente a integração selecionada.'
-          : scope.date_from || scope.date_to
-            ? 'Cálculo realizado usando somente o período selecionado.'
-            : 'Cálculo realizado usando todos os dados tratados disponíveis para este tenant.',
+      scope.date_from || scope.date_to
+        ? 'Cálculo realizado usando somente o período selecionado da base nativa.'
+        : 'Cálculo realizado usando todos os dados nativos disponíveis para este tenant.',
     ];
     if (ignored > 0)
       parts.push(
@@ -1037,31 +988,16 @@ export class NativeIndicatorsService {
     table: TableName,
     includeArchived = false,
   ): Promise<Record<string, unknown>[]> {
+    void includeArchived;
     const filters = [
       `select=*`,
       `tenant_id=eq.${tenantId}`,
       'deleted_at=is.null',
     ];
-    if (!includeArchived) {
-      const ids = await this.activeSourceIds(tenantId);
-      if (!ids.length) return [];
-      if (table === 'operation_records')
-        filters.push(
-          `source_data_source_id=in.(${ids.map((id) => `"${id}"`).join(',')})`,
-        );
-    }
     const rows = await this.supabase.select<Record<string, unknown>[]>(
       table,
       `${filters.join('&')}&limit=10000`,
     );
-    if (!includeArchived && table !== 'operation_records') {
-      const opIds = new Set(
-        (await this.rows(tenantId, 'operation_records', false)).map((r) =>
-          String(r.id),
-        ),
-      );
-      return rows.filter((r) => opIds.has(String(r.operation_record_id)));
-    }
     return rows;
   }
   private async countRows(tenantId: string, table: TableName, extra?: string) {
@@ -1091,8 +1027,8 @@ export class NativeIndicatorsService {
       available: 'Indicador disponível.',
       partial:
         'Indicador pronto; cálculo executado com os dados nativos disponíveis.',
-      unavailable:
-        'Indicador pronto; aguardando a base nativa receber os dados necessários.',
+      waiting_data:
+        'Indicador pronto; aguardando dados nos campos nativos necessários.',
       empty: 'Indicador pronto; aguardando dados tratados na base nativa.',
       failed: 'Não foi possível calcular este indicador agora.',
     }[status];
@@ -1100,8 +1036,8 @@ export class NativeIndicatorsService {
   private longMessage(status: Status) {
     if (status === 'partial')
       return 'Indicador pronto; cálculo executado com os dados nativos disponíveis.';
-    if (status === 'unavailable')
-      return 'Indicador pronto; aguardando a base nativa receber os dados necessários.';
+    if (status === 'waiting_data')
+      return 'Indicador pronto; aguardando dados nos campos nativos necessários. A ausência de dados não bloqueia operação, integração, pareamento ou normalização.';
     return this.shortMessage(status);
   }
   private async log(
