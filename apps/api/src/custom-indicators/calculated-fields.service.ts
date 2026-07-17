@@ -100,6 +100,9 @@ export class CalculatedFieldsService {
         ? 'Prévia calculada somente com a base nativa tratada.'
         : 'Dados insuficientes: os campos selecionados ainda não possuem dados suficientes.',
       fields_used: this.fieldKeys(formula.expression),
+      series: [],
+      table: [],
+      filters_used: [],
     };
   }
 

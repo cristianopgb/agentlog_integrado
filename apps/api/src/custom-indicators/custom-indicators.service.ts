@@ -223,7 +223,7 @@ export class CustomIndicatorsService {
           !blockedFields.includes(f.field_key),
       )
       .map((f) => this.enrichField(f, rows));
-    return { data };
+    return { data: this.dedupeFields(data) };
   }
   async list(tenantId: string) {
     return {
@@ -728,9 +728,10 @@ export class CustomIndicatorsService {
         c.denominator_field,
       );
       return {
-        value: d
-          ? (n / d) * (c.operation_key === 'PERCENTUAL' ? 100 : 1)
-          : null,
+        value:
+          n !== null && d
+            ? (n / d) * (c.operation_key === 'PERCENTUAL' ? 100 : 1)
+            : null,
         series: [],
         table: [],
         ignored: 0,
@@ -776,12 +777,15 @@ export class CustomIndicatorsService {
       ];
       const table = [...rowMap.entries()].map(([label, subset]) => {
         const item: Record<string, unknown> = { label };
-        for (const col of columnLabels)
-          item[col] = this.pivotMeasure(
+        for (const col of columnLabels) {
+          const cell = this.pivotMeasure(
             subset.filter((r) => String(r[column] ?? 'Não informado') === col),
             value,
             by,
-          ).value;
+          );
+          item[col] = cell.value;
+          item[`${col}_used_count`] = cell.used;
+        }
         return item;
       });
       return {
@@ -799,10 +803,15 @@ export class CustomIndicatorsService {
         const key = String(r[groupField] ?? 'Não informado');
         map.set(key, [...(map.get(key) ?? []), r]);
       });
-      const table = [...map.entries()].map(([label, subset]) => ({
-        label,
-        value: this.pivotMeasure(subset, value, by).value,
-      }));
+      const table = [...map.entries()].map(([label, subset]) => {
+        const grouped = this.pivotMeasure(subset, value, by);
+        return {
+          label,
+          value: grouped.value,
+          records_used_in_group: grouped.used,
+          used_count: grouped.used,
+        };
+      });
       return {
         value: null,
         series: table,
@@ -868,8 +877,8 @@ export class CustomIndicatorsService {
       };
     }
     const nums = rows
-      .map((r) => Number(r[value.field]))
-      .filter(Number.isFinite);
+      .map((r) => this.numericValue(r[value.field]))
+      .filter((v): v is number => v !== null);
     const result =
       agg === 'MÉDIA'
         ? nums.length
@@ -883,7 +892,9 @@ export class CustomIndicatorsService {
             ? nums.length
               ? Math.max(...nums)
               : null
-            : nums.reduce((a, b) => a + b, 0);
+            : nums.length
+              ? nums.reduce((a, b) => a + b, 0)
+              : null;
     return {
       value: result,
       used: nums.length,
@@ -916,7 +927,9 @@ export class CustomIndicatorsService {
             ? values.length
               ? Math.max(...values)
               : null
-            : values.reduce((a, b) => a + b, 0);
+            : values.length
+              ? values.reduce((a, b) => a + b, 0)
+              : null;
     return { value, ignored: rows.length - values.length };
   }
   private group(
@@ -929,7 +942,7 @@ export class CustomIndicatorsService {
     rows.forEach((r) => {
       const label = String(r[group ?? ''] ?? 'Não informado');
       const value = this.aggregate([r], op, metric);
-      map.set(label, (map.get(label) ?? 0) + value);
+      map.set(label, (map.get(label) ?? 0) + (value ?? 0));
     });
     return [...map.entries()]
       .map(([label, value]) => ({ label, value }))
@@ -974,13 +987,13 @@ export class CustomIndicatorsService {
   ) {
     if (op === 'CONTAGEM') return rows.length;
     const nums = rows
-      .map((r) => Number(r[field ?? '']))
-      .filter(Number.isFinite);
+      .map((r) => this.numericValue(r[field ?? '']))
+      .filter((v): v is number => v !== null);
     if (op === 'MÉDIA')
-      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-    if (op === 'MÍNIMO') return nums.length ? Math.min(...nums) : 0;
-    if (op === 'MÁXIMO') return nums.length ? Math.max(...nums) : 0;
-    return nums.reduce((a, b) => a + b, 0);
+      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    if (op === 'MÍNIMO') return nums.length ? Math.min(...nums) : null;
+    if (op === 'MÁXIMO') return nums.length ? Math.max(...nums) : null;
+    return nums.length ? nums.reduce((a, b) => a + b, 0) : null;
   }
   private previewText(c: Config) {
     if (c.operation_key === 'PIVOT_CONTROLLED') {
@@ -1182,10 +1195,25 @@ export class CustomIndicatorsService {
       calculation_kind: f.calculation_kind as Field['calculation_kind'],
       formula_config: f.formula_config as Formula,
     }));
-    return [
+    return this.dedupeFields([
       ...native.map((f) => ({ ...f, source: 'native' as const })),
       ...virtualFields,
-    ];
+    ]);
+  }
+  private dedupeFields(fields: Field[]): Field[] {
+    const map = new Map<string, Field>();
+    for (const field of fields) {
+      const key = `${field.base_table}:${field.field_key}`;
+      const current = map.get(key);
+      if (!current || (!current.tenant_id && field.tenant_id))
+        map.set(key, field);
+    }
+    return [...map.values()];
+  }
+  private numericValue(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
   }
   private enrichField(f: Field, rows: Record<string, unknown>[]): Field {
     const recordsWithData = rows.filter(
