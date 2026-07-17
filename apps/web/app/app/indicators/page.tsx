@@ -169,7 +169,7 @@ export default function IndicatorsPage() {
   const [tab, setTab] = useState<'native' | 'custom'>('native');
   const [native, setNative] = useState<Indicator[]>([]);
   const [custom, setCustom] = useState<CustomIndicator[]>([]);
-  const [calculated, setCalculated] = useState<CalculatedField[]>([]);
+  const [, setCalculated] = useState<CalculatedField[]>([]);
   const [fields, setFields] = useState<IndicatorField[]>([]);
   const [message, setMessage] = useState('Carregando indicadores...');
   const [nativePreview, setNativePreview] = useState<IndicatorPreview | null>(
@@ -516,15 +516,9 @@ export default function IndicatorsPage() {
       {tab === 'custom' ? (
         <CustomSection
           items={custom}
-          calculated={calculated}
-          fields={catalog}
           tenantId={tenantId}
           canManage={canManage}
           openCreator={() => setModalOpen(true)}
-          openCalcCreator={() => {
-            setCalcTarget('standalone');
-            setCalcModalOpen(true);
-          }}
           reload={() => reload()}
           setMessage={setMessage}
         />
@@ -970,22 +964,17 @@ function ScopeFilters({
 }
 function CustomSection({
   items,
-  calculated,
-  fields,
   tenantId,
   canManage,
   openCreator,
-  openCalcCreator,
+
   reload,
   setMessage,
 }: {
   items: CustomIndicator[];
-  calculated: CalculatedField[];
-  fields: IndicatorField[];
   tenantId: string | null;
   canManage: boolean;
   openCreator: () => void;
-  openCalcCreator: () => void;
   reload: () => void;
   setMessage: (m: string) => void;
 }) {
@@ -1004,39 +993,6 @@ function CustomSection({
   }
   return (
     <div className="space-y-4">
-      <Card>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-bold">Campos disponíveis</h2>
-            <p className="text-sm text-slate-600">
-              Campos nativos e calculados ativos para Valores.{' '}
-              {calculated.length} campo(s) calculado(s) cadastrado(s).
-            </p>
-          </div>
-          <button
-            disabled={!canManage}
-            onClick={openCalcCreator}
-            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-          >
-            + Criar campo calculado
-          </button>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2">
-          {fields.map((f) => (
-            <div
-              key={f.field_key}
-              className="flex items-center justify-between rounded-xl border p-2 text-sm"
-            >
-              <span>{f.label}</span>
-              <StatusBadge
-                tone={f.source === 'calculated' ? 'success' : 'neutral'}
-              >
-                {f.source === 'calculated' ? 'Calculado' : 'Nativo'}
-              </StatusBadge>
-            </div>
-          ))}
-        </div>
-      </Card>
       <div className="flex justify-end">
         <button
           disabled={!canManage}
@@ -1143,13 +1099,6 @@ function CreatorModal({
   onTest: () => void;
   onSave: (s: 'draft' | 'active') => void;
 }) {
-  const [query, setQuery] = useState('');
-  const visibleFields = fields.filter(
-    (f) =>
-      !query ||
-      f.label.toLowerCase().includes(query.toLowerCase()) ||
-      f.field_key.toLowerCase().includes(query.toLowerCase()),
-  );
   const valueField = fields.find((f) => f.field_key === form.value.field);
   const rowField = fields.find((f) => f.field_key === form.row);
   const columnField = fields.find((f) => f.field_key === form.column);
@@ -1301,31 +1250,6 @@ function CreatorModal({
                   R$/ton.
                 </p>
               ) : null}
-            </div>
-          </section>
-          <section className="mb-5 rounded-2xl border p-4">
-            <h3 className="font-bold">Campos disponíveis</h3>
-            <input
-              className="mt-3 w-full rounded-xl border px-3 py-2 text-sm"
-              placeholder="Buscar campo"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {visibleFields.map((f) => (
-                <div
-                  key={f.field_key}
-                  className="flex flex-wrap items-center gap-2 rounded-xl border p-2 text-sm"
-                >
-                  <span className="font-semibold">{f.label}</span>
-                  <StatusBadge
-                    tone={f.source === 'calculated' ? 'success' : 'neutral'}
-                  >
-                    {f.source === 'calculated' ? 'Calculado' : 'Nativo'}
-                  </StatusBadge>
-                  <StatusBadge>{fieldTypeLabel(f)}</StatusBadge>
-                </div>
-              ))}
             </div>
           </section>
           <section className="rounded-2xl border p-4">
@@ -1685,14 +1609,29 @@ function CalcModal({
 }
 function PreviewBox({ preview }: { preview: CustomPreview | null }) {
   if (!preview) return null;
-  const table = preview.table?.length ? preview.table : preview.series;
-  const columns = table.length
+  const table =
+    Array.isArray(preview.table) && preview.table.length
+      ? preview.table
+      : Array.isArray(preview.series)
+        ? preview.series
+        : [];
+  const valueField = String(preview.fields_used?.[0]?.label ?? 'Valor');
+  const metricLabel = preview.formula_preview?.includes(' de ')
+    ? preview.formula_preview.split(' por ')[0]
+    : valueField;
+  const labelHeader = preview.formula_preview?.includes(' por ')
+    ? preview.formula_preview.split(' por ')[1]?.split(' x ')[0] ||
+      'Linha/Coluna'
+    : 'Linha/Coluna';
+  const columns: string[] = table.length
     ? [
         'label',
         ...Array.from(
           new Set(
             table.flatMap((row) =>
-              Object.keys(row).filter((key) => key !== 'label'),
+              Object.keys(row).filter(
+                (key) => key !== 'label' && key !== 'used_count',
+              ),
             ),
           ),
         ),
@@ -1701,7 +1640,12 @@ function PreviewBox({ preview }: { preview: CustomPreview | null }) {
   return (
     <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm">
       <p>
-        <b>Valor calculado:</b> {format(preview.value)}
+        <b>
+          {preview.value === null && table.length
+            ? 'Resultado em tabela/matriz'
+            : 'Valor calculado:'}
+        </b>{' '}
+        {preview.value === null && table.length ? '' : format(preview.value)}
       </p>
       {table.length ? (
         <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 bg-white">
@@ -1710,7 +1654,15 @@ function PreviewBox({ preview }: { preview: CustomPreview | null }) {
               <tr className="bg-slate-100 text-xs uppercase text-slate-500">
                 {columns.map((column) => (
                   <th key={column} className="p-2">
-                    {column === 'label' ? 'Linha/Coluna' : column}
+                    {column === 'label'
+                      ? labelHeader
+                      : column === 'value'
+                        ? metricLabel
+                        : column === 'records_used_in_group'
+                          ? 'Registros usados'
+                          : column.endsWith('_used_count')
+                            ? `${column.replace(/_used_count$/, '')} usados`
+                            : column}
                   </th>
                 ))}
               </tr>
@@ -1744,7 +1696,7 @@ function PreviewBox({ preview }: { preview: CustomPreview | null }) {
   );
 }
 function format(v: unknown) {
-  if (v === null || v === undefined) return 'Sem valor disponível';
+  if (v === null || v === undefined) return '—';
   return typeof v === 'number'
     ? Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v)
     : String(v);
