@@ -30,6 +30,23 @@ create index if not exists idx_custom_calculated_fields_tenant_status on public.
 drop trigger if exists set_custom_calculated_fields_updated_at on public.custom_calculated_fields;
 create trigger set_custom_calculated_fields_updated_at before update on public.custom_calculated_fields for each row execute function public.set_updated_at();
 
+
+create or replace function public.current_tenant_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select up.active_tenant_id
+  from public.users_profile up
+  where up.id = auth.uid()
+  limit 1
+$$;
+
+revoke all on function public.current_tenant_id() from public;
+grant execute on function public.current_tenant_id() to authenticated;
+
 drop policy if exists custom_calculated_fields_tenant_select on public.custom_calculated_fields;
 create policy custom_calculated_fields_tenant_select on public.custom_calculated_fields for select using (public.current_tenant_id() = tenant_id);
 drop policy if exists custom_calculated_fields_tenant_insert on public.custom_calculated_fields;
