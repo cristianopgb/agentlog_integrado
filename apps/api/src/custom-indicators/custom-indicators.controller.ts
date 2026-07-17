@@ -3,12 +3,17 @@ import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CustomIndicatorsService } from './custom-indicators.service';
+import { CalculatedFieldsService } from './calculated-fields.service';
 
 @Controller('tenants/:tenantId')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class CustomIndicatorsController {
-  constructor(private readonly service: CustomIndicatorsService) {}
+  constructor(private readonly service: CustomIndicatorsService, private readonly calculated: CalculatedFieldsService) {}
   @Get('indicator-fields') @RequirePermission('indicators.view') fields(@Param('tenantId') tenantId:string){return this.service.fields(tenantId);}
+  @Get('calculated-fields') @RequirePermission('indicators.view') calculatedFields(@Param('tenantId') tenantId:string){return this.calculated.list(tenantId);}
+  @Post('calculated-fields/preview') @RequirePermission('indicators.view') previewCalculatedField(@Param('tenantId') tenantId:string,@Body() body:Record<string,unknown>){return this.calculated.preview(tenantId,body);}
+  @Post('calculated-fields') @RequirePermission('indicators.manage') createCalculatedField(@Param('tenantId') tenantId:string,@Body() body:Record<string,unknown>,@Req() req:AuthenticatedRequest){return this.calculated.create(tenantId,req.user.id,body);}
+  @Patch('calculated-fields/:fieldId/status') @RequirePermission('indicators.manage') calculatedFieldStatus(@Param('tenantId') tenantId:string,@Param('fieldId') id:string,@Body() body:{status?:string}){return this.calculated.status(tenantId,id,body);}
   @Get('custom-indicators') @RequirePermission('indicators.view') list(@Param('tenantId') tenantId:string){return this.service.list(tenantId);}
   @Get('custom-indicators/:indicatorId') @RequirePermission('indicators.view') detail(@Param('tenantId') tenantId:string,@Param('indicatorId') id:string){return this.service.detail(tenantId,id);}
   @Post('custom-indicators/preview') @RequirePermission('indicators.manage') previewUnsaved(@Param('tenantId') tenantId:string,@Body() body:Record<string,unknown>,@Req() req:AuthenticatedRequest){return this.service.previewUnsaved(tenantId,req.user.id,body);}
