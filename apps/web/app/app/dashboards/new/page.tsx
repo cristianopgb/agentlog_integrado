@@ -1,0 +1,3 @@
+'use client';
+import{useRouter}from'next/navigation';import{useEffect}from'react';import{createBrowserSupabaseClient}from'../../../../lib/supabase';import{createDashboard}from'../../../../lib/dashboards-api';
+export default function NewDashboard(){const router=useRouter();useEffect(()=>{createBrowserSupabaseClient().from('users_profile').select('active_tenant_id').maybeSingle().then(async({data})=>{const t=(data as {active_tenant_id?:string}|null)?.active_tenant_id;if(!t)return;const d=await createDashboard(t,{title:'Novo dashboard'});router.replace(`/app/dashboards/${d.id}/edit`);});},[router]);return <p className="text-sm text-slate-500">Criando rascunho...</p>}

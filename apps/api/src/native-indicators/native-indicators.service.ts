@@ -991,7 +991,30 @@ export class NativeIndicatorsService {
           String(r.issued_at ?? r.updated_at ?? '') <= String(filters.date_to),
       );
     }
+    next = this.applyDashboardFilters(next, filters);
     return { rows: next, scope };
+  }
+  private applyDashboardFilters(rows: Record<string, unknown>[], filters: Record<string, unknown>) {
+    const list = Array.isArray(filters.global_filters) ? filters.global_filters : Array.isArray(filters.filters) ? filters.filters : [];
+    return rows.filter((row) => list.every((item) => {
+      const f = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      return this.matchesDashboardFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.value, f.value_to);
+    }));
+  }
+  private matchesDashboardFilter(actual: unknown, operator: string, expected?: unknown, expectedTo?: unknown) {
+    const value = String(actual ?? '');
+    const filled = this.hasValue(actual);
+    if (operator === 'preenchido') return filled;
+    if (operator === 'não preenchido') return !filled;
+    if (operator === 'igual a') return value === String(expected ?? '');
+    if (operator === 'diferente de') return value !== String(expected ?? '');
+    if (operator === 'contém') return value.toLowerCase().includes(String(expected ?? '').toLowerCase());
+    const time = new Date(value).getTime();
+    const fromTime = new Date(String(expected ?? '')).getTime();
+    if (operator === 'maior que') return Number.isFinite(time) && Number.isFinite(fromTime) && time > fromTime;
+    if (operator === 'menor que') return Number.isFinite(time) && Number.isFinite(fromTime) && time < fromTime;
+    if (operator === 'entre') { const toTime = new Date(String(expectedTo ?? '')).getTime(); return Number.isFinite(time) && Number.isFinite(fromTime) && Number.isFinite(toTime) && time >= fromTime && time <= toTime; }
+    return true;
   }
   private hasValue(v: unknown) {
     return v !== null && v !== undefined && v !== '';

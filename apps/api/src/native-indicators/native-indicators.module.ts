@@ -4,5 +4,5 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { NativeIndicatorsController } from './native-indicators.controller';
 import { NativeIndicatorsService } from './native-indicators.service';
 
-@Module({ imports: [SupabaseModule, RbacModule], controllers: [NativeIndicatorsController], providers: [NativeIndicatorsService] })
+@Module({ imports: [SupabaseModule, RbacModule], controllers: [NativeIndicatorsController], providers: [NativeIndicatorsService], exports: [NativeIndicatorsService] })
 export class NativeIndicatorsModule {}
