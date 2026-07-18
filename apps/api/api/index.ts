@@ -12,15 +12,20 @@ async function createServer(): Promise<ExpressServer> {
     return cachedServer;
   }
 
-  const adapter = new ExpressAdapter();
-  const app = await NestFactory.create(AppModule, adapter);
+  try {
+    const adapter = new ExpressAdapter();
+    const app = await NestFactory.create(AppModule, adapter);
 
-  configureCors(app);
+    configureCors(app);
 
-  await app.init();
-  cachedServer = adapter.getInstance() as ExpressServer;
+    await app.init();
+    cachedServer = adapter.getInstance() as ExpressServer;
 
-  return cachedServer;
+    return cachedServer;
+  } catch (error) {
+    console.error('Failed to bootstrap API server.', error);
+    throw error;
+  }
 }
 
 export default async function handler(req: unknown, res: unknown) {
