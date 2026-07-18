@@ -558,6 +558,7 @@ export class NormalizationService {
             [resolved.field]: canonical.value,
           };
         }
+        this.applyOperationDateFallbacks(buckets);
         if (
           Object.keys(buckets.operation_records).length === 0 &&
           Object.keys(buckets).some((key) => key !== 'operation_records')
@@ -755,6 +756,32 @@ export class NormalizationService {
       return { entity: 'operation_records', field: aliased };
     }
     return null;
+  }
+
+  private applyOperationDateFallbacks(
+    buckets: Record<string, Record<string, unknown>>,
+  ) {
+    const operation = buckets.operation_records ?? {};
+    const transport = buckets.transport_records ?? {};
+
+    if (
+      this.isEmptyCanonicalValue(operation.issued_at) &&
+      transport.collected_at
+    ) {
+      operation.issued_at = transport.collected_at;
+    }
+    if (
+      this.isEmptyCanonicalValue(operation.completed_at) &&
+      transport.delivered_at
+    ) {
+      operation.completed_at = transport.delivered_at;
+    }
+
+    buckets.operation_records = operation;
+  }
+
+  private isEmptyCanonicalValue(value: unknown) {
+    return value === undefined || value === null || value === '';
   }
 
   private errorDetails(error: unknown) {
@@ -1026,6 +1053,54 @@ export class NormalizationService {
     const match = mapping.notes && /default=([^;]+)/.exec(mapping.notes);
     return match?.[1] ?? null;
   }
+  private parseCanonicalDate(value: unknown): Date | null {
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return this.dateFromExcelSerial(value);
+    }
+    if (typeof value !== 'string') return null;
+
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if (/^-?\d+(?:[,.]\d+)?$/.test(trimmed)) {
+      return this.dateFromExcelSerial(Number(trimmed.replace(',', '.')));
+    }
+
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (dateOnly) {
+      const [, year, month, day] = dateOnly;
+      return this.validUtcDate(Number(year), Number(month), Number(day));
+    }
+
+    const brDate = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
+    if (brDate) {
+      const [, day, month, year] = brDate;
+      return this.validUtcDate(Number(year), Number(month), Number(day));
+    }
+
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private dateFromExcelSerial(serial: number): Date | null {
+    if (!Number.isFinite(serial)) return null;
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const date = new Date(excelEpoch + serial * 86_400_000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private validUtcDate(year: number, month: number, day: number): Date | null {
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+      ? date
+      : null;
+  }
+
   private convertValue(
     value: unknown,
     dataType: string,
@@ -1047,8 +1122,8 @@ export class NormalizationService {
       return { ok: false };
     }
     if (dataType === 'date' || dataType === 'datetime') {
-      const d = new Date(String(value));
-      return Number.isNaN(d.getTime())
+      const d = this.parseCanonicalDate(value);
+      return !d
         ? { ok: false }
         : {
             ok: true,
