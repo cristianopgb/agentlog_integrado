@@ -10,7 +10,8 @@ type Profile = { full_name: string | null; active_tenant_id: string | null } | n
 type Tenant = { id: string; name: string; slug: string } | null;
 
 const navigation = [
-  { href: '/app', label: 'Dashboard', marker: 'D', permission: 'core.app.view' },
+  { href: '/app', label: 'Início', marker: 'I', permission: 'core.app.view' },
+  { href: '/app/dashboards', label: 'Dashboards', marker: 'D', permission: 'dashboards.view' },
   { href: '/app/integrations', label: 'Integrações', marker: 'I', permission: 'core.data_sources.view' },
   { href: '/app/native-data', label: 'Dados tratados', marker: 'B', permission: 'native_records.view' },
   { href: '/app/indicators', label: 'Indicadores', marker: 'N', permission: 'indicators.view' },

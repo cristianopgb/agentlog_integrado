@@ -17,10 +17,11 @@ import { CustomIndicatorsModule } from './custom-indicators/custom-indicators.mo
 import { SupabaseModule } from './supabase/supabase.module';
 import { TenantsController } from './tenants/tenants.controller';
 import { UsageModule } from './usage/usage.module';
+import { DashboardsModule } from './dashboards/dashboards.module';
 import { UsersController } from './users/users.controller';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule],
+  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule, DashboardsModule],
   controllers: [HealthController, UsersController, TenantsController, ModulesController, RbacController],
 })
 export class AppModule {}

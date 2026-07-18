@@ -1150,7 +1150,16 @@ export class CustomIndicatorsService {
           String(r.issued_at ?? r.updated_at ?? '') <= String(filters.date_to),
       );
     }
+    next = this.applyDashboardFilters(next, filters);
     return { rows: next, scope };
+  }
+
+  private applyDashboardFilters(rows: Record<string, unknown>[], filters: Record<string, unknown>) {
+    const list = Array.isArray(filters.global_filters) ? filters.global_filters : Array.isArray(filters.filters) ? filters.filters : [];
+    return rows.filter((row) => list.every((item) => {
+      const f = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      return this.matchesFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.value, f.value_to);
+    }));
   }
 
   private scopeMessage(scope: Record<string, unknown>, ignored: number) {
