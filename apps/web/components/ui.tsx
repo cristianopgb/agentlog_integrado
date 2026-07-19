@@ -1,15 +1,15 @@
 import type { CSSProperties, MouseEventHandler, ReactNode } from 'react';
 
 export function Card({ children, className = '', style, onClick }: { children: ReactNode; className?: string; style?: CSSProperties; onClick?: MouseEventHandler<HTMLDivElement> }) {
-  return <div style={style} onClick={onClick} className={`rounded-2xl border border-border/80 bg-white/90 p-6 shadow-sm shadow-slate-200/70 ${className}`}>{children}</div>;
+  return <div style={style} onClick={onClick} className={`rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_2px_10px_rgba(15,23,42,0.035)] ${className}`}>{children}</div>;
 }
 
 export function SectionHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description?: string; actions?: ReactNode }) {
   return (
     <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between"><div>
-      {eyebrow ? <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-600">{eyebrow}</p> : null}
-      <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950 md:text-4xl">{title}</h1>
-      {description ? <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">{description}</p> : null}
+      {eyebrow ? <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">{eyebrow}</p> : null}
+      <h1 className="mt-2 text-3xl font-bold tracking-[-0.035em] text-slate-950 md:text-4xl">{title}</h1>
+      {description ? <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 md:text-base">{description}</p> : null}
       </div>{actions ? <div className="shrink-0">{actions}</div> : null}
     </div>
   );
@@ -17,8 +17,8 @@ export function SectionHeader({ eyebrow, title, description, actions }: { eyebro
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 p-8 text-center">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-xl shadow-sm">⌁</div>
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white p-10 text-center shadow-sm">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-xl text-blue-700 shadow-sm">⌁</div>
       <h2 className="mt-4 text-lg font-semibold text-slate-900">{title}</h2>
       <p className="mt-2 text-sm text-slate-600">{description}</p>
     </div>
