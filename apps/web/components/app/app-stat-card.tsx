@@ -22,14 +22,14 @@ function AppStatCard({
 }: AppStatCardProps) {
   const up = trend?.direction !== 'down';
   return (
-    <AppCard className={cn('p-5', className)}>
+    <AppCard className={cn('relative overflow-hidden p-5 transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-100/50', className)}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-muted-foreground">{label}</p>
-          <p className="mt-2 text-2xl font-bold tracking-tight">{value}</p>
+          <p className="text-xs font-bold uppercase tracking-[0.1em] text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-bold tracking-[-0.03em]">{value}</p>
         </div>
         {icon && (
-          <div className="rounded-lg bg-primary/10 p-2 text-primary">
+          <div className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-100 p-2.5 text-primary shadow-sm">
             {icon}
           </div>
         )}

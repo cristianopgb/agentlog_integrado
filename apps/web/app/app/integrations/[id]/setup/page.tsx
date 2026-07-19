@@ -786,7 +786,7 @@ export default function IntegrationSetupPage() {
   const selectedModuleKeys = (source?.metadata?.module_keys as string[] | undefined) ?? (source?.module_key ? [source.module_key] : []);
 
   return (
-    <div className="mx-auto max-w-[96rem] space-y-8">
+    <div className="app-page mx-auto max-w-[96rem] space-y-8">
       <SectionHeader
         eyebrow="Setup de integração"
         title={titleType}

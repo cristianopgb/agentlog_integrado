@@ -24,7 +24,7 @@ export default function TenantsPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="app-page mx-auto max-w-6xl space-y-8">
       <SectionHeader eyebrow="Organizações" title="Tenants disponíveis" description="Escolha visualmente o contexto de operação entre os tenants vinculados ao usuário autenticado." />
       {tenants.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

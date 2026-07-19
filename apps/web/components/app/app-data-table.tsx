@@ -13,7 +13,7 @@ interface AppDataTableProps {
 }
 function AppDataTable({ columns, children, caption }: AppDataTableProps) {
   return (
-    <Table>
+    <Table className="min-w-[640px]">
       {caption && <caption className="sr-only">{caption}</caption>}
       <TableHeader>
         <TableRow>

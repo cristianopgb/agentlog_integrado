@@ -629,7 +629,7 @@ function validateBuilder(form: FormState, fields: IndicatorField[]) {
 }
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="app-page mx-auto max-w-7xl space-y-6">
       <SectionHeader
         eyebrow="Indicadores"
         title="Indicadores"

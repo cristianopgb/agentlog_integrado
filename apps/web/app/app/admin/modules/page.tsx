@@ -40,7 +40,7 @@ export default function AdminModulesPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="app-page mx-auto max-w-7xl space-y-8">
       <SectionHeader eyebrow="Administração" title="Módulos" description={`Comparativo visual dos módulos disponíveis, incluídos no plano ${planName} e ativos no tenant.`} />
       {message ? <EmptyState title="Status dos módulos" description={message} /> : null}
       <Card className="overflow-hidden p-0">
