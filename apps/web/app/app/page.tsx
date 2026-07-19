@@ -39,7 +39,7 @@ export default function AppPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Visão geral" title={`Olá${profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''}.`} description="Acompanhe a operação da sua empresa e acesse rapidamente os módulos disponíveis." />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <AppStatCard label="Empresa ativa" value={activeTenant?.name ?? 'Não selecionada'} description={activeTenant?.slug ?? 'Selecione uma empresa para contextualizar as consultas.'} icon={<Building2 className="h-5 w-5" />} />

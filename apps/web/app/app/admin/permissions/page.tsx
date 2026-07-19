@@ -26,7 +26,7 @@ export default function AdminPermissionsPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Administração" title="Permissões" description="Catálogo mínimo de permissões disponíveis por módulo, recurso/tela e ação." />
       {message ? <EmptyState title="Status das permissões" description={message} /> : null}
       {permissions.length ? (
