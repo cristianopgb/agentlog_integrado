@@ -81,7 +81,7 @@ export default function SetupProjectDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Setup" title={project?.name ?? 'Projeto de implantação'} description="Detalhe mínimo com etapas, checklist e alteração simples de status." />
       {message ? <EmptyState title="Status do detalhe" description={message} /> : null}
       {project ? (

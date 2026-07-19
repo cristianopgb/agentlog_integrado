@@ -37,7 +37,7 @@ export default function SetupProjectsPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Setup" title="Projetos de implantação" description="Lista em colunas por status com cards simples de implantação." />
       {message ? <EmptyState title="Status dos projetos" description={message} /> : null}
       {hasPermission(permissions, 'setup.projects.view') ? (

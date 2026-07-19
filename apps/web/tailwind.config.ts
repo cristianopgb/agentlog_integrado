@@ -15,6 +15,10 @@ const config: Config = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      boxShadow: {
+        premium: '0 14px 38px rgba(15, 23, 42, 0.08)',
+        soft: '0 6px 20px rgba(15, 23, 42, 0.05)',
+      },
       colors: {
         border: 'hsl(var(--border))',
         background: 'hsl(var(--background))',

@@ -31,7 +31,7 @@ export default function AdminRolesPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Administração" title="Funções" description="Consulta das funções da empresa ativa e do total de permissões vinculadas." />
       {message ? <EmptyState title="Status das funções" description={message} /> : null}
       {hasPermission(permissions, 'core.roles.view') && roles.length ? (

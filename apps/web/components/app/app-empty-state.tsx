@@ -18,11 +18,11 @@ function AppEmptyState({
   return (
     <div
       className={cn(
-        'rounded-xl border border-dashed bg-muted/30 px-6 py-10 text-center',
+        'app-empty rounded-2xl border border-dashed border-slate-200 bg-gradient-to-b from-slate-50 to-white px-6 py-9 text-center',
         className,
       )}
     >
-      <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-background text-muted-foreground shadow-sm">
+      <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 shadow-sm">
         {icon}
       </div>
       <h2 className="mt-4 text-base font-semibold">{title}</h2>

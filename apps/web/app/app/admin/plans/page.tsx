@@ -34,7 +34,7 @@ export default function AdminPlansPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Administração" title="Planos" description="Visualização interna dos planos comerciais ativos, com preços e módulos incluídos." />
       {needsLogin ? <EmptyState title="Login necessário" description="Faça login para visualizar os planos disponíveis." /> : null}
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">

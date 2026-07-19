@@ -40,6 +40,7 @@
   * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
   *::-webkit-scrollbar { width: 7px; height: 7px; }
   *::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
+  *::-webkit-scrollbar-track { background: transparent; }
 }
 
 @layer components {
@@ -65,4 +66,16 @@
     @apply px-2 py-1 text-sm transition hover:bg-slate-100 hover:text-blue-700;
   }
   .sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .35); }
+  .page-stack { @apply mx-auto max-w-7xl space-y-6; }
+  .app-surface { @apply shadow-[0_8px_24px_rgba(15,23,42,0.045)] transition-shadow duration-200 hover:shadow-[0_12px_28px_rgba(15,23,42,0.07)]; }
+  .app-empty { @apply shadow-[0_10px_30px_rgba(15,23,42,0.035)]; }
+  .page-heading { @apply border-b border-slate-200/80 pb-5; }
+  main table { @apply overflow-hidden rounded-xl border border-slate-100 bg-white; }
+  main table thead { @apply bg-slate-50/90; }
+  main table th { @apply px-4 py-3 text-left text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500; }
+  main table td { @apply px-4 py-3.5 align-middle text-sm text-slate-700; }
+  main table tbody tr { @apply border-b border-slate-100 transition-colors hover:bg-blue-50/40; }
+  main table tbody tr:last-child { @apply border-b-0; }
+  main input:not([type='checkbox']):not([type='radio']), main select, main textarea { @apply border-slate-200 bg-white shadow-sm transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100; }
+  main button:not([class*='bg-']):not([class*='btn-']) { @apply transition-all; }
 }

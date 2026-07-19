@@ -33,7 +33,7 @@ export default function AdminSubscriptionPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Administração" title="Assinatura" description="Resumo visual do plano, status e limites contratados para o tenant ativo." />
       {message ? <EmptyState title="Status da assinatura" description={message} /> : null}
       <div className="grid gap-5 lg:grid-cols-3">

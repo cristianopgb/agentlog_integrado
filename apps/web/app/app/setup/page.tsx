@@ -42,7 +42,7 @@ export default function SetupPage() {
   const canView = hasPermission(permissions, 'setup.projects.view');
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="page-stack app-page">
       <SectionHeader eyebrow="Setup" title="Central de implantação" description="Resumo mínimo dos projetos de setup do tenant ativo." />
       {message ? <EmptyState title="Status do setup" description={message} /> : null}
       {canView ? (
