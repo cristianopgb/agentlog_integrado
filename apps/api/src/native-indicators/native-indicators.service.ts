@@ -998,7 +998,7 @@ export class NativeIndicatorsService {
     const list = Array.isArray(filters.global_filters) ? filters.global_filters : Array.isArray(filters.filters) ? filters.filters : [];
     return rows.filter((row) => list.every((item) => {
       const f = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-      return this.matchesDashboardFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.value, f.value_to);
+      return this.matchesDashboardFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.values ?? f.value, f.value_to);
     }));
   }
   private matchesDashboardFilter(actual: unknown, operator: string, expected?: unknown, expectedTo?: unknown) {
@@ -1006,16 +1006,20 @@ export class NativeIndicatorsService {
     const filled = this.hasValue(actual);
     if (operator === 'preenchido') return filled;
     if (operator === 'não preenchido') return !filled;
+    if (operator === 'em') return Array.isArray(expected) && expected.map(String).includes(value);
     if (operator === 'igual a') return value === String(expected ?? '');
     if (operator === 'diferente de') return value !== String(expected ?? '');
     if (operator === 'contém') return value.toLowerCase().includes(String(expected ?? '').toLowerCase());
-    const time = new Date(value).getTime();
-    const fromTime = new Date(String(expected ?? '')).getTime();
-    if (operator === 'maior que') return Number.isFinite(time) && Number.isFinite(fromTime) && time > fromTime;
-    if (operator === 'menor que') return Number.isFinite(time) && Number.isFinite(fromTime) && time < fromTime;
-    if (operator === 'entre') { const toTime = new Date(String(expectedTo ?? '')).getTime(); return Number.isFinite(time) && Number.isFinite(fromTime) && Number.isFinite(toTime) && time >= fromTime && time <= toTime; }
+    const actualTime = this.parseDateStart(actual);
+    const fromTime = this.parseDateStart(expected);
+    if (operator === 'maior que') return actualTime !== null && fromTime !== null && actualTime >= fromTime;
+    if (operator === 'menor que') { const toTime = this.parseDateEnd(expected); return actualTime !== null && toTime !== null && actualTime <= toTime; }
+    if (operator === 'entre') { const toTime = this.parseDateEnd(expectedTo); return actualTime !== null && fromTime !== null && toTime !== null && actualTime >= fromTime && actualTime <= toTime; }
     return true;
   }
+  private isDateLike(value: unknown) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value); }
+  private parseDateStart(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T00:00:00.000Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
+  private parseDateEnd(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T23:59:59.999Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
   private hasValue(v: unknown) {
     return v !== null && v !== undefined && v !== '';
   }

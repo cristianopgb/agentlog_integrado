@@ -1094,27 +1094,27 @@ export class CustomIndicatorsService {
     const filled = this.filled(actual);
     if (operator === 'preenchido') return filled;
     if (operator === 'não preenchido') return !filled;
+    if (operator === 'em') return Array.isArray(expected) && expected.map(String).includes(value);
     if (operator === 'igual a') return value === String(expected ?? '');
     if (operator === 'diferente de') return value !== String(expected ?? '');
     if (operator === 'contém')
       return value.toLowerCase().includes(String(expected ?? '').toLowerCase());
-    const number = Number(actual);
-    const from = Number(expected);
-    const to = Number(expectedTo);
-    if (operator === 'maior que')
-      return Number.isFinite(number) && Number.isFinite(from) && number > from;
-    if (operator === 'menor que')
-      return Number.isFinite(number) && Number.isFinite(from) && number < from;
-    if (operator === 'entre')
-      return (
-        Number.isFinite(number) &&
-        Number.isFinite(from) &&
-        Number.isFinite(to) &&
-        number >= from &&
-        number <= to
-      );
+    const actualDate = this.parseDateStart(actual);
+    const fromDate = this.parseDateStart(expected);
+    if (actualDate !== null && fromDate !== null) {
+      if (operator === 'maior que') return actualDate >= fromDate;
+      if (operator === 'menor que') { const toDate = this.parseDateEnd(expected); return toDate !== null && actualDate <= toDate; }
+      if (operator === 'entre') { const toDate = this.parseDateEnd(expectedTo); return toDate !== null && actualDate >= fromDate && actualDate <= toDate; }
+    }
+    const number = Number(actual); const from = Number(expected); const to = Number(expectedTo);
+    if (operator === 'maior que') return Number.isFinite(number) && Number.isFinite(from) && number > from;
+    if (operator === 'menor que') return Number.isFinite(number) && Number.isFinite(from) && number < from;
+    if (operator === 'entre') return Number.isFinite(number) && Number.isFinite(from) && Number.isFinite(to) && number >= from && number <= to;
     return false;
   }
+  private isDateLike(value: unknown) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value); }
+  private parseDateStart(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T00:00:00.000Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
+  private parseDateEnd(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T23:59:59.999Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
   private filled(value: unknown) {
     return value !== null && value !== undefined && value !== '';
   }
@@ -1158,7 +1158,7 @@ export class CustomIndicatorsService {
     const list = Array.isArray(filters.global_filters) ? filters.global_filters : Array.isArray(filters.filters) ? filters.filters : [];
     return rows.filter((row) => list.every((item) => {
       const f = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-      return this.matchesFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.value, f.value_to);
+      return this.matchesFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.values ?? f.value, f.value_to);
     }));
   }
 

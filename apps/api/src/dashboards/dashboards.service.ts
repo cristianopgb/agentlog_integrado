@@ -9,6 +9,24 @@ type ResultShape = 'scalar' | 'table' | 'matrix' | 'distribution' | 'ranking' | 
 type Compatibility = { result_shape: ResultShape; allowed_visual_types: VisualType[]; recommended_visual_type: VisualType; reason: string };
 type Widget = { id:string; tenant_id:string; dashboard_id:string; indicator_source:IndicatorSource; indicator_id:string; title:string; visual_type:VisualType; position:{x?:number;y?:number;w?:number;h?:number}; properties:Record<string,unknown> };
 type DashboardSnapshot = { widgets?: Widget[]; layout_config?: Record<string, unknown> };
+type NativeFilter = { key:string; label:string; group:'Período'|'Entidades'|'Localidade'|'Operação'; type:'date_range'|'multi_select'; field_key:string; placeholder:string };
+const nativeFilters: NativeFilter[] = [
+  {key:'issued_at',label:'Data de emissão',group:'Período',type:'date_range',field_key:'issued_at',placeholder:'Selecione o período'},
+  {key:'expected_date',label:'Data prevista',group:'Período',type:'date_range',field_key:'expected_date',placeholder:'Selecione o período'},
+  {key:'completed_at',label:'Data de entrega',group:'Período',type:'date_range',field_key:'completed_at',placeholder:'Selecione o período'},
+  {key:'updated_at',label:'Data de atualização',group:'Período',type:'date_range',field_key:'updated_at',placeholder:'Selecione o período'},
+  {key:'customer_name',label:'Cliente',group:'Entidades',type:'multi_select',field_key:'customer_name',placeholder:'Selecione clientes'},
+  {key:'shipper_name',label:'Embarcador',group:'Entidades',type:'multi_select',field_key:'shipper_name',placeholder:'Selecione embarcadores'},
+  {key:'recipient_name',label:'Destinatário',group:'Entidades',type:'multi_select',field_key:'recipient_name',placeholder:'Selecione destinatários'},
+  {key:'origin_city',label:'Cidade origem',group:'Localidade',type:'multi_select',field_key:'origin_city',placeholder:'Selecione cidades'},
+  {key:'origin_state',label:'UF origem',group:'Localidade',type:'multi_select',field_key:'origin_state',placeholder:'Selecione UFs'},
+  {key:'destination_city',label:'Cidade destino',group:'Localidade',type:'multi_select',field_key:'destination_city',placeholder:'Selecione cidades'},
+  {key:'destination_state',label:'UF destino',group:'Localidade',type:'multi_select',field_key:'destination_state',placeholder:'Selecione UFs'},
+  {key:'status',label:'Status',group:'Operação',type:'multi_select',field_key:'status',placeholder:'Selecione status'},
+  {key:'document_type',label:'Tipo de documento',group:'Operação',type:'multi_select',field_key:'document_type',placeholder:'Selecione tipos'},
+  {key:'driver_name',label:'Motorista',group:'Operação',type:'multi_select',field_key:'driver_name',placeholder:'Selecione motoristas'},
+  {key:'vehicle_plate',label:'Veículo',group:'Operação',type:'multi_select',field_key:'vehicle_plate',placeholder:'Selecione veículos'},
+];
 const visualTypes = new Set<VisualType>(['kpi','table','matrix','bar','pie','line']);
 const nativeShapes:Record<string,ResultShape>={
  total_native_records:'scalar',transport_total_deliveries:'scalar',complete_native_records:'scalar',partial_native_records:'scalar',total_value_informed:'scalar',total_freight_informed:'scalar',total_weight_informed:'scalar',transport_total_weight:'scalar',transport_avg_delay:'scalar',
@@ -28,6 +46,7 @@ const shapeCompatibility:Record<ResultShape,Compatibility>={
 export class DashboardsService{
  constructor(private readonly supabase:SupabaseService,private readonly nativeIndicators:NativeIndicatorsService,private readonly customIndicators:CustomIndicatorsService){}
  async list(tenantId:string){return {data:await this.supabase.select('dashboard_definitions',`tenant_id=eq.${tenantId}&status=neq.archived&order=updated_at.desc`)}}
+ async nativeFilters(tenantId:string){ return {data:await Promise.all(nativeFilters.map(async filter=>{ const rows=await this.supabase.select<Record<string,unknown>[]>('operation_records',`select=${filter.field_key}&tenant_id=eq.${tenantId}&deleted_at=is.null&${filter.field_key}=not.is.null&limit=100`); const values=[...new Set(rows.map(row=>String(row[filter.field_key]??'').trim()).filter(Boolean))].slice(0,100); return {...filter,available:values.length>0,reason:values.length?'': 'Filtro não disponível para a base atual.',options:filter.type==='multi_select'?values.map(value=>({label:value,value})):[]}; }))};}
  async indicatorLibrary(tenantId:string){const [natives,customs]=await Promise.all([this.nativeIndicators.list(tenantId),this.customIndicators.list(tenantId)]); return {data:[
    ...natives.data.filter((i:{availability:{status:string}})=>['available','partial'].includes(i.availability.status)).map((i:Record<string,unknown>)=>this.libraryItem('native',i,String(i.indicator_key))),
    ...(customs.data as Record<string,unknown>[]).filter((i)=>i.status==='active'&&i.available_for_dashboard===true).map((i)=>this.libraryItem('custom',i,String(i.id))),
@@ -52,8 +71,9 @@ export class DashboardsService{
  private hasDateDimension(fields:string[]){return fields.some((field)=>/(date|_at$|data|period|periodo|mes|month|dia|day|ano|year)/i.test(field));}
  private smallCategory(fields:string[]){return fields.some((field)=>/(status|state|_uf|origin_state|destination_state|document_type|categoria|category|priority|channel|tipo)/i.test(field));}
  private normalizedPosition(input:unknown){const p=(input&&typeof input==='object'?input:{}) as Record<string,unknown>; return {x:Math.max(0,Number(p.x??0)),y:Math.max(0,Number(p.y??0)),w:Math.min(12,Math.max(1,Number(p.w??3))),h:Math.max(1,Number(p.h??2))};}
- private normalizedLayout(input:unknown){const layout=(input&&typeof input==='object'?input:{}) as Record<string,unknown>; return {...layout,global_filters:this.normalizedFilters(layout.global_filters)};}
- private normalizedFilters(input:unknown){const allowed=new Set(['igual a','diferente de','contém','preenchido','não preenchido','maior que','menor que','entre']); if(!Array.isArray(input)) return []; return input.flatMap((item)=>{const f=(item&&typeof item==='object'?item:{}) as Record<string,unknown>; const operator=String(f.operator??''); const field=String(f.field_key??f.field??''); if(!field||!allowed.has(operator)) return []; return [{field_key:field,operator,value:f.value??null,value_to:f.value_to??null}];});}
+ private normalizedLayout(input:unknown){const layout=(input&&typeof input==='object'?input:{}) as Record<string,unknown>; const {global_filters:_legacy,...safe}=layout; return safe;}
+ private normalizedFilters(input:unknown){if(!Array.isArray(input)) return []; return input.flatMap<Record<string,unknown>>(item=>{const f=(item&&typeof item==='object'?item:{}) as Record<string,unknown>; const spec=nativeFilters.find(filter=>filter.key===String(f.key??'')); if(!spec) throw new BadRequestException('Filtro nativo desconhecido.'); if(f.type!==spec.type) throw new BadRequestException('Tipo de filtro nativo incompatível.'); if(spec.type==='multi_select'){if(!Array.isArray(f.values)||f.values.some(value=>typeof value!=='string')) throw new BadRequestException('Valores do filtro devem ser uma lista.'); const values=[...new Set(f.values.map(value=>value.trim()).filter(Boolean))]; if(!values.length) return []; return [{field_key:spec.field_key,operator:values.length===1?'igual a':'em',value:values[0]??null,values}];} const from=typeof f.from==='string'?f.from:''; const to=typeof f.to==='string'?f.to:''; if(!from&&!to) throw new BadRequestException('Informe ao menos uma data para o filtro.'); if((from&&!this.validDate(from))||(to&&!this.validDate(to))) throw new BadRequestException('Data de filtro inválida.'); if(from&&to&&from>to) throw new BadRequestException('Intervalo de datas inválido.'); return [{field_key:spec.field_key,operator:from&&to?'entre':from?'maior que':'menor que',value:from||to,value_to:to||null}]; });}
+ private validDate(value:string){if(!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false; const date=new Date(value+'T00:00:00.000Z'); return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value;}
  private async filters(tenantId:string,id:string){return {data:await this.supabase.select('dashboard_filters',`tenant_id=eq.${tenantId}&dashboard_id=eq.${id}&order=created_at.asc`)}}
  private async getDashboard(tenantId:string,id:string){const rows=await this.supabase.select<unknown[]>('dashboard_definitions',`tenant_id=eq.${tenantId}&id=eq.${id}&status=neq.archived`); if(!rows[0]) throw new NotFoundException('Dashboard não encontrado.'); return rows[0];}
  private async getWidget(tenantId:string,id:string,widgetId:string){const rows=await this.supabase.select<Widget[]>('dashboard_widgets',`tenant_id=eq.${tenantId}&dashboard_id=eq.${id}&id=eq.${widgetId}`); if(!rows[0]) throw new NotFoundException('Widget não encontrado.'); return rows[0];}
