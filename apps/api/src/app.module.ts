@@ -19,9 +19,10 @@ import { TenantsController } from './tenants/tenants.controller';
 import { UsageModule } from './usage/usage.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
 import { UsersController } from './users/users.controller';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule, DashboardsModule],
+  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule, DashboardsModule, ReportsModule],
   controllers: [HealthController, UsersController, TenantsController, ModulesController, RbacController],
 })
 export class AppModule {}
