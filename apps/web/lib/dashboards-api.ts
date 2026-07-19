@@ -6,14 +6,17 @@ export type DashboardIndicator={id:string;source:'native'|'custom';name:string;r
 export type Dashboard={id:string;tenant_id:string;title:string;description:string|null;status:'draft'|'published'|'archived';published_version_id?:string|null;layout_config?:Record<string,unknown>;widgets?:Widget[];filters?:DashboardFilter[]};
 export type Widget={id:string;dashboard_id:string;indicator_source:'native'|'custom';indicator_id:string;title:string;visual_type:VisualType;position:{x:number;y:number;w:number;h:number};properties:Record<string,unknown>};
 export type DashboardFilter={id:string;field_key:string;label:string;operator:string;value:unknown};
+export type DashboardNativeFilter={key:string;label:string;group:'Período'|'Entidades'|'Localidade'|'Operação';type:'date_range'|'multi_select';field_key:string;available:boolean;reason?:string;options:Array<{label:string;value:string}>;placeholder:string};
+export type DashboardRuntimeFilter={key:string;type:'date_range';from?:string;to?:string}|{key:string;type:'multi_select';values:string[]};
 export function listDashboards(t:string){return api<{data:Dashboard[]}>(`/tenants/${t}/dashboards`)}
 export function createDashboard(t:string,p:Record<string,unknown>){return api<Dashboard>(`/tenants/${t}/dashboards`,{method:'POST',body:JSON.stringify(p)})}
 export function getDashboard(t:string,id:string){return api<Dashboard>(`/tenants/${t}/dashboards/${id}`)}
+export function listDashboardNativeFilters(t:string){return api<{data:DashboardNativeFilter[]}>(`/tenants/${t}/dashboards/native-filters`)}
 export function listDashboardIndicators(t:string){return api<{data:DashboardIndicator[]}>(`/tenants/${t}/dashboards/indicator-library`)}
 export function updateDashboard(t:string,id:string,p:Record<string,unknown>){return api<Dashboard>(`/tenants/${t}/dashboards/${id}`,{method:'PATCH',body:JSON.stringify(p)})}
 export function addWidget(t:string,id:string,p:Record<string,unknown>){return api<Widget>(`/tenants/${t}/dashboards/${id}/widgets`,{method:'POST',body:JSON.stringify(p)})}
 export function updateWidget(t:string,id:string,w:string,p:Record<string,unknown>){return api<Widget>(`/tenants/${t}/dashboards/${id}/widgets/${w}`,{method:'PATCH',body:JSON.stringify(p)})}
 export function deleteWidget(t:string,id:string,w:string){return api<Widget>(`/tenants/${t}/dashboards/${id}/widgets/${w}`,{method:'DELETE'})}
-export function previewDashboard(t:string,id:string,filters:Record<string,unknown>[] = [],published=false){return api<{data:Array<{widget_id:string;result:unknown}>}>(`/tenants/${t}/dashboards/${id}/preview`,{method:'POST',body:JSON.stringify({filters,published})})}
+export function previewDashboard(t:string,id:string,filters:DashboardRuntimeFilter[] = [],published=false){return api<{data:Array<{widget_id:string;result:unknown}>}>(`/tenants/${t}/dashboards/${id}/preview`,{method:'POST',body:JSON.stringify({filters,published})})}
 export function publishDashboard(t:string,id:string){return api(`/tenants/${t}/dashboards/${id}/publish`,{method:'POST'})}
 export function getPublishedDashboard(t:string,id:string){return api<{snapshot:Dashboard}>(`/tenants/${t}/dashboards/${id}/published`)}

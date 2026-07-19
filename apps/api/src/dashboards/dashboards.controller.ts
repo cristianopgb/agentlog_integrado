@@ -9,6 +9,7 @@ import { DashboardsService } from './dashboards.service';
 export class DashboardsController {
   constructor(private readonly service: DashboardsService) {}
   @Get() @RequirePermission('dashboards.view') list(@Param('tenantId') tenantId:string){return this.service.list(tenantId);}
+  @Get('native-filters') @RequirePermission('dashboards.view') nativeFilters(@Param('tenantId') tenantId:string){return this.service.nativeFilters(tenantId);}
   @Get('indicator-library') @RequirePermission('dashboards.view') indicatorLibrary(@Param('tenantId') tenantId:string){return this.service.indicatorLibrary(tenantId);}
   @Post() @RequirePermission('dashboards.manage') create(@Param('tenantId') tenantId:string,@Req() req:AuthenticatedRequest,@Body() body:Record<string,unknown>){return this.service.create(tenantId,req.user.id,body);}
   @Get(':id') @RequirePermission('dashboards.view') detail(@Param('tenantId') tenantId:string,@Param('id') id:string){return this.service.detail(tenantId,id);}
