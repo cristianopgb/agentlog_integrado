@@ -32,8 +32,8 @@ export default function AdminRolesPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
-      <SectionHeader eyebrow="Administração" title="Roles" description="Consulta mínima das roles do tenant ativo e total de permissões vinculadas." />
-      {message ? <EmptyState title="Status das roles" description={message} /> : null}
+      <SectionHeader eyebrow="Administração" title="Funções" description="Consulta das funções da empresa ativa e do total de permissões vinculadas." />
+      {message ? <EmptyState title="Status das funções" description={message} /> : null}
       {hasPermission(permissions, 'core.roles.view') && roles.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {roles.map((role) => (
