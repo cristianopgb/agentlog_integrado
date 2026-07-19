@@ -16,7 +16,7 @@ const navigation = [
   { href: '/app/integrations', label: 'Integrações', icon: PlugZap, permission: 'core.data_sources.view' },
   { href: '/app/native-data', label: 'Dados tratados', icon: PackageOpen, permission: 'native_records.view' },
   { href: '/app/indicators', label: 'Indicadores', icon: ChartNoAxesCombined, permission: 'indicators.view' },
-  { href: '/app/reports', label: 'Relatórios', icon: FileBarChart, badge: 'em breve' },
+  { href: '/app/reports', label: 'Relatórios', icon: FileBarChart, permission: 'reports.view' },
   { href: '/app/agents', label: 'Agentes', icon: Blocks, badge: 'em breve' },
 ];
 
