@@ -24,5 +24,6 @@ export class DashboardsController {
   @Get(':id/published') @RequirePermission('dashboards.view') published(@Param('tenantId') tenantId:string,@Param('id') id:string){return this.service.published(tenantId,id);}
   @Post(':id/ai-analysis') @RequirePermission('dashboards.view') analysis(@Param('tenantId') tenantId:string,@Param('id') id:string,@Req() req:AuthenticatedRequest,@Body() body:Record<string,unknown>={}){return this.service.aiAnalysis(tenantId,id,req.user.id,body);}
   @Post(':id/ai-question') @RequirePermission('dashboards.view') question(@Param('tenantId') tenantId:string,@Param('id') id:string,@Req() req:AuthenticatedRequest,@Body() body:Record<string,unknown>={}){return this.service.aiQuestion(tenantId,id,req.user.id,body);}
+  @Post(':id/ai-speech') @RequirePermission('dashboards.view') speech(@Param('tenantId') tenantId:string,@Param('id') id:string,@Req() req:AuthenticatedRequest,@Body() body:Record<string,unknown>={}){return this.service.aiSpeech(tenantId,id,req.user.id,body);}
   @Get(':id/ai-insights/latest') @RequirePermission('dashboards.view') latestInsight(@Param('tenantId') tenantId:string,@Param('id') id:string){return this.service.latestInsight(tenantId,id);}
 }

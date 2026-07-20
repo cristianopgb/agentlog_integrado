@@ -7,6 +7,7 @@ import { CustomIndicatorsModule } from '../custom-indicators/custom-indicators.m
 import { AgentsModule } from '../agents/agents.module';
 import { DashboardsController } from './dashboards.controller';
 import { DashboardsService } from './dashboards.service';
+import { DashboardSnapshotSummarizerService } from './dashboard-snapshot-summarizer.service';
 
 @Module({
   imports: [
@@ -18,6 +19,6 @@ import { DashboardsService } from './dashboards.service';
     AgentsModule,
   ],
   controllers: [DashboardsController],
-  providers: [DashboardsService],
+  providers: [DashboardsService, DashboardSnapshotSummarizerService],
 })
 export class DashboardsModule {}
