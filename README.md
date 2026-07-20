@@ -120,3 +120,9 @@ pnpm format:check
 ## Limites da Sprint 1
 
 Não foram implementados dashboards reais, SaaS Admin, planos, cobrança, setup kanban, contratos de dados, staging, pareamento, tickets, módulos operacionais, WhatsApp, OpenAI ou agentes de IA.
+
+## IA Controlada
+
+A Sprint 17A disponibiliza configurações de agentes por tenant, catálogo de ferramentas controladas e logs de execução. Configure `OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `AI_GATEWAY_ENABLED` e `AI_GATEWAY_DRY_RUN` somente no ambiente do backend. A chave nunca é enviada ao frontend nem persistida no banco.
+
+Por padrão, testes manuais são **dry-run**: criam uma execução auditável sem chamar provedores externos, ferramentas operacionais ou dados reais. A fundação não concede à IA acesso a banco cru, SQL livre ou consultas arbitrárias; as ferramentas são cadastradas e habilitadas explicitamente por agente. Integrações operacionais com dashboard, relatórios e chat ficam para próximas sprints.

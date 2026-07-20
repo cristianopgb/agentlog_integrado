@@ -23,6 +23,7 @@ const navigation = [
 const setupNavigation = [
   { href: '/app/setup', label: 'Configuração de dados', icon: Settings2, permission: 'setup.projects.view' },
   { href: '/app/setup/reports', label: 'Configuração de relatórios', icon: FileBarChart, permission: 'reports.configure' },
+  { href: '/app/setup/agents', label: 'Configuração de agentes', icon: Blocks, permission: 'agents.configure' },
 ];
 
 const adminNavigation = [
