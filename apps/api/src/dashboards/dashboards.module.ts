@@ -4,6 +4,7 @@ import { RbacModule } from '../rbac/rbac.module';
 import { SupabaseModule } from '../supabase/supabase.module';
 import { NativeIndicatorsModule } from '../native-indicators/native-indicators.module';
 import { CustomIndicatorsModule } from '../custom-indicators/custom-indicators.module';
+import { AgentsModule } from '../agents/agents.module';
 import { DashboardsController } from './dashboards.controller';
 import { DashboardsService } from './dashboards.service';
 
@@ -14,6 +15,7 @@ import { DashboardsService } from './dashboards.service';
     SupabaseModule,
     NativeIndicatorsModule,
     CustomIndicatorsModule,
+    AgentsModule,
   ],
   controllers: [DashboardsController],
   providers: [DashboardsService],
