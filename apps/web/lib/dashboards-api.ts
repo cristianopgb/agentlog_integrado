@@ -10,6 +10,7 @@ export type DashboardNativeFilter={key:string;label:string;group:'Período'|'Ent
 export type DashboardRuntimeFilter={key:string;type:'date_range';from?:string;to?:string}|{key:string;type:'multi_select';values:string[]};
 export function listDashboards(t:string){return api<{data:Dashboard[]}>(`/tenants/${t}/dashboards`)}
 export function createDashboard(t:string,p:Record<string,unknown>){return api<Dashboard>(`/tenants/${t}/dashboards`,{method:'POST',body:JSON.stringify(p)})}
+export function archiveDashboard(t:string,id:string){return api<Dashboard>(`/tenants/${t}/dashboards/${id}`,{method:'DELETE'})}
 export function getDashboard(t:string,id:string){return api<Dashboard>(`/tenants/${t}/dashboards/${id}`)}
 export function listDashboardNativeFilters(t:string){return api<{data:DashboardNativeFilter[]}>(`/tenants/${t}/dashboards/native-filters`)}
 export function listDashboardIndicators(t:string){return api<{data:DashboardIndicator[]}>(`/tenants/${t}/dashboards/indicator-library`)}
