@@ -1,0 +1,3 @@
+const labels:Record<string,string>={issued_at:'Data de emissão',expected_date:'Data prevista',completed_at:'Data de entrega',updated_at:'Data de atualização',customer_name:'Cliente',shipper_name:'Embarcador',recipient_name:'Destinatário',origin_city:'Cidade origem',origin_state:'UF origem',destination_city:'Cidade destino',destination_state:'UF destino',status:'Status',document_type:'Tipo de documento',driver_name:'Motorista',vehicle_plate:'Veículo'};
+export const reportFilterLabel=(key:string)=>labels[key]??'Filtro do relatório';
+export const reportFrequencyLabel=(frequency:string)=>({daily:'Diária',weekly:'Semanal',monthly:'Mensal'}[frequency]??frequency);
