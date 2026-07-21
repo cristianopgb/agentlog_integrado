@@ -9,6 +9,7 @@ const groups = new Set(['driver_name','customer_name','status','origin_state','d
 @Injectable()
 export class AgentToolExecutorService {
   constructor(private readonly db: SupabaseService) {}
+  supports(tool: string) { return ['knowledge_base.search','treated_data.search_records','treated_data.get_record_detail','treated_data.aggregate_records'].includes(tool); }
   async execute(tenantId: string, tool: string, input: Record<string, unknown>) {
     if (tool === 'knowledge_base.search') return this.knowledge(tenantId, input);
     if (tool === 'treated_data.search_records') return this.search(tenantId, input);
