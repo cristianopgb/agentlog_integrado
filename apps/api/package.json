@@ -9,7 +9,8 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "bootstrap:admin": "node dist/scripts/bootstrap-admin.js",
-    "test:file-parser": "pnpm build && node dist/staging/file-parser.local-test.js"
+    "test:file-parser": "pnpm build && node dist/staging/file-parser.local-test.js",
+    "test:widget-snapshot": "pnpm build && node dist/shared/widget-result-snapshot.local-test.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
