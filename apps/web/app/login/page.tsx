@@ -54,7 +54,7 @@ export default function LoginPage() {
           <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-950">Entrar no sistema</h1>
           <p className="mt-2 text-sm leading-6 text-slate-600">Use suas credenciais para acessar o Sistema Logístico Integrado.</p>
           <label className="mt-8 block text-sm font-semibold text-slate-700">E-mail</label>
-          <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required />
           <label className="mt-5 block text-sm font-semibold text-slate-700">Senha</label>
           <input className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           {error ? <p className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
