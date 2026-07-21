@@ -40,7 +40,21 @@ export class AiGatewayService {
     }
   }
 
-  private controlledToolAnswer(toolResult:unknown):string|undefined { const r:any=toolResult;if(typeof r?.total==='number'){const label:Record<string,string>={sum_freight:'O frete total na base tratada é',sum_weight:'O peso total registrado na base tratada é',volume_count:'O total de volumes na base tratada é',deliveries_count:'O total de entregas na base tratada é',cte_count:'O total de CT-es na base tratada é'};const value=r.metric==='sum_freight'?new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(r.total):new Intl.NumberFormat('pt-BR').format(r.total)+(r.unit?' '+r.unit:'');return (label[r.metric]||'O total na base tratada é')+' '+value+'.'+(Array.isArray(r.data_quality_notes)&&r.data_quality_notes.length?' Limitações: '+r.data_quality_notes.join(' '):'');}if(Array.isArray(r?.available_fields))return 'Posso consultar a base tratada de operação. Há '+r.record_count+' registro(s), com campos como: '+r.available_fields.join(', ')+'. Exemplos: '+(r.examples_of_queries||[]).join(' ');return undefined;}
+  private controlledToolAnswer(toolResult:unknown):string|undefined {
+    const r:any=toolResult;
+    const format=(value:number,unit?:string)=>unit==='BRL'?new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value):new Intl.NumberFormat('pt-BR').format(value)+(unit?` ${unit}`:'');
+    if(Array.isArray(r?.rows)){
+      const labels=r.group_by==='vehicle_plate'&&r.metric==='count'?'Placas com mais/menos entregas':(r.group_by==='destination_state'||r.group_by==='origin_state')&&r.field==='gross_weight'?'UFs com maior/menor peso':'Ranking';
+      const rows=r.rows.map((row:any,index:number)=>`${index+1}. ${row.label}: ${format(Number(row.value)||0,r.unit)}`).join('; ');
+      return `${labels}: ${rows||'dados insuficientes'}.`;
+    }
+    if(typeof r?.total==='number'){
+      const label=r.metric==='sum'&&r.field==='freight_value'?'O frete total é':r.metric==='sum'&&r.field==='gross_weight'?'O peso total é':r.metric==='sum'&&r.field==='volume_count'?'O total de volumes é':r.metric==='count'&&r.field==='id'?'O total de entregas é':'O total na base tratada é';
+      return `${label} ${format(r.total,r.unit)}.`+(Array.isArray(r.data_quality_notes)&&r.data_quality_notes.length?` Limitações: ${r.data_quality_notes.join(' ')}`:'');
+    }
+    if(Array.isArray(r?.available_fields))return 'Posso consultar a base tratada de operação. Há '+r.record_count+' registro(s), com campos como: '+r.available_fields.join(', ')+'. Exemplos: '+(r.examples_of_queries||[]).join(' ');
+    return undefined;
+  }
   private responseText(data: any): string {
     if (typeof data?.output_text === 'string') return data.output_text;
     if (!Array.isArray(data?.output)) return '';
