@@ -12,9 +12,18 @@ export function isTableLikeVisual(visualType?: string, data?: unknown) {
 
 export function getWidgetGridStyle(position: Position, visualType?: string, data?: unknown): CSSProperties {
   const requestedWidth = clamp(Number(position.w) || 1, 1, 12);
-  const width = isTableLikeVisual(visualType, data) ? Math.max(6, requestedWidth) : requestedWidth;
-  const start = clamp((Number(position.x) || 0) + 1, 1, 13 - width);
-  return { gridColumn: `${start} / span ${width}`, gridRowStart: Math.max(1, (Number(position.y) || 0) + 1) };
+  const minimumWidth = isTableLikeVisual(visualType, data) ? 12 : visualType === 'kpi' ? 3 : 6;
+  const width = Math.max(minimumWidth, requestedWidth);
+
+  // Older dashboards often have every widget at x: 0 and use y only as an
+  // insertion order. Fixed coordinates make them render as a thin vertical
+  // column, so let the grid pack cards in order while preserving wide widgets.
+  return { gridColumn: `span ${width}` };
+}
+
+export function getWidgetMinHeight(visualType?: string, data?: unknown) {
+  if (isTableLikeVisual(visualType, data)) return 300;
+  return visualType === 'kpi' ? 156 : 260;
 }
 
 export function getReportBlockLayoutClass(visualType?: string, data?: unknown, tableLikeCount = 0) {
