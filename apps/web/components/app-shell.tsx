@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Bell, Blocks, Building2, ChartNoAxesCombined, CircleUserRound, FileBarChart, Gauge, KeyRound, LayoutDashboard, PackageOpen, PanelTop, PlugZap, ScrollText, Settings2, Tags, UsersRound } from 'lucide-react';
 import { createBrowserSupabaseClient } from '../lib/supabase';
 import { getCurrentUserPermissions, hasPermission, type UserPermission } from '../lib/rbac';
+import { GlobalAgentChat } from './agents/global-agent-chat';
 
 type Profile = { full_name: string | null; active_tenant_id: string | null } | null;
 type Tenant = { id: string; name: string; slug: string } | null;
@@ -24,6 +25,7 @@ const setupNavigation = [
   { href: '/app/setup', label: 'Configuração de dados', icon: Settings2, permission: 'setup.projects.view' },
   { href: '/app/setup/reports', label: 'Configuração de relatórios', icon: FileBarChart, permission: 'reports.configure' },
   { href: '/app/setup/agents', label: 'Configuração de agentes', icon: Blocks, permission: 'agents.configure' },
+  { href: '/app/setup/knowledge', label: 'Base de conhecimento', icon: ScrollText, permission: 'knowledge.manage' },
 ];
 
 const adminNavigation = [
@@ -135,6 +137,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <main className="min-h-[calc(100vh-76px)] bg-[#f6f8fc] px-4 py-6 md:px-8 lg:px-10 lg:py-7">{children}</main>
       </div>
+      <GlobalAgentChat />
     </div>
   );
 }
