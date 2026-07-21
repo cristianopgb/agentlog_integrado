@@ -9,7 +9,7 @@ const GENERAL_CHAT_FALLBACK = 'Olá! Sou o Agente Geral do Sistema Logístico In
 export class AiGatewayService {
   private readonly logger = new Logger(AiGatewayService.name);
 
-  async generalChat(input: { agent: Record<string, unknown>; message: string; history: Array<{role:string;content:string}>; toolResult: unknown }): Promise<GeneralChatResult> {
+  async generalChat(input: { agent: Record<string, unknown>; message: string; history: Array<{role:string;content:string}>; toolResult?: unknown; plan?:unknown; toolResults?:unknown[]; capabilitySummary?:unknown }): Promise<GeneralChatResult> {
     const enabled = process.env.AI_GATEWAY_ENABLED === 'true';
     const dryRun = !enabled || process.env.AI_GATEWAY_DRY_RUN === 'true';
     const model_name = String(input.agent.model_name || process.env.OPENAI_DEFAULT_MODEL || 'gpt-4.1-mini');
@@ -24,7 +24,7 @@ export class AiGatewayService {
     try {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model_name, temperature: Number(input.agent.temperature ?? .2), max_output_tokens: Number(input.agent.max_output_tokens ?? 1200), input: [{ role: 'system', content: 'Responda em português do Brasil, de forma objetiva. Use apenas o resultado controlado fornecido para dados do tenant; não invente dados, não mencione banco/tabelas/segredos, não use SQL, não prometa ações e não altere dados. Para dúvidas gerais, seja um consultor logístico claro. Retorne JSON {"answer":"..."}.' }, { role: 'user', content: JSON.stringify({ message: input.message, history: input.history.map(x => ({ role: x.role, content: x.content.slice(0, 1000) })), controlled_tool_result: input.toolResult }) }], text: { format: { type: 'json_object' } },
+        body: JSON.stringify({ model: model_name, temperature: Number(input.agent.temperature ?? .2), max_output_tokens: Number(input.agent.max_output_tokens ?? 1200), input: [{ role: 'system', content: 'Responda em português do Brasil, de forma objetiva. Use somente os resultados controlados fornecidos; não invente valores nem recalcule indicadores oficiais. Quando houver agregação, informe valor, unidade, filtros e percentuais; quando houver registros, cite apenas os principais. Não mencione detalhes técnicos, não use SQL, não prometa ações e não altere dados. Retorne JSON {"answer":"..."}.' }, { role: 'user', content: JSON.stringify({ message: input.message, history: input.history.map(x => ({ role: x.role, content: x.content.slice(0, 1000) })), plan:input.plan, controlled_tool_results: input.toolResults ?? [input.toolResult], capability_summary:input.capabilitySummary }) }], text: { format: { type: 'json_object' } },
         }),
       });
       if (!response.ok) throw new Error(`OpenAI respondeu HTTP ${response.status}`);
