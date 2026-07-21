@@ -23,10 +23,17 @@ export class ChatService {
     try {
       const intent=parseChatIntent(message);
       if(intent.needsClarification)return this.complete(t,id,c,run,agent,'Para responder com segurança, informe o nome completo do motorista, cliente ou a placa.');
-      let toolResult:unknown=null, toolKey=intent.tool;
-      if(toolKey&&await this.enabled(t,agent.id,toolKey)) {
+      let toolResult:unknown=null, toolKey=intent.tool, knowledgeResultsCount:number|undefined;
+      // Knowledge retrieval is a controlled read capability of General Chat. It must run
+      // whenever the deterministic parser identifies a knowledge question, even if a
+      // legacy agent-tool association was not created for this tenant.
+      if(toolKey&&(toolKey==='knowledge_base.search'||await this.enabled(t,agent.id,toolKey))) {
         if(!this.tools.supports(toolKey)) { await this.recordUnavailableTool(t,run.id,toolKey,intent.input!); return this.complete(t,id,c,run,agent,UNAVAILABLE_TOOL,toolKey,undefined,true); }
         toolResult=await this.call(t,run.id,toolKey,intent.input!);
+        if(toolKey==='knowledge_base.search') {
+          knowledgeResultsCount=Array.isArray((toolResult as any).results)?(toolResult as any).results.length:0;
+          if(knowledgeResultsCount===0)return this.complete(t,id,c,run,agent,'Não encontrei conteúdo publicado na Base de Conhecimento sobre esse tema.',toolKey,undefined,false,knowledgeResultsCount);
+        }
         const matches=(toolResult as any).matches;
         if(toolKey==='treated_data.search_records') { if(matches?.length===1){toolResult={search:toolResult,detail:await this.call(t,run.id,'treated_data.get_record_detail',{entity:'operation_record',id:matches[0].id})}} else if(matches?.length===0)return this.complete(t,id,c,run,agent,'Não encontrei esse registro na base tratada.',toolKey); else if(matches?.length>1)return this.complete(t,id,c,run,agent,'Encontrei mais de um registro. Informe um identificador mais específico para eu detalhar.',toolKey); }
       }
@@ -37,15 +44,16 @@ export class ChatService {
       const fallbackUsed=!normalized || Boolean(result?.gateway_error);
       const answer=normalized||FALLBACK;
       stage='save_assistant_message';
-      return this.complete(t,id,c,run,agent,answer,toolKey,result,fallbackUsed);
+      return this.complete(t,id,c,run,agent,answer,toolKey,result,fallbackUsed,knowledgeResultsCount);
     } catch(e) {
       await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',error_message:'Falha ao responder no Chat Geral.',output_json:{stage,tool_key:null,safe_error:'Não foi possível concluir a resposta com segurança.'},finished_at:new Date().toISOString()});
       throw new BadRequestException('Não foi possível responder agora. Tente novamente.');
     }
   }
-  private async complete(t:string,id:string,c:any,run:any,agent:any,answer:string,toolKey?:string,result?:any,fallbackUsed=false){
+  private async complete(t:string,id:string,c:any,run:any,agent:any,answer:string,toolKey?:string,result?:any,fallbackUsed=false,knowledgeResultsCount?:number){
     const usage={input_tokens:Number(result?.input_tokens)||0,output_tokens:Number(result?.output_tokens)||0,total_tokens:Number(result?.total_tokens)||0};
-    await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'completed',output_json:fallbackUsed?{answer,fallback_used:true,reason:'empty_or_invalid_gateway_answer'}:{answer,tool_key:toolKey},model_provider:result?.model_provider??'system',model_name:result?.model_name??null,...usage,finished_at:new Date().toISOString()});
+    const output={answer,tool_key:toolKey,...(toolKey==='knowledge_base.search'?{knowledge_results_count:knowledgeResultsCount??0}:{}),...(fallbackUsed?{fallback_used:true,reason:'empty_or_invalid_gateway_answer'}:{})};
+    await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'completed',output_json:output,model_provider:result?.model_provider??'system',model_name:result?.model_name??null,...usage,finished_at:new Date().toISOString()});
     if(result)await this.db.insert('ai_usage_logs',{tenant_id:t,agent_id:agent.id,ai_run_id:run.id,provider:result.model_provider,model_name:result.model_name,...usage});
     const saved=await this.save(t,id,'assistant',answer,run.id,toolKey?{tool_key:toolKey}:{});
     await this.db.update('ai_chat_conversations',`tenant_id=eq.${t}&id=eq.${id}`,{updated_at:new Date().toISOString(),title:c.title||answer.slice(0,80)});
