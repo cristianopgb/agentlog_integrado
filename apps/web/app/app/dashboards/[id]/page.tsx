@@ -56,6 +56,23 @@ function TypingIndicator() {
   return <div className="flex items-end gap-2" role="status" aria-label="Agente está respondendo"><AgentAvatar /><div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-slate-100 px-4 py-3"><span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" /><span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" /><span className="h-2 w-2 animate-bounce rounded-full bg-slate-400" /><span className="ml-2 text-xs font-medium text-slate-500">Agente está respondendo</span></div></div>;
 }
 
+type RealtimeStatus = 'idle' | 'connecting' | 'listening' | 'speaking' | 'ended';
+
+function VoiceWaveIndicator({ status }: { status: Exclude<RealtimeStatus, 'idle'> }) {
+  const labels = { connecting: 'Conectando voz...', listening: 'Ouvindo...', speaking: 'Agente falando...', ended: 'Voz encerrada' };
+  const barHeights = [16, 25, 36, 22, 44, 30, 52, 38, 28, 48, 34, 56, 40, 24, 35, 20];
+  const animating = status !== 'ended';
+
+  return <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-5" role="status" aria-live="polite">
+    <div className="flex min-w-56 flex-col items-center rounded-2xl border border-blue-100/80 bg-white/90 px-7 py-6 text-center shadow-lg shadow-blue-950/5 backdrop-blur-sm">
+      <div aria-hidden="true" className="flex h-16 items-center justify-center gap-1">
+        {barHeights.map((height, index) => <span key={index} className={`w-1 rounded-full bg-gradient-to-t from-blue-600 to-violet-500 ${animating ? 'animate-bounce' : 'opacity-60'}`} style={{ height, animationDelay: `${index * -0.08}s`, animationDuration: status === 'speaking' ? '0.8s' : '1.1s' }} />)}
+      </div>
+      <p className={`mt-3 text-sm font-semibold ${status === 'speaking' ? 'text-violet-700' : status === 'ended' ? 'text-slate-500' : 'text-blue-700'}`}>{labels[status]}</p>
+    </div>
+  </div>;
+}
+
 export default function PublishedDashboard() {
   const { id } = useParams<{ id: string }>(); const router=useRouter(); const [published,setPublished]=useState<Dashboard[]>([]);
   const [tenant, setTenant] = useState('');
@@ -67,7 +84,7 @@ export default function PublishedDashboard() {
   const [previews, setPreviews] = useState<Record<string, PreviewResult>>({});
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-  const [agentOpen,setAgentOpen]=useState(false),[analysis,setAnalysis]=useState<DashboardAnalysis|null>(null),[agentMessage,setAgentMessage]=useState(''),[aiLoading,setAiLoading]=useState(false),[dryRun,setDryRun]=useState(false),[question,setQuestion]=useState(''),[pendingQuestion,setPendingQuestion]=useState(''),[history,setHistory]=useState<Array<{q:string;a:string}>>([]),[voiceLoading,setVoiceLoading]=useState(false),[audio,setAudio]=useState(''),[realtime,setRealtime]=useState<'idle'|'connecting'|'listening'|'speaking'|'ended'>('idle'); const realtimePeer=useRef<RTCPeerConnection|null>(null); const realtimeStream=useRef<MediaStream|null>(null); const remoteAudio=useRef<HTMLAudioElement|null>(null);
+  const [agentOpen,setAgentOpen]=useState(false),[analysis,setAnalysis]=useState<DashboardAnalysis|null>(null),[agentMessage,setAgentMessage]=useState(''),[aiLoading,setAiLoading]=useState(false),[dryRun,setDryRun]=useState(false),[question,setQuestion]=useState(''),[pendingQuestion,setPendingQuestion]=useState(''),[history,setHistory]=useState<Array<{q:string;a:string}>>([]),[voiceLoading,setVoiceLoading]=useState(false),[audio,setAudio]=useState(''),[realtime,setRealtime]=useState<RealtimeStatus>('idle'); const realtimePeer=useRef<RTCPeerConnection|null>(null); const realtimeStream=useRef<MediaStream|null>(null); const remoteAudio=useRef<HTMLAudioElement|null>(null);
   async function openAgent(){setAgentOpen(true);setAiLoading(true);setAgentMessage('');setAnalysis(null);try{const r=await dashboardAiAnalysis(tenant,id,Object.values(selected));setAnalysis(r.analysis);setAgentMessage(r.message??'');setDryRun(r.dry_run)}catch(error){setAgentMessage(error instanceof Error?error.message:'Não foi possível gerar a análise.')}finally{setAiLoading(false)}}
   async function ask(){if(!question.trim())return;const q=question.trim();setQuestion('');setPendingQuestion(q);setAiLoading(true);try{const r=await dashboardAiQuestion(tenant,id,Object.values(selected),q);setHistory(v=>[...v,{q,a:r.answer}]);setDryRun(r.dry_run)}catch(error){setHistory(v=>[...v,{q,a:error instanceof Error?error.message:'Não foi possível responder.'}])}finally{setPendingQuestion('');setAiLoading(false)}}
   function stopRealtime() { realtimeStream.current?.getTracks().forEach((track) => track.stop()); realtimeStream.current = null; realtimePeer.current?.close(); realtimePeer.current = null; if (remoteAudio.current) remoteAudio.current.srcObject = null; setRealtime('ended'); }
@@ -143,7 +160,7 @@ export default function PublishedDashboard() {
           <div className="flex items-start justify-between gap-4"><div><h2 id="dashboard-agent-title" className="text-xl font-bold">Agente de Dashboard</h2><p className="mt-1 text-sm text-slate-500">Conversa baseada nos widgets e filtros atuais deste dashboard.</p></div><button type="button" aria-label="Fechar agente de dashboard" className="rounded-lg px-2 py-1 text-xl text-slate-500 hover:bg-slate-100" onClick={()=>{stopRealtime();setAgentOpen(false)}}>×</button></div>
           <span className={`mt-3 inline-block rounded px-2 py-1 text-xs font-bold ${dryRun?'bg-amber-100 text-amber-800':'bg-emerald-100 text-emerald-800'}`}>{dryRun?'Simulação':'IA ativa'}</span>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-5 py-5 sm:px-6">
+        <div className="relative min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-5 py-5 sm:px-6">
           <div className="space-y-5 text-sm">
             {aiLoading && !analysis ? <TypingIndicator /> : null}
             {agentMessage ? <div className="flex items-start gap-2"><AgentAvatar /><p className="max-w-[85%] rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-slate-700">{agentMessage}</p></div> : null}
@@ -151,8 +168,8 @@ export default function PublishedDashboard() {
             {history.length ? <section aria-label="Histórico da conversa" className="space-y-4"><p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">Conversa</p>{history.map((x,i)=><div key={i} className="space-y-3"><div className="flex justify-end"><p className="max-w-[85%] rounded-2xl rounded-br-md bg-blue-600 px-4 py-3 text-white">{x.q}</p></div><div className="flex items-start gap-2"><AgentAvatar /><div className="max-w-[85%] rounded-2xl rounded-tl-md bg-white px-4 py-3 text-slate-700 shadow-sm"><p>{x.a}</p><button className="mt-2 text-sm font-semibold text-blue-700" disabled={voiceLoading} onClick={()=>listen(x.a)}>{voiceLoading?'Gerando áudio...':'Ouvir resposta'}</button></div></div></div>)}</section> : null}
             {pendingQuestion ? <div className="flex justify-end"><p className="max-w-[85%] rounded-2xl rounded-br-md bg-blue-600 px-4 py-3 text-white">{pendingQuestion}</p></div> : null}
             {aiLoading && analysis ? <TypingIndicator /> : null}
-            {realtime==='listening'?<p className="flex items-center gap-2 text-sm font-medium text-blue-700"><span className="h-2 w-2 animate-ping rounded-full bg-blue-500"/>Ouvindo...</p>:null}{realtime==='speaking'?<p className="flex items-center gap-2 text-sm font-medium text-emerald-700"><span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500"/>Agente falando...</p>:null}{realtime==='ended'?<p className="text-sm text-slate-500">Voz encerrada</p>:null}
           </div>
+          {realtime !== 'idle' ? <VoiceWaveIndicator status={realtime} /> : null}
         </div>
         <footer className="shrink-0 border-t border-slate-200 bg-white px-5 py-4 sm:px-6"><label className="field-label">Pergunte sobre esta análise ou sobre os dados deste dashboard</label><div className="mt-1.5 flex flex-col gap-2 sm:flex-row"><input className="field-control min-w-0 flex-1" value={question} onChange={e=>setQuestion(e.target.value)} maxLength={1000}/><div className="flex gap-2"><button className="btn-secondary flex-1 whitespace-nowrap sm:flex-none" disabled={realtime==='connecting'} onClick={realtime==='listening'||realtime==='speaking'?stopRealtime:startRealtime}>{realtime==='connecting'?'Conectando...':realtime==='listening'||realtime==='speaking'?'Encerrar conversa':'Conversar com o agente'}</button><button className="btn-primary" disabled={aiLoading||!question.trim()} onClick={ask}>Enviar</button></div></div></footer>
         <audio ref={remoteAudio} autoPlay className="hidden" />
