@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { getResponseStyle } from './response-style';
 
 type Input = { agent: Record<string, unknown>; tenantId?: string; runType?: string; allowedTools?: string[]; evidencePack?: unknown; userContext?: unknown; context?: string; structuredOutput?: boolean };
 
@@ -7,7 +8,7 @@ type Input = { agent: Record<string, unknown>; tenantId?: string; runType?: stri
 export class AgentPromptBuilderService {
   build(input: Input) {
     const agent = input.agent;
-    const style = this.object(agent.response_style);
+    const style = getResponseStyle(agent);
     const language = String(agent.language || 'pt-BR');
     const identity = [agent.name ? `Nome: ${agent.name}.` : '', agent.agent_type ? `Tipo: ${agent.agent_type}.` : '', agent.behavior_profile ? `Perfil: ${agent.behavior_profile}.` : ''].filter(Boolean).join('\n');
     const configured = [
