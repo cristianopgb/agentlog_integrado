@@ -22,6 +22,7 @@ export class ChatService {
     if(!conversation.title)await this.db.update('ai_chat_conversations',`tenant_id=eq.${t}&id=eq.${id}`,{title:message.slice(0,120)});
     const [run]=await this.db.insert<any[]>('ai_runs',{tenant_id:t,agent_id:agent.id,run_type:'general_chat',trigger_type:'chat_message',status:'processing',input_snapshot:{conversation_id:id,message:message.slice(0,500)},requested_by:u,started_at:new Date().toISOString()});
     try {
+      if(this.isSimpleGreeting(message)){const answer=this.greeting(agent);return this.complete(t,id,conversation,run,agent,answer,{model_provider:'system',model_name:null,dry_run:process.env.AI_GATEWAY_DRY_RUN==='true'}, {last_context:{question:message}})}
       const previous=await this.lastContext(t,id),pack=await this.buildOfficialEvidencePack(t,run.id,agent,message,previous);
       const history=await this.recentHistory(t,id),response=await this.gateway.generalChat({agent,message,history,toolResult:pack,toolResults:[{tool_key:'official_evidence_pack',result:pack}],plan:{mode:pack.evidence.length?'official_evidence':'general_assistant',ambiguity:pack.ambiguity}});
       const answer=this.cleanAssistantAnswer(response.answer,4000)||GENERAL_FALLBACK;
@@ -49,6 +50,8 @@ export class ChatService {
   private score(message:string,value:unknown){const q=new Set(this.normalize(message).split(/\s+/).filter(x=>x.length>2)),text=this.normalize(typeof value==='string'?value:JSON.stringify(value));return [...q].reduce((n,w)=>n+(text.includes(w)?5:0),0)}
   private detect(message:string,values:string[]){const q=this.normalize(message);return values.filter(x=>q.includes(this.normalize(x)))}
   private normalize(value:unknown){return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()}
+  private isSimpleGreeting(message:string){return /^(ol[aá]|oi|bom dia|boa tarde|boa noite|obrigad[oa]|tudo bem\??)[!?.\s]*$/i.test(message.trim())}
+  private greeting(agent:any){const style=agent.response_style&&typeof agent.response_style==='object'?agent.response_style:{};return this.cleanAssistantAnswer(String(style.greeting_response||'Olá! Como posso ajudar?'),300)||'Olá! Como posso ajudar?'}
   private isOperational(message:string,metrics:string[],dimensions:string[]){return !!metrics.length||!!dimensions.length||/\b(entrega|nf|cte|manifesto|pedido|cliente|motorista|placa|embarcador)\b/i.test(message)}
   private ambiguousPosition(message:string){return /\b(posi[cç][aã]o|situa[cç][aã]o)\b/i.test(message)&&!/\b(status|origem|destino|atualiza[cç][aã]o)\b/i.test(message)}
   private async controlled(t:string,run:string,agent:any,key:string,input:Record<string,unknown>,action:()=>Promise<any>):Promise<{blocked:true;message:string}|{blocked:false;value:any}>{if(!(await this.enabled(t,agent.id,key))){const message=`A fonte oficial exige a ferramenta ${key}, que não está habilitada para este agente.`;await this.toolCall(t,run,key,input,{message},'blocked','Ferramenta não habilitada.');return {blocked:true,message}}const started=Date.now();try{const value=await action();await this.toolCall(t,run,key,input,value,'completed',undefined,started);return {blocked:false,value}}catch(error){await this.toolCall(t,run,key,input,{message:'Falha controlada ao consultar a fonte.'},'failed','Falha na ferramenta controlada.',started);throw error}}
