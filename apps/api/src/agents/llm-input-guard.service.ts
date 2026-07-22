@@ -1,0 +1,3 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+const MAX_LLM_INPUT_BYTES=40*1024;
+@Injectable() export class LlmInputGuardService { inspect(value:unknown){const text=JSON.stringify(value);const bytes=Buffer.byteLength(text);if(bytes>MAX_LLM_INPUT_BYTES)throw new BadRequestException('Contexto narrativo excede o limite permitido.');if(/(official_evidence_pack|dashboard_snapshot|report_render_snapshot|report_data_snapshot|render_snapshot|data_snapshot|operation_records|\braw\b|\bpayload\b)/i.test(text))throw new BadRequestException('Contexto de IA contém conteúdo não permitido.');return {bytes,blocked:false};} }

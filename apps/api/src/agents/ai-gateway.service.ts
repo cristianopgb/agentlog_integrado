@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AgentPromptBuilderService } from './agent-prompt-builder.service';
 import { getResponseStyle } from './response-style';
+import { LlmInputGuardService } from './llm-input-guard.service';
 
 type GatewayInput = { tenantId?: string; agent: Record<string, unknown>; runType?: string; triggerType?: string; inputSnapshot: Record<string, unknown>; messages?: Array<{ role: string; content: string }>; responseSchema?: Record<string, unknown>; context?: 'dashboard'|'report' };
 type GeneralChatResult = { answer: string; model_provider: 'openai'|'system'; model_name: string; input_tokens: number; output_tokens: number; total_tokens: number; dry_run: boolean; gateway_error?: string };
@@ -10,9 +11,12 @@ const GENERAL_CHAT_FALLBACK = 'Não encontrei dados tratados suficientes para re
 @Injectable()
 export class AiGatewayService {
   private readonly logger = new Logger(AiGatewayService.name);
-  constructor(private readonly prompts: AgentPromptBuilderService) {}
+  constructor(private readonly prompts: AgentPromptBuilderService, private readonly guard:LlmInputGuardService) {}
 
+  /** @deprecated General Chat must use generalChatNarrative; this legacy entrypoint rejects raw evidence. */
   async generalChat(input: { agent: Record<string, unknown>; message: string; history: Array<{role:string;content:string}>; toolResult?: unknown; plan?:unknown; toolResults?:unknown[]; capabilitySummary?:unknown }): Promise<GeneralChatResult> {
+    if(String(input.agent.agent_type)==='general_chat') throw new Error('Fluxo legado de Chat Geral não permitido.');
+    this.guard.inspect({message:input.message,history:input.history,tool_result:input.toolResult,tool_results:input.toolResults,plan:input.plan});
     const enabled = process.env.AI_GATEWAY_ENABLED === 'true';
     const dryRun = !enabled || process.env.AI_GATEWAY_DRY_RUN === 'true';
     const prompt = this.prompts.build({agent:input.agent,runType:'general_chat',allowedTools:input.toolResults?.map((x:any)=>String(x.tool_key)).filter(Boolean),evidencePack:input.toolResult,context:'chat',structuredOutput:true}); const model_name = prompt.model.name;
@@ -40,6 +44,12 @@ export class AiGatewayService {
       this.logger.error(`Falha no gateway de chat geral: ${error instanceof Error ? error.message : 'erro desconhecido'}`);
       return this.generalResult(this.fallback(input.agent), 'system', model_name, false, undefined, 'gateway_call_failed');
     }
+  }
+
+  async generalChatNarrative(input:{agent:Record<string,unknown>;message:string;history:Array<{role:string;content:string}>;narrativeContext:unknown}):Promise<GeneralChatResult & {llm_input_bytes:number}>{
+    const guard=this.guard.inspect({message:input.message,history:input.history.slice(-10),narrative_context:input.narrativeContext}); const enabled=process.env.AI_GATEWAY_ENABLED==='true', prompt=this.prompts.build({agent:input.agent,runType:'general_chat',allowedTools:[],context:'chat'}), model=prompt.model.name;
+    if(!enabled||process.env.AI_GATEWAY_DRY_RUN==='true')return {...this.generalResult(this.fallback(input.agent),'system',model,true),llm_input_bytes:guard.bytes};
+    try { const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,temperature:prompt.model.temperature,max_output_tokens:prompt.model.maxOutputTokens,input:[{role:'system',content:prompt.systemPrompt},{role:'user',content:JSON.stringify({message:input.message,history:input.history.slice(-10),narrative_context:input.narrativeContext})}]})}); if(!response.ok)throw new Error('OpenAI respondeu com erro');const data:any=await response.json();return {...this.generalResult(this.safeGeneralAnswer(this.responseText(data)||this.fallback(input.agent),input.agent,input.message),'openai',model,false,data.usage),llm_input_bytes:guard.bytes}; } catch {return {...this.generalResult(this.fallback(input.agent),'system',model,false),llm_input_bytes:guard.bytes};}
   }
 
   private controlledToolAnswer(toolResult:unknown):string|undefined {

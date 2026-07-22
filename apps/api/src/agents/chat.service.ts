@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { SupabaseService } from '../supabase/supabase.service';
 import { AiGatewayService } from './ai-gateway.service';
 import { AgentToolExecutorService } from './agent-tool-executor.service';
+import { GeneralChatOrchestratorService } from './general-chat-orchestrator.service';
 import { parseChatIntent } from './chat-intent-parser';
 import { getResponseStyle } from './response-style';
 
@@ -11,7 +12,7 @@ const GENERAL_FALLBACK='Não encontrei evidência oficial suficiente para respon
 
 @Injectable()
 export class ChatService {
-  constructor(private db:SupabaseService,private gateway:AiGatewayService,private tools:AgentToolExecutorService){}
+  constructor(private db:SupabaseService,private gateway:AiGatewayService,private tools:AgentToolExecutorService,private orchestrator:GeneralChatOrchestratorService){}
   async conversations(t:string,u:string){return {data:await this.db.select('ai_chat_conversations',`tenant_id=eq.${t}&user_id=eq.${u}&deleted_at=is.null&status=eq.active&order=updated_at.desc&limit=50`)}}
   async create(t:string,u:string,b:Record<string,unknown>){const a=await this.agent(t);const [x]=await this.db.insert<any[]>('ai_chat_conversations',{tenant_id:t,user_id:u,agent_id:a?.id??null,title:typeof b.title==='string'?this.cleanUserMessage(b.title,120):null});return x}
   async messages(t:string,u:string,id:string){await this.conversation(t,u,id);return {data:await this.db.select('ai_chat_messages',`tenant_id=eq.${t}&conversation_id=eq.${id}&order=created_at.asc&limit=100`)}}
@@ -24,14 +25,12 @@ export class ChatService {
     const [run]=await this.db.insert<any[]>('ai_runs',{tenant_id:t,agent_id:agent.id,run_type:'general_chat',trigger_type:'chat_message',status:'processing',input_snapshot:{conversation_id:id,message:message.slice(0,500)},requested_by:u,started_at:new Date().toISOString()});
     try {
       if(this.isSimpleGreeting(message)){const answer=this.greeting(agent);return this.complete(t,id,conversation,run,agent,answer,{model_provider:'system',model_name:null,dry_run:process.env.AI_GATEWAY_DRY_RUN==='true'},{tool_key:'simple_greeting',simple_greeting:true,used_agent_config:true,last_context:{question:message}})}
-      const previous=await this.lastContext(t,id),pack=await this.buildOfficialEvidencePack(t,run.id,agent,message,previous);
-      const history=await this.recentHistory(t,id),response=await this.gateway.generalChat({agent,message,history,toolResult:pack,toolResults:[{tool_key:'official_evidence_pack',result:pack}],plan:{mode:pack.evidence.length?'official_evidence':'general_assistant',ambiguity:pack.ambiguity}});
-      const answer=this.cleanAssistantAnswer(response.answer,4000)||GENERAL_FALLBACK;
-      return this.complete(t,id,conversation,run,agent,answer,response,{tool_key:'official_evidence_pack',last_context:{question:message,evidence_pack:pack,selected_evidence:pack.evidence.slice(0,3),selected_record:pack.evidence.find(x=>x.source_type==='operation_record')?.data??null,candidates:pack.evidence.filter(x=>x.source_type==='operation_record').map(x=>x.data),pending_clarification:pack.ambiguity,resolved_entities:pack.detected_entities,resolved_fields:pack.detected_metrics}});
+      const history=await this.recentHistory(t,id),orchestrated:any=await this.orchestrator.execute(t,agent,message,history);
+      return this.complete(t,id,conversation,run,agent,orchestrated.content,orchestrated.response||{model_provider:'system',model_name:null},orchestrated.observability);
     }catch(error){const reason=error instanceof Error?error.message:'erro desconhecido';await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',error_message:`Chat Geral: ${reason}`.slice(0,500),output_json:{safe_error:'Não foi possível concluir a resposta com segurança.',tool_key:'error'},finished_at:new Date().toISOString()});throw new BadRequestException('Não consegui concluir a resposta agora. Tente novamente em instantes.')}
   }
   /** Builds a bounded, sanitized pack from every official source that can answer the question. */
-  private async buildOfficialEvidencePack(t:string,run:string,agent:any,message:string,context:any):Promise<Pack>{
+  private async legacyBuildOfficialEvidencePack(t:string,run:string,agent:any,message:string,context:any):Promise<Pack>{
     const intent=parseChatIntent(message),normalized=this.normalize(message),terms=normalized.split(/\s+/).filter(x=>x.length>2).slice(0,15),metrics=this.detect(message,['peso','frete','volume','entrega','status','r$/ton','sla']),dimensions=this.detect(message,['cliente','embarcador','motorista','placa','origem','destino','status']),entities={identifier:intent.identifier,filters:intent.filters||{},previous:context?.resolved_entities||undefined};
     const pack:Pack={question:message,normalized_question:normalized,detected_terms:terms,detected_entities:entities,detected_metrics:metrics,detected_dimensions:dimensions,evidence:[],ambiguity:null,allowed_calculations:['somar valores oficiais recebidos','contar registros oficiais recebidos','calcular média simples de valores oficiais recebidos','identificar maior ou menor em lista oficial recebida','ordenar lista oficial recebida','responder campo de uma linha oficial'],denied_calculations:['fórmula de negócio não homologada','R$/ton sem indicador ou regra homologada','SLA, score, margem ou performance composta sem fonte homologada']};
     await Promise.all([this.indicatorEvidence(t,run,agent,message,pack),this.dashboardEvidence(t,run,agent,message,pack),this.reportEvidence(t,run,agent,message,pack),this.knowledgeEvidence(t,run,agent,message,pack)]);
