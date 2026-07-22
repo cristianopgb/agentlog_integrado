@@ -1054,6 +1054,8 @@ export class NativeIndicatorsService {
       `tenant_id=eq.${tenantId}`,
       'deleted_at=is.null',
     ];
+    if (table === 'operation_records')
+      filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
     const rows = await this.supabase.select<Record<string, unknown>[]>(
       table,
       `${filters.join('&')}&limit=10000`,
@@ -1062,6 +1064,8 @@ export class NativeIndicatorsService {
   }
   private async countRows(tenantId: string, table: TableName, extra?: string) {
     const q = [`select=id`, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null'];
+    if (table === 'operation_records')
+      q.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
     if (extra) q.push(extra);
     const rows = await this.supabase.select<Array<{ id: string }>>(
       table,
