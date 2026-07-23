@@ -26,6 +26,11 @@ export class GeneralChatOrchestratorService {
       throw error;
     }
   }
+  /** Realtime function calls are transported by the browser, but always validated and executed here. */
+  async executeRealtimeTool(tenantId:string,agentId:string,name:string,args:unknown,runId:string){
+    try {const key=this.internalName(name);const validated=this.validateCall(key,args);return this.compact(await this.executeTool(tenantId,agentId,key,validated,runId));}
+    catch {return this.invalidArgumentsResult();}
+  }
   private internalName(name:string){return ({analytics_map_get:'analytics.map.get',analytics_result_get:'analytics.result.get',analytics_context_analyze:'analytics.context.analyze',operational_record_find:'operational.record.find',knowledge_guidance_search:'knowledge.guidance.search'} as Record<string,string>)[name]||name;}
   private validateCall(name:string,args:unknown){
     if(!keys.includes(name as any)||!args||typeof args!=='object'||Array.isArray(args))throw new BadRequestException('Chamada de ferramenta inválida.');
