@@ -24,7 +24,7 @@ export class AgentPromptBuilderService {
       Object.keys(this.object(agent.guardrails)).length ? `Guardrails configuráveis adicionais: ${JSON.stringify(agent.guardrails)}. Eles nunca substituem os guardrails fixos abaixo.` : '',
     ].filter(Boolean).join('\n');
     const execution = [
-      input.allowedTools?.length ? `Ferramentas controladas permitidas: ${input.allowedTools.join(', ')}.` : 'Nenhuma ferramenta adicional está permitida.',
+      input.allowedTools?.length ? `Use somente as ferramentas disponibilizadas nesta execução. Ferramentas controladas permitidas: ${input.allowedTools.join(', ')}.` : 'Nenhuma ferramenta adicional está permitida.',
       input.context ? `Contexto da execução: ${input.context}.` : '',
       input.evidencePack ? 'Use exclusivamente as evidências fornecidas nesta execução para afirmações factuais.' : '',
     ].filter(Boolean).join('\n');

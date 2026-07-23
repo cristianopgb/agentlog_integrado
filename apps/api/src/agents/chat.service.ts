@@ -27,7 +27,7 @@ export class ChatService {
 
       const history=await this.recentHistory(t,id),orchestrated:any=await this.orchestrator.execute(t,agent,message,history,run.id);
       return this.complete(t,id,conversation,run,agent,orchestrated.content,orchestrated.response||{model_provider:'system',model_name:null},orchestrated.observability,orchestrated.output_json);
-    }catch(error){const reason=error instanceof Error?error.message:'erro desconhecido';await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',error_message:`Chat Geral: ${reason}`.slice(0,500),output_json:{safe_error:'Não foi possível concluir a resposta com segurança.',tool_key:'error'},finished_at:new Date().toISOString()});throw new BadRequestException('Não consegui concluir a resposta agora. Tente novamente em instantes.')}
+    }catch(error){const reason=error instanceof Error?error.message:'erro desconhecido';await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',error_message:`Chat Geral: ${reason}`.slice(0,500),output_json:(error as any)?.generalChatFailure||{agent_flow:'openai_tool_calling',stage_failed:'chat_execution',error_code:'general_chat_execution_failed',error_message_safe:'Não foi possível concluir a resposta com segurança.',tool_keys:[]},finished_at:new Date().toISOString()});throw new BadRequestException('Não consegui concluir a resposta agora. Tente novamente em instantes.')}
   }
   /** LEGACY - not used by Chat Geral OpenAI tool calling. Builds a bounded evidence pack for legacy callers only. */
   private async legacyBuildOfficialEvidencePack(t:string,run:string,agent:any,message:string,context:any):Promise<Pack>{
