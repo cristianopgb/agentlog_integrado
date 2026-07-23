@@ -28,6 +28,7 @@ export class SupabaseService {
     return this.parseResponse<T>(response);
   }
 
+  async upsert<T>(table: string, payload: Record<string, unknown>, onConflict: string): Promise<T> { const response = await fetch(`${this.url}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, { method: "POST", headers: { ...this.adminHeaders(), Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }); return this.parseResponse<T>(response); }
   async insert<T>(table: string, payload: Record<string, unknown> | Record<string, unknown>[]): Promise<T> {
     const response = await fetch(`${this.url}/rest/v1/${table}`, { method: 'POST', headers: { ...this.adminHeaders(), Prefer: 'return=representation' }, body: JSON.stringify(payload) });
     return this.parseResponse<T>(response);
