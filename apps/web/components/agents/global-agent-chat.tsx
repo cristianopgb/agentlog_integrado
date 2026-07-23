@@ -4,254 +4,36 @@
 import { Bot, History, MessageCircle, Mic, Plus, Send, Trash2, Volume2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createBrowserSupabaseClient } from '../../lib/supabase';
-import {
-  chatConversations,
-  chatMessages,
-  chatSpeech,
-  createChatConversation,
-  deleteChatConversation,
-  sendChatMessage,
-} from '../../lib/chat-api';
+import { chatConversations, chatMessages, chatSpeech, createChatConversation, deleteChatConversation, realtimeEvent, realtimeSession, realtimeTool, sendChatMessage } from '../../lib/chat-api';
 
 type Message = { id: string; role: string; content: string; ai_run_id?: string };
 type Conversation = { id: string; title?: string | null };
-
+type VoiceState = 'idle' | 'connecting' | 'listening' | 'responding' | 'error';
 const ERROR = 'Não consegui responder agora. Tente novamente em instantes.';
-
-const safeMessages = (value: unknown): Message[] =>
-  Array.isArray(value)
-    ? value.flatMap((item: any, index) =>
-        typeof item?.content === 'string'
-          ? [
-              {
-                id: item.id || `m-${index}`,
-                role: item.role === 'user' ? 'user' : 'assistant',
-                content: item.content,
-                ai_run_id: item.ai_run_id,
-              },
-            ]
-          : [],
-      )
-    : [];
-
-const safeConversations = (value: unknown): Conversation[] =>
-  Array.isArray(value)
-    ? value
-        .filter((item: any) => typeof item?.id === 'string')
-        .map((item: any) => ({ id: item.id, title: item.title || null }))
-    : [];
+const safeMessages = (value: unknown): Message[] => Array.isArray(value) ? value.flatMap((item: any, index) => typeof item?.content === 'string' ? [{ id: item.id || `m-${index}`, role: item.role === 'user' ? 'user' : 'assistant', content: item.content, ai_run_id: item.ai_run_id }] : []) : [];
+const safeConversations = (value: unknown): Conversation[] => Array.isArray(value) ? value.filter((item: any) => typeof item?.id === 'string').map((item: any) => ({ id: item.id, title: item.title || null })) : [];
+function VoiceWaves({ state }: { state: VoiceState }) { return <div className="flex h-12 items-center justify-center gap-1" aria-hidden="true">{[16, 28, 40, 28, 16].map((height, index) => <i key={`${height}-${index}`} className={`w-1.5 rounded-full bg-blue-500 ${state === 'listening' || state === 'responding' ? 'animate-pulse' : ''}`} style={{ height, animationDelay: `${index * 100}ms` }} />)}</div>; }
 
 export function GlobalAgentChat() {
-  const [open, setOpen] = useState(false);
-  const [tenant, setTenant] = useState('');
-  const [list, setList] = useState<Conversation[]>([]);
-  const [conversation, setConversation] = useState<Conversation>();
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [text, setText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false), [tenant, setTenant] = useState(''), [list, setList] = useState<Conversation[]>([]), [conversation, setConversation] = useState<Conversation>(), [messages, setMessages] = useState<Message[]>([]), [text, setText] = useState(''), [loading, setLoading] = useState(false), [historyOpen, setHistoryOpen] = useState(false), [voice, setVoice] = useState<VoiceState>('idle'), [voiceError, setVoiceError] = useState('');
+  const end = useRef<HTMLDivElement>(null), peer = useRef<RTCPeerConnection | null>(null), stream = useRef<MediaStream | null>(null), channel = useRef<RTCDataChannel | null>(null), audio = useRef<HTMLAudioElement | null>(null), run = useRef('');
+  const refresh = async (tenantId: string) => { try { setList(safeConversations((await chatConversations(tenantId)).data)); } catch { setList([]); } };
+  const cleanupVoice = () => { try { channel.current?.close(); peer.current?.close(); stream.current?.getTracks().forEach((track) => track.stop()); if (audio.current) audio.current.srcObject = null; } catch { /* Local cleanup must never affect typed chat. */ } finally { channel.current = null; peer.current = null; stream.current = null; } };
 
-  const refresh = async (tenantId: string) => {
-    try {
-      const response = await chatConversations(tenantId);
-      setList(safeConversations(response.data));
-    } catch {
-      setList([]);
-    }
-  };
+  useEffect(() => { const loadTenant = async () => { try { const { data } = await createBrowserSupabaseClient().from('users_profile').select('active_tenant_id').maybeSingle(); const profile = data as { active_tenant_id?: string } | null; if (profile?.active_tenant_id) { setTenant(profile.active_tenant_id); await refresh(profile.active_tenant_id); } } catch { /* Chat stays closed until tenant is loaded. */ } }; void loadTenant().catch(() => undefined); return cleanupVoice; }, []);
+  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+  const choose = async (item: Conversation) => { if (!tenant || !item.id) return; setConversation(item); setHistoryOpen(false); try { setMessages(safeMessages((await chatMessages(tenant, item.id)).data)); } catch { setMessages([]); } };
+  const fresh = async () => { if (!tenant) return; try { const response = await createChatConversation(tenant); const item = { id: response.id, title: response.title || null }; setList((current) => [item, ...current.filter((entry) => entry.id !== item.id)]); await choose(item); } catch { setMessages((current) => [...current, { id: `e-${Date.now()}`, role: 'assistant', content: ERROR }]); } };
+  const openChat = () => { setOpen(true); if (!conversation) void fresh().catch(() => undefined); };
+  const send = async () => { if (!tenant || !conversation?.id || !text.trim() || loading) return; const question = text.trim(), conversationId = conversation.id; setText(''); setMessages((current) => [...current, { id: `local-${Date.now()}`, role: 'user', content: question }]); setLoading(true); try { const response = await sendChatMessage(tenant, conversationId, question); setMessages((current) => [...current, ...safeMessages(response.message ? [response.message] : [])]); await refresh(tenant); } catch { setMessages((current) => [...current, { id: `e-${Date.now()}`, role: 'assistant', content: ERROR }]); } finally { setLoading(false); } };
+  const playSpeech = async (message: Message) => { if (!tenant) return; try { const response = await chatSpeech(tenant, message.content, message.ai_run_id); await new Audio(`data:${response.audio_mime_type || 'audio/mpeg'};base64,${response.audio_base64}`).play(); } catch { setMessages((current) => [...current, { id: `e-${Date.now()}`, role: 'assistant', content: 'Não foi possível reproduzir a resposta.' }]); } };
+  const persist = async (conversationId: string, stage: string, eventText?: string, extra: Record<string, unknown> = {}) => { if (!tenant || !conversationId || !run.current) return; await realtimeEvent(tenant, conversationId, { stage, text: eventText, ai_run_id: run.current, ...extra }); };
+  const sendChannelEvent = (event: Record<string, unknown>) => { try { if (channel.current?.readyState === 'open') channel.current.send(JSON.stringify(event)); } catch { /* WebRTC failure is isolated to voice. */ } };
+  const failVoice = async (conversationId: string, message: string) => { cleanupVoice(); setVoice('error'); setVoiceError(message); if (!run.current) return; try { await persist(conversationId, 'failed', undefined, { error_code: 'voice_connection_failed', error_message_safe: message }); } catch { /* Failed-state logging must not reject into React. */ } };
+  const handleRealtime = async (event: unknown, conversationId: string) => { try { const payload = event as Record<string, unknown>; const type = typeof payload?.type === 'string' ? payload.type : ''; if (type.includes('input_audio_transcription.completed')) { await persist(conversationId, 'user_spoke', typeof payload.transcript === 'string' ? payload.transcript : ''); return; } if (type === 'response.function_call_arguments.done') { let argumentsValue: Record<string, unknown> = {}; try { const parsed = JSON.parse(typeof payload.arguments === 'string' ? payload.arguments : '{}'); argumentsValue = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { /* Tool receives a safe empty object on malformed JSON. */ } try { const result = await realtimeTool(tenant, conversationId, { ai_run_id: run.current, name: payload.name, arguments: argumentsValue }); sendChannelEvent({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: payload.call_id, output: JSON.stringify(result.result) } }); sendChannelEvent({ type: 'response.create' }); } catch { sendChannelEvent({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: payload.call_id, output: JSON.stringify({ tool_error: true, error_code: 'INVALID_TOOL_ARGUMENTS', message: 'Parâmetros inválidos para esta ferramenta.', allowed_schema_summary: {}, retry_instruction: 'Refaça a chamada usando apenas os nomes permitidos no schema.' }) } }); } return; } if (type.includes('response.audio_transcript.done')) { setVoice('responding'); await persist(conversationId, 'responded', typeof payload.transcript === 'string' ? payload.transcript : ''); await refresh(tenant); if (conversation?.id === conversationId) await choose(conversation); } } catch { /* External Realtime payloads never escape component handling. */ } };
+  const stopVoiceSession = async () => { const conversationId = conversation?.id, shouldEnd = voice !== 'error' && Boolean(run.current && conversationId); cleanupVoice(); try { if (shouldEnd && conversationId) { await persist(conversationId, 'ended'); await refresh(tenant); if (conversation?.id === conversationId) await choose(conversation); } } catch { /* Local card may always close. */ } finally { run.current = ''; setVoiceError(''); setVoice('idle'); } };
+  const startVoice = async () => { const conversationId = conversation?.id; if (!tenant || !conversationId || loading || voice === 'connecting' || voice === 'listening' || voice === 'responding') return; run.current = ''; setVoice('connecting'); setVoiceError(''); try { const session = await realtimeSession(tenant, conversationId); const runId = typeof session?.ai_run_id === 'string' ? session.ai_run_id : '', clientSecret = typeof session?.session?.client_secret === 'string' ? session.session.client_secret : ''; if (!runId || !clientSecret) throw new Error('voice_session_invalid'); run.current = runId; const microphone = await navigator.mediaDevices.getUserMedia({ audio: true }); stream.current = microphone; const connection = new RTCPeerConnection(); peer.current = connection; connection.ontrack = (event) => { if (audio.current && event.streams[0]) { audio.current.srcObject = event.streams[0]; void audio.current.play().catch(() => undefined); } setVoice('responding'); }; connection.onconnectionstatechange = () => { if (connection.connectionState === 'failed') void failVoice(conversationId, 'Erro ao conectar voz').catch(() => undefined); }; const dataChannel = connection.createDataChannel('oai-events'); channel.current = dataChannel; dataChannel.onmessage = (messageEvent) => { try { const event = typeof messageEvent.data === 'string' ? JSON.parse(messageEvent.data) : null; void handleRealtime(event, conversationId).catch(() => undefined); } catch { /* Ignore malformed Realtime messages. */ } }; microphone.getTracks().forEach((track) => connection.addTrack(track, microphone)); const offer = await connection.createOffer(); await connection.setLocalDescription(offer); const answer = await fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { Authorization: `Bearer ${clientSecret}`, 'Content-Type': 'application/sdp' }, body: offer.sdp }); if (!answer.ok) throw new Error('voice_connection_failed'); await connection.setRemoteDescription({ type: 'answer', sdp: await answer.text() }); setVoice('listening'); await persist(conversationId, 'connected'); } catch (cause) { await failVoice(conversationId, cause instanceof DOMException ? 'Permita o acesso ao microfone para conversar por voz.' : 'Erro ao conectar voz'); } };
+  const remove = async (item: Conversation) => { if (!tenant || !item.id || !confirm(`Excluir a conversa “${item.title || 'sem título'}”?`)) return; try { await deleteChatConversation(tenant, item.id); const next = list.filter((entry) => entry.id !== item.id); setList(next); if (conversation?.id === item.id) { setConversation(undefined); setMessages([]); if (next[0]) await choose(next[0]); else await fresh(); } } catch { setMessages((current) => [...current, { id: `e-${Date.now()}`, role: 'assistant', content: 'Não foi possível excluir esta conversa.' }]); } };
 
-  useEffect(() => {
-    const loadTenant = async () => {
-      try {
-        const { data: profile } = await createBrowserSupabaseClient()
-          .from('users_profile')
-          .select('active_tenant_id')
-          .maybeSingle();
-        const data = profile as { active_tenant_id?: string } | null;
-
-        if (data?.active_tenant_id) {
-          setTenant(data.active_tenant_id);
-          await refresh(data.active_tenant_id);
-        }
-      } catch {
-        // The chat stays closed until a tenant can be loaded.
-      }
-    };
-
-    void loadTenant();
-  }, []);
-
-  useEffect(() => {
-    end.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  const choose = async (item: Conversation) => {
-    if (!tenant || !item.id) return;
-
-    setConversation(item);
-    setHistoryOpen(false);
-    try {
-      const response = await chatMessages(tenant, item.id);
-      setMessages(safeMessages(response.data));
-    } catch {
-      setMessages([]);
-    }
-  };
-
-  const fresh = async () => {
-    if (!tenant) return;
-
-    try {
-      const response = await createChatConversation(tenant);
-      const item = { id: response.id, title: response.title || null };
-      setList((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
-      await choose(item);
-    } catch {
-      setMessages((current) => [
-        ...current,
-        { id: `e-${Date.now()}`, role: 'assistant', content: ERROR },
-      ]);
-    }
-  };
-
-  const openChat = () => {
-    setOpen(true);
-    if (!conversation) {
-      void fresh();
-    }
-  };
-
-  const send = async () => {
-    if (!tenant || !conversation?.id || !text.trim() || loading) return;
-
-    const question = text.trim();
-    const conversationId = conversation.id;
-    setText('');
-    setMessages((current) => [
-      ...current,
-      { id: `local-${Date.now()}`, role: 'user', content: question },
-    ]);
-    setLoading(true);
-
-    try {
-      const response = await sendChatMessage(tenant, conversationId, question);
-      setMessages((current) => [
-        ...current,
-        ...safeMessages(response.message ? [response.message] : []),
-      ]);
-      await refresh(tenant);
-    } catch {
-      setMessages((current) => [
-        ...current,
-        { id: `e-${Date.now()}`, role: 'assistant', content: ERROR },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const playSpeech = async (message: Message) => {
-    if (!tenant) return;
-
-    try {
-      const response = await chatSpeech(tenant, message.content, message.ai_run_id);
-      const audio = new Audio(
-        `data:${response.audio_mime_type || 'audio/mpeg'};base64,${response.audio_base64}`,
-      );
-      await audio.play();
-    } catch {
-      setMessages((current) => [
-        ...current,
-        { id: `e-${Date.now()}`, role: 'assistant', content: 'Não foi possível reproduzir a resposta.' },
-      ]);
-    }
-  };
-
-  const remove = async (item: Conversation) => {
-    if (!tenant || !item.id || !confirm(`Excluir a conversa “${item.title || 'sem título'}”?`)) return;
-
-    try {
-      await deleteChatConversation(tenant, item.id);
-      const next = list.filter((entry) => entry.id !== item.id);
-      setList(next);
-
-      if (conversation?.id === item.id) {
-        setConversation(undefined);
-        setMessages([]);
-        if (next[0]) {
-          await choose(next[0]);
-        } else {
-          await fresh();
-        }
-      }
-    } catch {
-      setMessages((current) => [
-        ...current,
-        { id: `e-${Date.now()}`, role: 'assistant', content: 'Não foi possível excluir esta conversa.' },
-      ]);
-    }
-  };
-
-  return (
-    <>
-      <button
-        onClick={openChat}
-        aria-label="Abrir chat geral"
-        className="fixed bottom-5 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700"
-      >
-        <MessageCircle />
-      </button>
-
-      {open && (
-        <section aria-label="Agente geral" className="fixed bottom-5 right-5 z-40 flex h-[min(680px,calc(100vh-2.5rem))] w-[calc(100vw-2.5rem)] max-w-[410px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-          <header className="flex items-center justify-between border-b px-4 py-3">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700"><Bot size={21} /></span>
-              <div><h2 className="font-semibold">Agente geral</h2><p className="text-xs text-emerald-700">IA ativa</p></div>
-            </div>
-            <div>
-              <button aria-label="Histórico" onClick={() => setHistoryOpen((current) => !current)} className="rounded-full p-2"><History size={18} /></button>
-              <button aria-label="Fechar chat" onClick={() => setOpen(false)} className="rounded-full p-2"><X size={19} /></button>
-            </div>
-          </header>
-
-          {historyOpen && (
-            <div className="absolute right-3 top-16 z-10 w-64 rounded-2xl border bg-white p-2 shadow-xl">
-              <button onClick={() => void fresh()} className="flex w-full gap-2 rounded-xl px-3 py-2 text-left text-sm text-blue-700"><Plus size={16} />Nova conversa</button>
-              <div className="max-h-48 overflow-y-auto border-t">
-                {list.map((item) => (
-                  <div key={item.id} className="flex items-center">
-                    <button onClick={() => void choose(item)} className="min-w-0 flex-1 truncate rounded-xl px-3 py-2 text-left text-sm">{item.title || 'Conversa sem título'}</button>
-                    <button aria-label="Excluir conversa" onClick={() => void remove(item)} className="p-2 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <main className="flex-1 space-y-3 overflow-y-auto bg-slate-50/80 p-4">
-            {messages.map((message) => (
-              <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-2xl px-3 py-2.5 text-sm ${message.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>
-                  {message.content}
-                  {message.role === 'assistant' && <button aria-label="Ouvir resposta" onClick={() => void playSpeech(message)} className="ml-2 text-blue-600"><Volume2 size={15} /></button>}
-                </div>
-              </div>
-            ))}
-            {loading && <p className="text-sm text-slate-500">Agente está respondendo...</p>}
-            <div ref={end} />
-          </main>
-
-          <footer className="border-t bg-white p-3">
-            <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-              <textarea aria-label="Mensagem" placeholder="Digite sua mensagem..." className="max-h-24 min-h-10 flex-1 resize-none rounded-2xl border bg-slate-50 px-3 py-2 text-sm" value={text} onChange={(event) => setText(event.target.value)} disabled={!conversation || loading} />
-              <button type="button" aria-label="Voz em tempo real indisponível" title="Voz em tempo real temporariamente indisponível." className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-slate-400" disabled><Mic size={18} /></button>
-              <button aria-label="Enviar mensagem" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white" disabled={!conversation || loading || !text.trim()}><Send size={17} /></button>
-            </form>
-          </footer>
-        </section>
-      )}
-    </>
-  );
+  return <><button onClick={openChat} aria-label="Abrir chat geral" className="fixed bottom-5 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700"><MessageCircle /></button>{open && <section aria-label="Agente geral" className="fixed bottom-5 right-5 z-40 flex h-[min(680px,calc(100vh-2.5rem))] w-[calc(100vw-2.5rem)] max-w-[410px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"><audio ref={audio} autoPlay className="hidden" /><header className="flex items-center justify-between border-b px-4 py-3"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700"><Bot size={21} /></span><div><h2 className="font-semibold">Agente geral</h2><p className="text-xs text-emerald-700">IA ativa</p></div></div><div><button aria-label="Histórico" onClick={() => setHistoryOpen((current) => !current)} className="rounded-full p-2"><History size={18} /></button><button aria-label="Fechar chat" onClick={() => { void stopVoiceSession().catch(() => undefined); setOpen(false); }} className="rounded-full p-2"><X size={19} /></button></div></header>{historyOpen && <div className="absolute right-3 top-16 z-10 w-64 rounded-2xl border bg-white p-2 shadow-xl"><button onClick={() => { void fresh().catch(() => undefined); }} className="flex w-full gap-2 rounded-xl px-3 py-2 text-left text-sm text-blue-700"><Plus size={16} />Nova conversa</button><div className="max-h-48 overflow-y-auto border-t">{list.map((item) => <div key={item.id} className="flex items-center"><button onClick={() => { void choose(item).catch(() => undefined); }} className="min-w-0 flex-1 truncate rounded-xl px-3 py-2 text-left text-sm">{item.title || 'Conversa sem título'}</button><button aria-label="Excluir conversa" onClick={() => { void remove(item).catch(() => undefined); }} className="p-2 text-slate-400 hover:text-red-600"><Trash2 size={15} /></button></div>)}</div></div>}<main className="flex-1 space-y-3 overflow-y-auto bg-slate-50/80 p-4">{messages.map((message) => <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[85%] rounded-2xl px-3 py-2.5 text-sm ${message.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{message.content}{message.role === 'assistant' && <button aria-label="Ouvir resposta" onClick={() => { void playSpeech(message).catch(() => undefined); }} className="ml-2 text-blue-600"><Volume2 size={15} /></button>}</div></div>)}{loading && <p className="text-sm text-slate-500">Agente está respondendo...</p>}<div ref={end} /></main><footer className="border-t bg-white p-3"><form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void send().catch(() => undefined); }}><textarea aria-label="Mensagem" placeholder="Digite sua mensagem..." className="max-h-24 min-h-10 flex-1 resize-none rounded-2xl border bg-slate-50 px-3 py-2 text-sm" value={text} onChange={(event) => setText(event.target.value)} disabled={!conversation || loading} /><button type="button" aria-label="Abrir voz em tempo real" title="Conversar por voz" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-blue-700 disabled:text-slate-400" disabled={!conversation || loading || voice === 'connecting' || voice === 'listening' || voice === 'responding'} onClick={() => { void startVoice().catch(() => undefined); }}><Mic size={18} /></button><button aria-label="Enviar mensagem" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white" disabled={!conversation || loading || !text.trim()}><Send size={17} /></button></form>{voice !== 'idle' && <section role="dialog" aria-label="Voz em tempo real" className="absolute inset-x-4 bottom-20 z-20 rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-xl"><div className="flex items-center justify-center gap-2"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-700"><Bot size={18} /></span><h2 className="font-semibold">Agente geral</h2></div><VoiceWaves state={voice} /><p className="text-sm font-medium text-slate-700">{voice === 'connecting' ? 'Conectando voz...' : voice === 'listening' ? 'Ouvindo...' : voice === 'responding' ? 'Respondendo...' : 'Erro ao conectar voz'}</p>{voiceError && <p className="mt-2 text-sm text-red-700">{voiceError}</p>}<button type="button" onClick={() => { void stopVoiceSession().catch(() => undefined); }} className="mt-3 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white">{voice === 'error' ? 'Fechar' : 'Encerrar voz'}</button></section>}</footer></section>}</>;
 }
