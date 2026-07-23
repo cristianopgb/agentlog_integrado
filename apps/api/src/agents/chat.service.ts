@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { AiGatewayService } from './ai-gateway.service';
 import { AgentToolExecutorService } from './agent-tool-executor.service';
@@ -12,6 +12,7 @@ const GENERAL_FALLBACK='Não encontrei evidência oficial suficiente para respon
 
 @Injectable()
 export class ChatService {
+  private readonly logger=new Logger(ChatService.name);
   constructor(private db:SupabaseService,private gateway:AiGatewayService,private tools:AgentToolExecutorService,private orchestrator:GeneralChatOrchestratorService){}
   async conversations(t:string,u:string){return {data:await this.db.select('ai_chat_conversations',`tenant_id=eq.${t}&user_id=eq.${u}&deleted_at=is.null&status=eq.active&order=updated_at.desc&limit=50`)}}
   async create(t:string,u:string,b:Record<string,unknown>){const a=await this.agent(t);const [x]=await this.db.insert<any[]>('ai_chat_conversations',{tenant_id:t,user_id:u,agent_id:a?.id??null,title:typeof b.title==='string'?this.cleanUserMessage(b.title,120):null});return x}
@@ -19,7 +20,11 @@ export class ChatService {
   async archive(t:string,u:string,id:string){await this.conversation(t,u,id);await this.db.update('ai_chat_conversations',`tenant_id=eq.${t}&id=eq.${id}`,{status:'archived',deleted_at:new Date().toISOString()});return {archived:true}}
   async realtimeSession(t:string,u:string,id:string){
     const conversation=await this.conversation(t,u,id),agent=await this.agent(t); if(!agent||!process.env.OPENAI_API_KEY)throw new BadRequestException('Voz ao vivo indisponível neste ambiente.');
-    const [run]=await this.db.insert<any[]>('ai_runs',{tenant_id:t,agent_id:agent.id,run_type:'general_chat',trigger_type:'voice_realtime',status:'processing',input_snapshot:{conversation_id:id,voice_realtime:true},requested_by:u,started_at:new Date().toISOString()});
+    let run:any;
+    try{[run]=await this.db.insert<any[]>('ai_runs',{tenant_id:t,agent_id:agent.id,run_type:'general_chat',trigger_type:'voice_realtime',status:'processing',input_snapshot:{conversation_id:id,voice_realtime:true},requested_by:u,started_at:new Date().toISOString()});}catch{
+      this.logger.error(`Falha ao criar execução de voz ao vivo para a conversa ${id}.`);
+      throw new BadRequestException('Não foi possível iniciar a voz ao vivo. Tente novamente.');
+    }
     const instructions=`Você é o Chat Geral. Responda em português do Brasil, de forma objetiva e segura. Use apenas as cinco ferramentas configuradas para dados. Nunca exponha detalhes internos, SQL, dados brutos ou segredos. Se não houver dados suficientes, explique amigavelmente. ${String(agent.system_instructions||agent.behavior_profile||'').slice(0,1500)}`;
     try{const response=await fetch('https://api.openai.com/v1/realtime/client_secrets',{method:'POST',headers:{Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({session:{type:'realtime',model:process.env.OPENAI_REALTIME_MODEL||'gpt-realtime',instructions,tools:this.gateway.generalChatTools(),tool_choice:'auto',input_audio_transcription:{model:process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL||'gpt-4o-mini-transcribe'}}})});if(!response.ok)throw new Error('realtime_session_failed');const data:any=await response.json(),secret=data?.value??data?.client_secret?.value??data?.client_secret;if(typeof secret!=='string')throw new Error('realtime_secret_missing');await this.voiceLog(t,id,agent.id,run.id,'started');return {session:{client_secret:secret,model:process.env.OPENAI_REALTIME_MODEL||'gpt-realtime'},ai_run_id:run.id};}catch(error){await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',output_json:{stage_failed:'session_start',error_code:'voice_session_failed',error_message_safe:'Não foi possível iniciar a voz ao vivo.'},finished_at:new Date().toISOString()});throw new BadRequestException('Não foi possível iniciar a voz ao vivo. Tente novamente.');}
   }
