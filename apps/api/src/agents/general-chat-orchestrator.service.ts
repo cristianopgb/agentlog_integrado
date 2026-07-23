@@ -19,7 +19,8 @@ export class GeneralChatOrchestratorService {
       const content=normalizeAssistantOutput(final.answer).content;
       return {content,response:final,output_json:{content},observability:{agent_flow:'openai_tool_calling',intent:final.intent||'general_chat',main_tool:toolKeys[0]||null,tool_keys:toolKeys,tool_calls_count:toolKeys.length,llm_called:true,llm_tool_choice:'auto',llm_final_called:final.llm_final_called,cache_hit:false,needs_clarification:false,stage_failed:final.error_code||null,error_code:final.error_code||null,tool_arguments_safe:toolKeys.map(tool_key=>({tool_key})),tool_results_summary:results.map(x=>({tool_key:x.name,keys:Object.keys(x.result||{})})),llm_direct_answer:toolKeys.length===0,no_tool_answer:toolKeys.length===0,analytic_map_used:toolKeys.includes('analytics.map.get'),guidance_used:toolKeys.includes('knowledge.guidance.search')}};
     } catch (error) {
-      const failure={agent_flow:'openai_tool_calling',stage_failed:this.stage(error),error_code:this.code(error),error_message_safe:'Não foi possível concluir a consulta controlada.',tool_keys:toolKeys};
+      const gatewayFailure=(error as any)?.generalChatGatewayFailure;
+      const failure=gatewayFailure?{agent_flow:'openai_tool_calling',...gatewayFailure,error_code:toolKeys.length===0?'openai_tool_schema_or_gateway_error':gatewayFailure.error_code,provider_error_code:gatewayFailure.error_code,tool_keys:toolKeys}:{agent_flow:'openai_tool_calling',stage_failed:this.stage(error),error_code:this.code(error),error_message_safe:'Não foi possível concluir a consulta controlada.',tool_keys:toolKeys};
       if(runId)await this.db.update('ai_runs',`tenant_id=eq.${tenantId}&id=eq.${runId}`,{output_json:failure});
       Object.assign(error as object,{generalChatFailure:failure});
       throw error;
