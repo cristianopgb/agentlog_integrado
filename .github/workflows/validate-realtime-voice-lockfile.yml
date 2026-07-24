@@ -1,0 +1,66 @@
+name: Validate Realtime Voice Lockfile
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch da PR que deve receber o pnpm-lock.yaml"
+        required: true
+        default: "codex/refatorar-voz-realtime-do-chat-geral"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Install dependencies, update lockfile and validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies and update lockfile
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Commit pnpm-lock.yaml if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git status --short pnpm-lock.yaml | grep -q "pnpm-lock.yaml"; then
+            git add pnpm-lock.yaml
+            git commit -m "chore: update lockfile for realtime voice sdk"
+            git push origin HEAD:${{ inputs.target_branch }}
+          else
+            echo "pnpm-lock.yaml unchanged"
+          fi
+
+      - name: API typecheck
+        run: pnpm --filter @sli/api typecheck
+
+      - name: Web typecheck
+        run: pnpm --filter @sli/web typecheck
+
+      - name: Web lint
+        run: pnpm --filter @sli/web lint
+
+      - name: Web build
+        run: pnpm --filter @sli/web build
+
+      - name: Diff check
+        run: git diff --check
