@@ -479,13 +479,24 @@ export async function createIntegrationSource(
       name: input.name,
       source_type: input.source_type,
       module_key: input.module_key,
-      status: 'draft',
+      status: input.source_type === 'api' ? 'configuring' : 'draft',
       description: 'Integração declarativa criada pela Sprint 7.1.',
       metadata: { sprint_7_1: true, connection_declared: false },
     })
     .select('id');
   if (error) throw error;
-  return (data as { id: string }[])[0].id;
+  const id = (data as { id: string }[])[0].id;
+  if (input.source_type === 'api') {
+    await createInitialDeliveryContract(tenantId, {
+      id,
+      tenant_id: tenantId,
+      name: input.name,
+      source_type: input.source_type,
+      module_key: input.module_key,
+      status: 'configuring',
+    } as IntegrationSource);
+  }
+  return id;
 }
 
 export async function updateIntegrationConnection(
@@ -594,7 +605,7 @@ export async function createInitialDeliveryContract(
               ? String(source.metadata?.file_type ?? 'xlsx')
               : 'other',
         direction: 'inbound',
-        status: source.source_type === 'spreadsheet' ? 'active' : 'draft',
+        status: ['spreadsheet', 'api'].includes(source.source_type) ? 'active' : 'draft',
         periodicity: 'on_demand',
       })
       .select(contractSelect);

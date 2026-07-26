@@ -50,6 +50,7 @@ import {
 } from '../../../../../lib/rbac';
 import { getSessionContext } from '../../../../../lib/setup-api';
 import { listEnabledTenantModules, type TenantModuleOption } from '../../../../../lib/modules-api';
+import { ApiConnectionPanel } from '../../../../../components/integrations/api-connection-panel';
 
 const steps = [
   { key: 'connection', label: 'Conexão' },
@@ -784,6 +785,16 @@ export default function IntegrationSetupPage() {
     contract?.status === 'active' && fields.length > 0;
 
   const selectedModuleKeys = (source?.metadata?.module_keys as string[] | undefined) ?? (source?.module_key ? [source.module_key] : []);
+
+  if (source?.source_type === 'api') {
+    return (
+      <div className="page-stack app-page max-w-[96rem]">
+        <SectionHeader eyebrow="Integração API" title={titleType} description="Configure a leitura, confirme a amostra e pareie cada campo recebido com o contrato nativo." />
+        {msg ? <EmptyState title="Setup" description={msg} /> : null}
+        <ApiConnectionPanel tenantId={tenantId} sourceId={source.id} fields={fields} />
+      </div>
+    );
+  }
 
   return (
     <div className="page-stack app-page max-w-[96rem]">
