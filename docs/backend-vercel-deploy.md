@@ -66,3 +66,18 @@ Eles permanecem protegidos por autenticação e permissões do backend. Para val
 4. Clique em **Processar para base nativa**.
 5. A mensagem “API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.” não deve aparecer quando a variável estiver definida.
 6. Se houver erro de permissão, autenticação ou validação de dados, trate-o como resposta funcional da API, não como ausência de configuração do backend.
+
+## Agendamento da integração API de leitura
+
+O endpoint de agendamento fica preparado em `POST /internal/integrations/api/sync-due` e exige o header `x-cron-secret` com o mesmo valor de `CRON_SECRET`. O Vercel Cron nativo realiza requisições `GET` e não permite configurar esse header customizado; por isso ele não deve apontar diretamente para este endpoint.
+
+No deploy atual, configure um scheduler externo controlado (por exemplo, o scheduler da plataforma de infraestrutura) para executar a cada 15 minutos:
+
+```sh
+curl --fail --request POST "$API_URL/internal/integrations/api/sync-due" \
+  --header "x-cron-secret: $CRON_SECRET" \
+  --header "content-type: application/json" \
+  --data '{"limit":10}'
+```
+
+Sem esse job de infraestrutura, a sincronização manual continua disponível e a interface identifica o endpoint como preparado, mas não há promessa de execução automática. Nunca coloque `CRON_SECRET` em variável pública do frontend.

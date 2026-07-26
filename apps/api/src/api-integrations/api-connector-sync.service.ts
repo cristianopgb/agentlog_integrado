@@ -1,0 +1,160 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { SupabaseService } from '../supabase/supabase.service';
+import { ApiConnectorConfigService } from './api-connector-config.service';
+import { ApiConfig } from './api-connector.types';
+
+type JsonRecord = Record<string, unknown>;
+type FetchResult = { records: JsonRecord[]; status: number; fields: string[]; cursor: string | null };
+type ContractField = { id: string; source_field_name: string; field_key: string; data_type: string; is_required: boolean; allow_null: boolean };
+type ApiMapping = { id: string; api_source_field_name: string; data_contract_field_id: string; data_contract_field: ContractField };
+type InsertedRecord = { id: string; row_number: number };
+
+@Injectable()
+export class ApiConnectorSyncService {
+  constructor(private readonly db: SupabaseService, private readonly configs: ApiConnectorConfigService) {}
+
+  async test(tenantId: string, sourceId: string) {
+    const result = await this.fetch(await this.requiredConfig(tenantId, sourceId), true);
+    return { ok: true, http_status: result.status, record_count: result.records.length, fields: result.fields, sample: result.records.slice(0, 5) };
+  }
+
+  async sample(tenantId: string, sourceId: string) {
+    const config = await this.requiredConfig(tenantId, sourceId);
+    const result = await this.fetch(config, true);
+    const preview = result.records.slice(0, 5);
+    await this.db.update('data_source_api_configs', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`, {
+      detected_fields: result.fields,
+      sample_preview: preview,
+      sample_http_status: result.status,
+    });
+    return { fields: result.fields, sample: preview, http_status: result.status };
+  }
+
+  async listApiMappings(tenantId: string, sourceId: string) {
+    const contract = await this.contract(tenantId, sourceId);
+    return this.db.select('data_source_api_field_mappings', `select=id,api_source_field_name:source_field_name,data_contract_field_id,status&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active&order=created_at.asc`);
+  }
+
+  async saveApiMappings(tenantId: string, sourceId: string, userId: string, body: { mappings?: Array<{ source_field_name?: string; data_contract_field_id?: string }> }) {
+    const contract = await this.contract(tenantId, sourceId);
+    const config = await this.requiredConfig(tenantId, sourceId);
+    const detected = new Set(config.detected_fields ?? []);
+    const fields = await this.db.select<ContractField[]>('data_contract_fields', `select=id,source_field_name,field_key,data_type,is_required,allow_null&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}`);
+    const fieldIds = new Set(fields.map((field) => field.id));
+    const requested = body.mappings ?? [];
+    if (requested.some((item) => !item.source_field_name || !detected.has(item.source_field_name) || !item.data_contract_field_id || !fieldIds.has(item.data_contract_field_id))) throw new BadRequestException('Pareamento contém campo não detectado ou fora do contrato nativo.');
+    if (new Set(requested.map((item) => item.data_contract_field_id)).size !== requested.length) throw new BadRequestException('Cada campo nativo pode receber somente um campo da API.');
+    const missingRequired = fields.filter((field) => field.is_required && !requested.some((item) => item.data_contract_field_id === field.id));
+    if (missingRequired.length) throw new BadRequestException(`Pareie os campos obrigatórios: ${missingRequired.map((field) => field.field_key).join(', ')}.`);
+    await this.db.delete('data_source_api_field_mappings', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`);
+    if (requested.length) await this.db.insert('data_source_api_field_mappings', requested.map((item) => ({ tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, data_contract_field_id: item.data_contract_field_id, source_field_name: item.source_field_name, status: 'active', created_by: userId })) as JsonRecord[]);
+    return this.listApiMappings(tenantId, sourceId);
+  }
+
+  async sync(tenantId: string, sourceId: string, syncType: 'manual' | 'scheduled', userId?: string) {
+    const config = await this.requiredConfig(tenantId, sourceId);
+    const contract = await this.contract(tenantId, sourceId);
+    const mappings = await this.activeMappings(tenantId, contract.id);
+    if (!mappings.length) throw new BadRequestException('Confirme o pareamento antes de sincronizar.');
+    const runs = await this.db.insert<Array<{ id: string }>>('data_source_api_sync_runs', { tenant_id: tenantId, data_source_id: sourceId, sync_type: syncType, status: 'running', cursor_before: config.last_cursor });
+    const runId = runs[0].id;
+    try {
+      const fetched = await this.fetch(config, false);
+      const now = new Date().toISOString();
+      const batches = await this.db.insert<Array<{ id: string }>>('staging_batches', { tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, batch_code: `api-${Date.now()}`, source_reference: 'api-pull', status: 'received', total_records: 0, metadata: { input_type: 'api', sync_type: syncType }, received_at: now, created_by: userId ?? null, updated_by: userId ?? null });
+      const batchId = batches[0].id;
+      const accepted: JsonRecord[] = [];
+      const stateRows: JsonRecord[] = [];
+      let unchanged = 0;
+      for (const record of fetched.records) {
+        const hash = createHash('sha256').update(JSON.stringify(this.stable(record))).digest('hex');
+        const external = String(this.path(record, config.external_id_field) ?? hash);
+        const updated = String(this.path(record, config.updated_at_field) ?? '');
+        const exists = await this.db.select<unknown[]>('data_source_api_record_states', `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&external_id=eq.${encodeURIComponent(external)}&source_updated_at=eq.${encodeURIComponent(updated)}&payload_hash=eq.${hash}&limit=1`);
+        if (exists.length) { unchanged++; continue; }
+        accepted.push(record);
+        stateRows.push({ external_id: external, source_updated_at: updated, payload_hash: hash });
+      }
+      const inserted = accepted.length ? await this.db.insert<InsertedRecord[]>('staging_records', accepted.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw }))) : [];
+      const validation = await this.validate(tenantId, batchId, accepted, inserted, mappings);
+      for (const [index, state] of stateRows.entries()) await this.db.insert('data_source_api_record_states', { tenant_id: tenantId, data_source_id: sourceId, ...state, staging_batch_id: batchId, staging_record_id: inserted[index]?.id });
+      const status = validation.rejected ? (validation.valid ? 'partially_valid' : 'rejected') : 'validated';
+      await this.db.update('staging_batches', `tenant_id=eq.${tenantId}&id=eq.${batchId}`, { status, total_records: accepted.length, valid_records: validation.valid, invalid_records: validation.rejected, error_count: validation.errorCount, validated_at: now });
+      const next = config.auto_sync_enabled && config.sync_frequency_minutes ? new Date(Date.now() + config.sync_frequency_minutes * 60000).toISOString() : null;
+      await this.db.update('data_source_api_configs', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`, { last_cursor: fetched.cursor, last_sync_at: now, last_success_at: now, last_error_safe: null, next_sync_at: next });
+      await this.db.update('data_source_api_sync_runs', `tenant_id=eq.${tenantId}&id=eq.${runId}`, { staging_batch_id: batchId, status: validation.rejected ? 'completed_with_errors' : 'completed', finished_at: now, http_status: fetched.status, received_count: fetched.records.length, accepted_count: validation.valid, rejected_count: validation.rejected, unchanged_count: unchanged, cursor_after: fetched.cursor });
+      return { run_id: runId, staging_batch_id: batchId, received_count: fetched.records.length, accepted_count: validation.valid, rejected_count: validation.rejected, unchanged_count: unchanged };
+    } catch (error) {
+      const message = this.safeError(error); const now = new Date().toISOString();
+      await this.db.update('data_source_api_sync_runs', `tenant_id=eq.${tenantId}&id=eq.${runId}`, { status: 'failed', finished_at: now, error_message_safe: message });
+      await this.db.update('data_source_api_configs', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`, { last_sync_at: now, last_failure_at: now, last_error_safe: message });
+      throw new BadRequestException(message);
+    }
+  }
+
+  listRuns(tenantId: string, sourceId: string) { return this.db.select('data_source_api_sync_runs', `select=*&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&order=created_at.desc&limit=50`); }
+  async syncDue(limit = 10) { const due = await this.db.select<Array<{ tenant_id: string; data_source_id: string }>>('data_source_api_configs', `select=tenant_id,data_source_id&auto_sync_enabled=eq.true&next_sync_at=lte.${encodeURIComponent(new Date().toISOString())}&order=next_sync_at.asc&limit=${Math.min(25, Math.max(1, limit))}`); const results = []; for (const row of due) { try { results.push(await this.sync(row.tenant_id, row.data_source_id, 'scheduled')); } catch { results.push({ data_source_id: row.data_source_id, status: 'failed' }); } } return { processed: results.length, results }; }
+
+  private async validate(tenantId: string, batchId: string, records: JsonRecord[], inserted: InsertedRecord[], mappings: ApiMapping[]) {
+    const allowedRows = await this.db.select<Array<{ data_contract_field_id: string; value: string }>>('data_contract_allowed_values', `select=data_contract_field_id,value&tenant_id=eq.${tenantId}&data_contract_field_id=in.(${mappings.map((mapping) => mapping.data_contract_field_id).join(',')})&is_active=eq.true`);
+    const mappedSources = new Set(mappings.map((mapping) => mapping.api_source_field_name));
+    const errors: JsonRecord[] = [];
+    let valid = 0;
+    records.forEach((raw, index) => {
+      const record = inserted[index];
+      const add = (code: string, source: string, rawValue: unknown, message: string) => errors.push({ tenant_id: tenantId, staging_batch_id: batchId, staging_record_id: record.id, error_code: code, severity: 'error', source_field_name: source, raw_value: rawValue == null ? null : String(rawValue), message });
+      Object.keys(raw).filter((key) => !mappedSources.has(key)).forEach((key) => add('UNMAPPED_API_FIELD', key, raw[key], 'Campo recebido fora do pareamento ativo.'));
+      for (const mapping of mappings) {
+        const field = mapping.data_contract_field;
+        const present = Object.hasOwn(raw, mapping.api_source_field_name);
+        const value = raw[mapping.api_source_field_name];
+        if (!present && field.is_required) { add('REQUIRED_FIELD_MISSING', mapping.api_source_field_name, null, `Campo nativo obrigatório ausente: ${field.field_key}.`); continue; }
+        if (!present) continue;
+        if (value == null || value === '') { if (!field.allow_null) add('NULL_NOT_ALLOWED', mapping.api_source_field_name, value, `Nulo não permitido em ${field.field_key}.`); continue; }
+        if (!this.matchesType(value, field.data_type)) add('INVALID_TYPE', mapping.api_source_field_name, value, `Tipo esperado: ${field.data_type}.`);
+        const allowed = allowedRows.filter((row) => row.data_contract_field_id === field.id).map((row) => row.value);
+        if (allowed.length && !allowed.includes(String(value))) add('VALUE_NOT_ALLOWED', mapping.api_source_field_name, value, `Valor não permitido em ${field.field_key}.`);
+      }
+      const count = errors.filter((error) => error.staging_record_id === record.id).length;
+      if (!count) valid++;
+    });
+    await Promise.all(inserted.map(async (record) => { const count = errors.filter((error) => error.staging_record_id === record.id).length; await this.db.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { validation_status: count ? 'invalid' : 'valid', error_count: count, validated_at: new Date().toISOString() }); }));
+    if (errors.length) await this.db.insert('staging_errors', errors);
+    return { valid, rejected: records.length - valid, errorCount: errors.length };
+  }
+
+  private async fetch(config: ApiConfig, sample: boolean): Promise<FetchResult> {
+    const records: JsonRecord[] = []; let status = 0; let cursor = config.last_cursor;
+    const maxPages = sample ? 1 : Math.min(50, Number(process.env.API_SYNC_MAX_PAGES ?? 20));
+    const maxRecords = sample ? 20 : Math.min(10000, Number(process.env.API_SYNC_MAX_RECORDS ?? 5000));
+    for (let page = 1; page <= maxPages && records.length < maxRecords; page++) {
+      const url = await this.configs.assertSafeUrl(config.base_url, config.endpoint_path);
+      if (config.page_param) url.searchParams.set(config.page_param, String(page));
+      if (config.page_size_param) url.searchParams.set(config.page_size_param, String(Math.min(config.page_size, maxRecords - records.length)));
+      if (config.updated_since_param && config.last_cursor) url.searchParams.set(config.updated_since_param, config.last_cursor);
+      const headers: Record<string, string> = { Accept: 'application/json' }; const secret = this.configs.decrypt(config.credentials_encrypted);
+      if (config.auth_type === 'bearer_token') headers.Authorization = `Bearer ${secret}`;
+      if (config.auth_type === 'api_key_header') headers[config.auth_header_name || 'X-API-Key'] = secret;
+      if (config.auth_type === 'basic') headers.Authorization = `Basic ${Buffer.from(secret).toString('base64')}`;
+      const response = await fetch(url, { method: 'GET', headers, redirect: 'manual', signal: AbortSignal.timeout(Number(process.env.API_CONNECTOR_TIMEOUT_MS ?? 10000)) });
+      status = response.status;
+      if (status >= 300 && status < 400) throw new Error('Redirecionamento do legado bloqueado.');
+      if (!response.ok) throw new Error(`Legado respondeu HTTP ${status}.`);
+      const json = await response.json() as unknown; const value = this.path(json, config.response_root_path);
+      const pageRecords = (Array.isArray(value) ? value : Array.isArray(json) ? json : []).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+      records.push(...pageRecords.slice(0, maxRecords - records.length));
+      if (config.updated_at_field) for (const item of pageRecords) { const candidate = this.path(item, config.updated_at_field); if (candidate != null && String(candidate) > (cursor ?? '')) cursor = String(candidate); }
+      if (!config.page_param || pageRecords.length < config.page_size) break;
+    }
+    return { records, status, fields: [...new Set(records.flatMap(Object.keys))].slice(0, 200), cursor };
+  }
+
+  private activeMappings(tenantId: string, contractId: string) { return this.db.select<ApiMapping[]>('data_source_api_field_mappings', `select=id,api_source_field_name:source_field_name,data_contract_field_id,data_contract_field:data_contract_fields!api_field_mapping_contract_field_tenant_fk(id,field_key,source_field_name,data_type,is_required,allow_null)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&status=eq.active`); }
+  private async requiredConfig(t: string, s: string) { const config = await this.configs.get(t, s, true) as ApiConfig | null; if (!config) throw new BadRequestException('Configure a conexão API primeiro.'); return config; }
+  private async contract(t: string, s: string) { const rows = await this.db.select<Array<{ id: string }>>('data_contracts', `select=id&tenant_id=eq.${t}&data_source_id=eq.${s}&status=eq.active&order=contract_version.desc&limit=1`); if (!rows[0]) throw new BadRequestException('Contrato nativo ativo não encontrado.'); return rows[0]; }
+  private path(value: unknown, path: string | null) { return path ? path.split('.').reduce<unknown>((current, key) => current && typeof current === 'object' ? (current as JsonRecord)[key] : undefined, value) : value; }
+  private matchesType(value: unknown, type: string) { if (type === 'integer') return typeof value === 'number' && Number.isInteger(value); if (type === 'decimal') return typeof value === 'number'; if (type === 'boolean') return typeof value === 'boolean'; if (type === 'json') return typeof value === 'object'; if (type === 'date') return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value); if (type === 'datetime') return typeof value === 'string' && !Number.isNaN(Date.parse(value)); return typeof value === 'string'; }
+  private stable(value: unknown): unknown { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value as JsonRecord).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, this.stable(item)])) : Array.isArray(value) ? value.map((item) => this.stable(item)) : value; }
+  private safeError(error: unknown) { if (error instanceof Error && (/^Legado respondeu HTTP \d+\.$/.test(error.message) || error.message === 'Redirecionamento do legado bloqueado.')) return error.message; return 'Não foi possível sincronizar com o legado.'; }
+}
