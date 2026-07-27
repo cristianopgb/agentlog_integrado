@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { ApiConnectorConfigService } from './api-connector-config.service';
 import { ApiConfig } from './api-connector.types';
+import { ValueMappingsService } from './value-mappings.service';
 
 type JsonRecord = Record<string, unknown>;
 type FetchResult = { records: JsonRecord[]; status: number; fields: string[]; cursor: string | null };
@@ -13,7 +14,7 @@ type StagingErrorPreview = { id: string; error_code: string; source_field_name: 
 
 @Injectable()
 export class ApiConnectorSyncService {
-  constructor(private readonly db: SupabaseService, private readonly configs: ApiConnectorConfigService) {}
+  constructor(private readonly db: SupabaseService, private readonly configs: ApiConnectorConfigService, private readonly valueMappings: ValueMappingsService) {}
 
   async test(tenantId: string, sourceId: string) {
     const result = await this.fetch(await this.requiredConfig(tenantId, sourceId), true);
@@ -78,8 +79,8 @@ export class ApiConnectorSyncService {
         accepted.push(record);
         stateRows.push({ external_id: external, source_updated_at: updated, payload_hash: hash });
       }
-      const inserted = accepted.length ? await this.db.insert<InsertedRecord[]>('staging_records', accepted.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw, normalized_payload: this.normalized(raw, mappings) }))) : [];
-      const validation = await this.validate(tenantId, batchId, accepted, inserted, mappings);
+      const inserted = accepted.length ? await this.db.insert<InsertedRecord[]>('staging_records', accepted.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw, normalized_payload: {} }))) : [];
+      const validation = await this.validate(tenantId, sourceId, batchId, accepted, inserted, mappings);
       for (const [index, state] of stateRows.entries()) await this.db.insert('data_source_api_record_states', { tenant_id: tenantId, data_source_id: sourceId, ...state, staging_batch_id: batchId, staging_record_id: inserted[index]?.id });
       const status = validation.rejected ? (validation.valid ? 'partially_valid' : 'rejected') : 'validated';
       await this.db.update('staging_batches', `tenant_id=eq.${tenantId}&id=eq.${batchId}`, { status, total_records: accepted.length, valid_records: validation.valid, invalid_records: validation.rejected, error_count: validation.errorCount, validated_at: now });
@@ -105,28 +106,43 @@ export class ApiConnectorSyncService {
   }
   async syncDue(limit = 10) { const due = await this.db.select<Array<{ tenant_id: string; data_source_id: string }>>('data_source_api_configs', `select=tenant_id,data_source_id&auto_sync_enabled=eq.true&next_sync_at=lte.${encodeURIComponent(new Date().toISOString())}&order=next_sync_at.asc&limit=${Math.min(25, Math.max(1, limit))}`); const results = []; for (const row of due) { try { results.push(await this.sync(row.tenant_id, row.data_source_id, 'scheduled')); } catch { results.push({ data_source_id: row.data_source_id, status: 'failed' }); } } return { processed: results.length, results }; }
 
-  private async validate(tenantId: string, batchId: string, records: JsonRecord[], inserted: InsertedRecord[], mappings: ApiMapping[]) {
+  private async validate(tenantId: string, sourceId: string, batchId: string, records: JsonRecord[], inserted: InsertedRecord[], mappings: ApiMapping[]) {
     const allowedRows = await this.db.select<Array<{ data_contract_field_id: string; value: string }>>('data_contract_allowed_values', `select=data_contract_field_id,value&tenant_id=eq.${tenantId}&data_contract_field_id=in.(${mappings.map((mapping) => mapping.data_contract_field_id).join(',')})&is_active=eq.true`);
+    const valueMappings = await this.valueMappings.active(tenantId, sourceId);
     const errors: JsonRecord[] = [];
     let valid = 0;
     records.forEach((raw, index) => {
       const record = inserted[index];
-      const add = (code: string, source: string, rawValue: unknown, message: string) => errors.push({ tenant_id: tenantId, staging_batch_id: batchId, staging_record_id: record.id, error_code: code, severity: 'error', source_field_name: source, raw_value: rawValue == null ? null : String(rawValue), message });
+      const normalized: JsonRecord = {};
+      const add = (code: string, mapping: ApiMapping, rawValue: unknown, message: string) => errors.push({ tenant_id: tenantId, staging_batch_id: batchId, staging_record_id: record.id, data_contract_field_id: mapping.data_contract_field_id, error_code: code, severity: 'error', field_key: mapping.data_contract_field.field_key, source_field_name: mapping.api_source_field_name, raw_value: rawValue == null ? null : String(rawValue), message });
       for (const mapping of mappings) {
         const field = mapping.data_contract_field;
         const present = Object.hasOwn(raw, mapping.api_source_field_name);
         const value = raw[mapping.api_source_field_name];
-        if (!present && field.is_required) { add('REQUIRED_FIELD_MISSING', mapping.api_source_field_name, null, `Campo nativo obrigatório ausente: ${field.field_key}.`); continue; }
+        if (!present && field.is_required) { add('REQUIRED_FIELD_MISSING', mapping, null, `Campo nativo obrigatório ausente: ${field.field_key}.`); continue; }
         if (!present) continue;
-        if (value == null || value === '') { if (!field.allow_null) add('NULL_NOT_ALLOWED', mapping.api_source_field_name, value, `Nulo não permitido em ${field.field_key}.`); continue; }
-        if (!this.convert(value, field.data_type).ok) add('INVALID_TYPE', mapping.api_source_field_name, value, `Tipo esperado: ${field.data_type}.`);
+        if (value == null || value === '') { if (!field.allow_null) add('NULL_NOT_ALLOWED', mapping, value, `Nulo não permitido em ${field.field_key}.`); else normalized[field.field_key] = null; continue; }
         const allowed = allowedRows.filter((row) => row.data_contract_field_id === field.id).map((row) => row.value);
-        if (allowed.length && !allowed.includes(String(value))) add('VALUE_NOT_ALLOWED', mapping.api_source_field_name, value, `Valor não permitido em ${field.field_key}.`);
+        const controlled = field.data_type === 'enum' || allowed.length > 0;
+        if (controlled) {
+          if (!allowed.length) { add('CONTROLLED_VALUES_NOT_CONFIGURED', mapping, value, `Valores controlados não estão configurados para o campo ${field.field_key}.`); continue; }
+          const sourceValue = String(value);
+          const configured = valueMappings.find((item) => item.data_contract_field_id === field.id && item.source_field_name === mapping.api_source_field_name && item.source_value === sourceValue);
+          const target = configured?.target_value ?? (allowed.includes(sourceValue) ? sourceValue : null);
+          if (!target) { add('VALUE_MAPPING_REQUIRED', mapping, value, `Valor recebido não possui De/Para configurado para o campo ${field.field_key}.`); continue; }
+          if (!allowed.includes(target)) { add('VALUE_NOT_ALLOWED', mapping, value, `O De/Para configurado não pertence aos valores permitidos de ${field.field_key}.`); continue; }
+          normalized[field.field_key] = target;
+          continue;
+        }
+        const converted = this.convert(value, field.data_type);
+        if (!converted.ok) { add('INVALID_TYPE', mapping, value, `Tipo esperado: ${field.data_type}.`); continue; }
+        normalized[field.field_key] = converted.value;
       }
+      (record as InsertedRecord & { normalized: JsonRecord }).normalized = normalized;
       const count = errors.filter((error) => error.staging_record_id === record.id).length;
       if (!count) valid++;
     });
-    await Promise.all(inserted.map(async (record) => { const count = errors.filter((error) => error.staging_record_id === record.id).length; await this.db.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { validation_status: count ? 'invalid' : 'valid', error_count: count, validated_at: new Date().toISOString() }); }));
+    await Promise.all(inserted.map(async (record) => { const count = errors.filter((error) => error.staging_record_id === record.id).length; await this.db.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { normalized_payload: (record as InsertedRecord & { normalized: JsonRecord }).normalized, validation_status: count ? 'invalid' : 'valid', error_count: count, validated_at: new Date().toISOString() }); }));
     if (errors.length) await this.db.insert('staging_errors', errors);
     return { valid, rejected: records.length - valid, errorCount: errors.length };
   }
@@ -147,7 +163,8 @@ export class ApiConnectorSyncService {
       const response = await fetch(url, { method: 'GET', headers, redirect: 'manual', signal: AbortSignal.timeout(Number(process.env.API_CONNECTOR_TIMEOUT_MS ?? 10000)) });
       status = response.status;
       if (status >= 300 && status < 400) throw new Error('Redirecionamento do legado bloqueado.');
-      if (!response.ok) throw new Error(`Legado respondeu HTTP ${status}.`);
+      if (status === 401 || status === 403) throw new BadRequestException(`Legado respondeu HTTP ${status}. Verifique autenticação, token ou header configurado.`);
+      if (!response.ok) throw new BadRequestException(`Legado respondeu HTTP ${status}.`);
       const json = await response.json() as unknown; const value = this.path(json, config.response_root_path);
       const pageRecords = (Array.isArray(value) ? value : Array.isArray(json) ? json : []).filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
       records.push(...pageRecords.slice(0, maxRecords - records.length));
@@ -170,9 +187,9 @@ export class ApiConnectorSyncService {
     if (type === 'date') { const match = typeof value === 'string' ? value.match(/^(\d{4}-\d{2}-\d{2})(T.*)?$/) : null; const date = match ? new Date(`${match[1]}T00:00:00.000Z`) : null; const validIsoSuffix = !match?.[2] || !Number.isNaN(Date.parse(value as string)); const ok = Boolean(match && date && validIsoSuffix && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === match[1]); return { ok, value: ok ? match![1] : value }; }
     if (type === 'datetime') { const ok = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value)); return { ok, value }; }
     if (type === 'json') return { ok: value !== null && typeof value === 'object', value };
+    if (type === 'enum') return { ok: typeof value === 'string', value };
     return { ok: false, value };
   }
-  private normalized(raw: JsonRecord, mappings: ApiMapping[]) { return Object.fromEntries(mappings.filter((mapping) => Object.hasOwn(raw, mapping.api_source_field_name)).map((mapping) => { const value = raw[mapping.api_source_field_name]; return [mapping.data_contract_field.field_key, this.convert(value, mapping.data_contract_field.data_type).value]; })); }
   private stable(value: unknown): unknown { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value as JsonRecord).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, this.stable(item)])) : Array.isArray(value) ? value.map((item) => this.stable(item)) : value; }
-  private safeError(error: unknown) { if (error instanceof Error && (/^Legado respondeu HTTP \d+\.$/.test(error.message) || error.message === 'Redirecionamento do legado bloqueado.')) return error.message; return 'Não foi possível sincronizar com o legado.'; }
+  private safeError(error: unknown) { if (error instanceof Error && (/^Legado respondeu HTTP \d+\.(?: Verifique autenticação, token ou header configurado\.)?$/.test(error.message) || error.message === 'Redirecionamento do legado bloqueado.')) return error.message; return 'Não foi possível sincronizar com o legado.'; }
 }

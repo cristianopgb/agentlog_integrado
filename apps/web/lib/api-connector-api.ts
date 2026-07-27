@@ -13,3 +13,6 @@ export const listApiRuns=(t:string,s:string)=>call<ApiSyncRun[]>(`${route(t,s)}/
 export type ApiFieldMapping={id:string;api_source_field_name:string;data_contract_field_id:string};
 export const listApiFieldMappings=(t:string,s:string)=>call<ApiFieldMapping[]>(`${route(t,s)}/api-field-mappings`);
 export const saveApiFieldMappings=(t:string,s:string,mappings:Array<{source_field_name:string;data_contract_field_id:string}>)=>call<ApiFieldMapping[]>(`${route(t,s)}/api-field-mappings`,{method:'PUT',body:JSON.stringify({mappings})});
+export type ValueMappingItem={source_field_name:string;data_contract_field_id:string;field_key:string;source_value:string;target_value:string|null;allowed_values:string[];status:'mapped'|'pending'|'exact_match'};
+export const listValueMappings=(t:string,s:string)=>call<ValueMappingItem[]>(`${route(t,s)}/value-mappings`);
+export const saveValueMappings=(t:string,s:string,mappings:Array<{source_field_name:string;data_contract_field_id:string;source_value:string;target_value:string|null}>)=>call<ValueMappingItem[]>(`${route(t,s)}/value-mappings`,{method:'PUT',body:JSON.stringify({mappings})});
