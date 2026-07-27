@@ -411,6 +411,17 @@ export async function listIntegrations(
     .select('id,tenant_id,data_contract_id')
     .eq('tenant_id', tenantId);
   if (mappingError) throw mappingError;
+  const { data: apiMappings, error: apiMappingError } = await supabase
+    .from('data_source_api_field_mappings')
+    .select('id,tenant_id,data_source_id,status')
+    .eq('tenant_id', tenantId)
+    .eq('status', 'active');
+  if (apiMappingError) throw apiMappingError;
+  const { data: apiConfigs, error: apiConfigError } = await supabase
+    .from('data_source_api_configs')
+    .select('data_source_id,detected_fields')
+    .eq('tenant_id', tenantId);
+  if (apiConfigError) throw apiConfigError;
   const { data: batches, error: batchError } = await supabase
     .from('staging_batches')
     .select(
@@ -430,13 +441,19 @@ export async function listIntegrations(
           (item) => item.data_contract_id === contract.id,
         )
       : [];
-    const mappedCount = contract
+    const mappedCount = source.source_type === 'api'
+      ? ((apiMappings ?? []) as Array<{ data_source_id: string }>).filter((item) => item.data_source_id === source.id).length
+      : contract
       ? new Set(
           ((mappings ?? []) as FieldMapping[])
             .filter((item) => item.data_contract_id === contract.id)
             .map((item) => item.id),
         ).size
       : 0;
+    const detectedApiFields = ((apiConfigs ?? []) as Array<{ data_source_id: string; detected_fields: unknown }>).find((item) => item.data_source_id === source.id)?.detected_fields;
+    const foundCount = source.source_type === 'api' && Array.isArray(detectedApiFields)
+      ? detectedApiFields.length
+      : contractFields.length;
     const latestBatch =
       ((batches ?? []) as StagingBatch[]).find(
         (item) => item.data_source_id === source.id,
@@ -444,13 +461,13 @@ export async function listIntegrations(
     return {
       source,
       contract,
-      contractFieldCount: contractFields.length,
+      contractFieldCount: foundCount,
       mappedFieldCount: mappedCount,
       latestBatch,
       generalStatus: getGeneralStatus(
         source,
         contract,
-        contractFields.length,
+        foundCount,
         mappedCount,
       ),
     };
