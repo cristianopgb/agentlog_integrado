@@ -4,4 +4,5 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { ApiConnectorConfigService } from './api-connector-config.service';
 import { ApiConnectorSyncService } from './api-connector-sync.service';
 import { ApiIntegrationsController, ApiIntegrationsInternalController } from './api-integrations.controller';
-@Module({imports:[SupabaseModule,RbacModule],controllers:[ApiIntegrationsController,ApiIntegrationsInternalController],providers:[ApiConnectorConfigService,ApiConnectorSyncService]}) export class ApiIntegrationsModule {}
+import { ValueMappingsService } from './value-mappings.service';
+@Module({imports:[SupabaseModule,RbacModule],controllers:[ApiIntegrationsController,ApiIntegrationsInternalController],providers:[ApiConnectorConfigService,ApiConnectorSyncService,ValueMappingsService]}) export class ApiIntegrationsModule {}

@@ -72,11 +72,12 @@ export class StagingService {
       const batchRows = await this.supabase.insert<Array<{ id: string }>>('staging_batches', { tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, batch_code: filename, source_reference: filename, status: 'validated', total_records: parsed.rows.length, valid_records: parsed.rows.length, invalid_records: 0, error_count: 0, metadata: { filename, file_type: extension, received_headers: parsed.headers, upload_mode: 'setup_file', setup_upload: true, message: 'Arquivo lido com sucesso. Revise o pareamento das colunas antes de processar.' }, received_at: new Date().toISOString(), validated_at: new Date().toISOString(), created_by: userId, updated_by: userId });
       const batchId = batchRows[0]?.id;
       if (!batchId) throw new BadRequestException('Não foi possível criar o lote de staging.');
-      const insertedRecords = parsed.rows.length ? await this.supabase.insert<Array<{ id: string; row_number: number }>>('staging_records', parsed.rows.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw, validation_status: 'valid', error_count: 0, validated_at: new Date().toISOString() }))) : [];
+      const insertedRecords = parsed.rows.length ? await this.supabase.insert<Array<{ id: string; row_number: number }>>('staging_records', parsed.rows.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw, normalized_payload: Object.fromEntries(fields.filter((field) => Object.hasOwn(raw, field.source_field_name)).map((field) => [field.field_key, raw[field.source_field_name]])), validation_status: 'valid', error_count: 0, validated_at: new Date().toISOString() }))) : [];
       await Promise.all(insertedRecords.map((record) => this.supabase.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { validation_status: 'valid', error_count: 0, validated_at: new Date().toISOString() })));
       return this.getBatch(tenantId, batchId);
     }
     const allowedValues = await this.supabase.select<Array<{ data_contract_field_id: string; value: string; normalized_value: string | null; is_active: boolean }>>('data_contract_allowed_values', `select=data_contract_field_id,value,normalized_value,is_active&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&is_active=eq.true`);
+    const valueMappings = await this.supabase.select<Array<{ data_contract_field_id: string; source_field_name: string; source_value: string; target_value: string }>>('data_source_value_mappings', `select=data_contract_field_id,source_field_name,source_value,target_value&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active`);
     const expected = new Set(fields.map((field) => field.source_field_name));
     const unknown = parsed.headers.filter((header) => !expected.has(header));
     const missing = fields.filter((field) => field.is_required && !parsed.headers.includes(field.source_field_name));
@@ -88,27 +89,40 @@ export class StagingService {
     const insertedRecords = parsed.rows.length ? await this.supabase.insert<Array<{ id: string; row_number: number }>>('staging_records', parsed.rows.map((raw, index) => ({ tenant_id: tenantId, staging_batch_id: batchId, data_contract_id: contract.id, row_number: index + 1, raw_payload: raw }))) : [];
     const recordByRow = new Map(insertedRecords.map((record) => [record.row_number, record.id]));
     const recordErrors = new Map<number, number>();
+    const normalizedByRow = new Map<number, Record<string, unknown>>();
     const errors: Record<string, unknown>[] = [];
     for (const header of unknown) errors.push(this.batchError(tenantId, batchId, 'UNKNOWN_COLUMN', header, null, 'Coluna fora do contrato.', 'Arquivo rejeitado: existem colunas fora do contrato.'));
     for (const field of missing) errors.push(this.batchError(tenantId, batchId, 'MISSING_REQUIRED_COLUMN', field.source_field_name, field.field_key, 'Campo obrigatório presente no contrato.', 'Arquivo rejeitado: coluna obrigatória ausente.'));
     parsed.rows.forEach((row, index) => {
       const rowNumber = index + 1;
+      const normalized: Record<string, unknown> = {};
+      normalizedByRow.set(rowNumber, normalized);
       for (const field of fields) {
         if (!parsed.headers.includes(field.source_field_name)) continue;
         const value = row[field.source_field_name];
         const empty = value === null || value === undefined || String(value).trim() === '';
         const rowErrorsBefore = errors.length;
         if (empty && field.is_required && !field.allow_null) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'REQUIRED_VALUE', 'Valor obrigatório ausente.'));
-        if (!empty && !this.matchesType(String(value), field.data_type)) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'INVALID_TYPE', `Tipo esperado: ${field.data_type}.`));
         const allowed = allowedValues.filter((item) => item.data_contract_field_id === field.id).map((item) => item.value);
-        if (!empty && allowed.length && !allowed.includes(String(value))) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'VALUE_NOT_ALLOWED', `Valores aceitos: ${allowed.join(', ')}.`));
+        const controlled = field.data_type === 'enum' || allowed.length > 0;
+        if (!empty && controlled && !allowed.length) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'CONTROLLED_VALUES_NOT_CONFIGURED', `Valores controlados não estão configurados para o campo ${field.field_key}.`));
+        else if (!empty && controlled) {
+          const sourceValue = String(value);
+          const configured = valueMappings.find((item) => item.data_contract_field_id === field.id && item.source_field_name === field.source_field_name && item.source_value === sourceValue);
+          const target = configured?.target_value ?? (allowed.includes(sourceValue) ? sourceValue : null);
+          if (!target) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'VALUE_MAPPING_REQUIRED', `Valor recebido não possui De/Para configurado para o campo ${field.field_key}.`));
+          else if (!allowed.includes(target)) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'VALUE_NOT_ALLOWED', `O De/Para configurado não pertence aos valores permitidos de ${field.field_key}.`));
+          else normalized[field.field_key] = target;
+        } else if (!empty && !this.matchesType(String(value), field.data_type)) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'INVALID_TYPE', `Tipo esperado: ${field.data_type}.`));
+        else if (!empty) normalized[field.field_key] = this.convertValue(value, field.data_type);
+        else if (field.allow_null) normalized[field.field_key] = null;
         if (errors.length > rowErrorsBefore) recordErrors.set(rowNumber, (recordErrors.get(rowNumber) ?? 0) + errors.length - rowErrorsBefore);
       }
     });
     if (errors.length) await this.supabase.insert('staging_errors', errors);
     await Promise.all(insertedRecords.map((record) => {
       const lineErrors = structuralRejected ? 1 : recordErrors.get(record.row_number) ?? 0;
-      return this.supabase.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { validation_status: lineErrors ? 'invalid' : 'valid', error_count: lineErrors, validated_at: new Date().toISOString() });
+      return this.supabase.update('staging_records', `tenant_id=eq.${tenantId}&id=eq.${record.id}`, { normalized_payload: normalizedByRow.get(record.row_number) ?? {}, validation_status: lineErrors ? 'invalid' : 'valid', error_count: lineErrors, validated_at: new Date().toISOString() });
     }));
     const invalidRecords = structuralRejected ? parsed.rows.length : recordErrors.size;
     const validRecords = structuralRejected ? 0 : Math.max(parsed.rows.length - invalidRecords, 0);
@@ -130,6 +144,7 @@ export class StagingService {
   }
 
   private matchesType(value: string, type: string) { if (['decimal','number','integer'].includes(type)) return !Number.isNaN(Number(value.replace(',', '.'))); if (type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isNaN(Date.parse(value)); if (type === 'datetime') return !Number.isNaN(Date.parse(value)); if (type === 'boolean') return ['true','false','0','1','sim','não','nao'].includes(value.toLowerCase()); return true; }
+  private convertValue(value: unknown, type: string) { const text = String(value); if (type === 'integer') return Number.parseInt(text, 10); if (['decimal','number'].includes(type)) return Number(text.replace(',', '.')); if (type === 'boolean') return ['true','1','sim'].includes(text.toLowerCase()); return value; }
   private async syncSetupContractFields(tenantId: string, contractId: string, headers: string[]) {
     await this.supabase.delete('data_contract_allowed_values', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
     await this.supabase.delete('data_contract_fields', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
