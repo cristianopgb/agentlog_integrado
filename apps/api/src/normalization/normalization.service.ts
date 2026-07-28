@@ -42,6 +42,7 @@ type Mapping = {
   mapping_type: string;
   status: string | null;
   notes: string | null;
+  operational_key: boolean;
   data_contract_field: {
     id: string;
     data_contract_id: string;
@@ -625,22 +626,41 @@ export class NormalizationService {
           );
         }
         const hasCoreValues = Object.keys(buckets.operation_records).length > 0;
-        const hasDocumentKey = [
-          'delivery_number',
-          'manifest_number',
-          'invoice_number',
-          'cte_number',
-          'order_number',
-          'external_code',
-        ].some((key) =>
-          this.hasOperationalIdentifier(buckets.operation_records[key]),
-        );
+        const operationalKeysUsed = mappings
+          .filter(
+            (mapping) =>
+              mapping.operational_key && mapping.mapping_type !== 'ignored',
+          )
+          .flatMap((mapping) => {
+            const entityKey = mapping.canonical_entity?.entity_key;
+            const fieldKey = mapping.canonical_field?.field_key;
+            const target =
+              entityKey && fieldKey
+                ? this.resolveTarget(entityKey, fieldKey)
+                : null;
+            return target?.entity === 'operation_records' &&
+              this.hasOperationalIdentifier(
+                buckets.operation_records[target.field],
+              )
+              ? [target.field]
+              : [];
+          });
+        const hasDocumentKey = operationalKeysUsed.length > 0;
+        if (hasDocumentKey)
+          this.logger.log(
+            JSON.stringify({
+              event: 'canonical_operational_key_selected',
+              staging_record_id: record.id,
+              operational_keys: operationalKeysUsed,
+            }),
+          );
         const op = await this.upsertOperation(
           tenantId,
           batch,
           record,
           buckets.operation_records,
           partial || !hasCoreValues || !hasDocumentKey,
+          hasDocumentKey,
           canonicalSourceKey,
           integration.id,
           datasetRole,
@@ -804,7 +824,7 @@ export class NormalizationService {
       };
     const rows = await this.supabase.select<Mapping[]>(
       'field_mappings',
-      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
+      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,operational_key,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
     );
     const activeRows = rows.filter(
       (mapping) => mapping.status === 'active' || !mapping.status,
@@ -900,18 +920,11 @@ export class NormalizationService {
     record: RecordRow,
     values: Record<string, unknown>,
     partial: boolean,
+    hasOperationalKey: boolean,
     canonicalSourceKey: string,
     canonicalIntegrationId: string,
     datasetRole: string,
   ) {
-    const hasOperationalKey = [
-      'delivery_number',
-      'manifest_number',
-      'invoice_number',
-      'cte_number',
-      'order_number',
-      'external_code',
-    ].some((key) => this.hasOperationalIdentifier(values[key]));
     const existing = await this.findOperation(
       tenantId,
       { ...values, source_staging_record_id: record.id },
