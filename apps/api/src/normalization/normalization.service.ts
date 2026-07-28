@@ -46,7 +46,6 @@ type Mapping = {
     id: string;
     data_contract_id: string;
     field_key: string;
-    source_field_name: string;
   } | null;
   canonical_field: {
     id: string;
@@ -414,46 +413,47 @@ export class NormalizationService {
         );
       }
 
-      // API staging has already applied source mapping, De/Para and formatting.
-      // Build only canonical metadata from the contract; never remap source fields.
-      const nativeMappings =
-        dataSource.source_type === 'api'
-          ? this.contractMappings(contract, contractFields, recordsWithPayload)
-          : [];
-      let mappings = nativeMappings;
-      let mappingsResult: MappingLoadResult | null = null;
-      if (!mappings.length && dataSource.source_type !== 'api') {
-        const loaded = await this.loadMappings(
-          tenantId,
-          batch.data_contract_id,
+      // A API já concluiu pareamento de origem e tratamento no staging. Neste
+      // ponto field_mappings é exclusivamente o mapa contrato -> modelo canônico.
+      const loaded = await this.loadMappings(tenantId, batch.data_contract_id);
+      if ('code' in loaded) {
+        await addError(
+          loaded.code,
+          'Não foi possível carregar os mapeamentos canônicos para normalização.',
+          { original_error: this.errorDetails(loaded.originalError) },
         );
-        if ('code' in loaded) {
-          await addError(
-            loaded.code,
-            'Não foi possível carregar os mapeamentos da integração para normalização.',
-            { original_error: this.errorDetails(loaded.originalError) },
-          );
-          return this.finish(run.id, 'failed', counters, errorSummary);
-        }
-        mappingsResult = loaded;
-        mappings = loaded.mappings;
+        return this.finish(run.id, 'failed', counters, errorSummary);
       }
+      const mappingsResult = loaded;
+      const payloadKeys = [
+        ...new Set(
+          recordsWithPayload.flatMap((record) =>
+            Object.keys(record.normalized_payload ?? {}),
+          ),
+        ),
+      ];
+      const contractFieldKeys = contractFields.map((field) => field.field_key);
+      const mappings = loaded.mappings.filter((mapping) =>
+        payloadKeys.includes(mapping.data_contract_field?.field_key ?? ''),
+      );
       if (!mappings.length) {
         await addError(
           dataSource.source_type === 'api'
-            ? 'EMPTY_NORMALIZED_PAYLOAD'
+            ? 'NO_CANONICAL_FIELD_MAPPINGS'
             : 'NO_FIELD_MAPPINGS',
           dataSource.source_type === 'api'
-            ? 'O normalized_payload não contém campos nativos reconhecidos pelo contrato.'
+            ? 'Os campos nativos do normalized_payload não possuem mapeamento canônico ativo para publicação no modelo tratado.'
             : 'Não há mapeamentos ativos para o contrato do lote validado.',
           {
-            tenant_id: tenantId,
+            normalized_payload_keys: payloadKeys,
+            contract_field_keys: contractFieldKeys,
+            data_contract_id: contract.id,
+            data_source_id: dataSource.id,
+            source_type: dataSource.source_type,
             staging_batch_id: batchId,
-            batch_data_contract_id: batch.data_contract_id,
-            data_source_id: batch.data_source_id,
-            mappings_found_count: mappingsResult?.mappingsFoundCount ?? 0,
+            mappings_found_count: mappingsResult.mappingsFoundCount,
             active_mappings_found_count:
-              mappingsResult?.activeMappingsFoundCount ?? 0,
+              mappingsResult.activeMappingsFoundCount,
           },
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
@@ -527,8 +527,6 @@ export class NormalizationService {
               'SOURCE_VALUE_NOT_FOUND',
               'Valor da coluna pareada não foi encontrado no staging.',
               {
-                source_field_name:
-                  mapping.data_contract_field.source_field_name,
                 field_key: mapping.data_contract_field.field_key,
               },
               record.id,
@@ -784,48 +782,6 @@ export class NormalizationService {
       `select=id,data_contract_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&order=sort_order.asc`,
     );
   }
-  private contractMappings(
-    contract: DataContract,
-    fields: ContractField[],
-    records: RecordRow[],
-  ): Mapping[] {
-    const payloadKeys = new Set(
-      records.flatMap((record) => Object.keys(record.normalized_payload ?? {})),
-    );
-    return fields
-      .filter((field) => payloadKeys.has(field.field_key))
-      .filter((field) =>
-        this.resolveTarget(contract.entity_key, field.field_key),
-      )
-      .map((field) => ({
-        id: field.id,
-        data_contract_id: field.data_contract_id,
-        data_contract_field_id: field.id,
-        canonical_entity_id: contract.entity_key,
-        canonical_field_id: field.id,
-        mapping_type: 'direct',
-        status: 'active',
-        notes: null,
-        data_contract_field: {
-          id: field.id,
-          data_contract_id: field.data_contract_id,
-          field_key: field.field_key,
-          source_field_name: field.field_key,
-        },
-        canonical_field: {
-          id: field.id,
-          canonical_entity_id: contract.entity_key,
-          field_key: field.field_key,
-          data_type: field.data_type,
-          is_required: field.is_required,
-        },
-        canonical_entity: {
-          id: contract.entity_key,
-          entity_key: contract.entity_key,
-          module_key: contract.module_key,
-        },
-      }));
-  }
   private async loadMappings(
     tenantId: string,
     contractId: string | null,
@@ -848,7 +804,7 @@ export class NormalizationService {
       };
     const rows = await this.supabase.select<Mapping[]>(
       'field_mappings',
-      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key,source_field_name),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
+      `select=id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,data_contract_id,field_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,canonical_entity_id,field_key,data_type,is_required),canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(id,entity_key,module_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`,
     );
     const activeRows = rows.filter(
       (mapping) => mapping.status === 'active' || !mapping.status,
@@ -1074,7 +1030,6 @@ export class NormalizationService {
   private schemaSignature(mappings: Mapping[]) {
     const schema = mappings
       .map((m) => ({
-        source: m.data_contract_field?.source_field_name ?? '',
         field: m.data_contract_field?.field_key ?? '',
         entity: m.canonical_entity?.entity_key ?? '',
         canonical: m.canonical_field?.field_key ?? '',
