@@ -32,6 +32,7 @@ export type FieldMapping = {
   mapping_type: string;
   status: string;
   notes: string | null;
+  operational_key: boolean;
 };
 export type TransformationRule = {
   id: string;

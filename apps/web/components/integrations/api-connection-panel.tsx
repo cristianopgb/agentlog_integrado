@@ -75,6 +75,26 @@ function inferredType(value: unknown) {
     return Number.isInteger(value) ? 'inteiro' : 'decimal';
   return typeof value;
 }
+function numericPreview(
+  value: unknown,
+  decimal: string | null | undefined,
+  thousand: string | null | undefined,
+) {
+  if (typeof value !== 'string' || (!decimal && !thousand)) return null;
+  let normalized = value.trim();
+  if (thousand) normalized = normalized.split(thousand).join('');
+  if (decimal && decimal !== '.') normalized = normalized.replace(decimal, '.');
+  if (!/^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
+  const converted = Number(normalized);
+  if (!Number.isFinite(converted)) return null;
+  const received = Number(value);
+  const suspicious =
+    Number.isFinite(received) &&
+    received !== 0 &&
+    (Math.abs(converted / received) >= 100 ||
+      Math.abs(received / converted) >= 100);
+  return { converted, suspicious };
+}
 function ActionButton({
   action,
   busy,
@@ -788,6 +808,14 @@ export function ApiConnectionPanel({
                   field.data_type === 'datetime') &&
                 typeof sample === 'string' &&
                 /^\d{4}-\d{2}-\d{2}(?:T|$)/.test(sample);
+              const numeric = numericPreview(
+                sample,
+                rule?.decimal_separator,
+                rule?.thousand_separator,
+              );
+              const jsonNumberWithTextSeparators =
+                typeof sample === 'number' &&
+                Boolean(rule?.decimal_separator || rule?.thousand_separator);
               return (
                 <div
                   key={key}
@@ -934,10 +962,27 @@ export function ApiConnectionPanel({
                               ? `${sample}T00:00:00Z`
                               : String(sample),
                           ).toISOString()
-                        : rule
-                          ? 'Será convertido na sincronização'
-                          : 'Configure o formato'}
+                        : jsonNumberWithTextSeparators
+                          ? String(sample)
+                          : numeric
+                            ? String(numeric.converted)
+                            : rule
+                              ? 'Formato configurado; amostra não convertível'
+                              : 'Configure o formato'}
                     </p>
+                    {numeric?.suspicious ? (
+                      <p className="mt-2 text-xs font-semibold text-amber-700">
+                        O valor convertido parece muito diferente do valor
+                        recebido. Verifique separadores.
+                      </p>
+                    ) : null}
+                    {jsonNumberWithTextSeparators ? (
+                      <p className="mt-2 text-xs font-semibold text-amber-700">
+                        Este valor veio como número JSON. Separadores de texto
+                        não serão aplicados; eles só valem para valores
+                        recebidos como texto.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               );

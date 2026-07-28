@@ -1,21 +1,72 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Card, EmptyState, SectionHeader, StatusBadge } from '../../../components/ui';
+import {
+  Card,
+  EmptyState,
+  SectionHeader,
+  StatusBadge,
+} from '../../../components/ui';
 import { getSessionContext } from '../../../lib/setup-api';
-import { listNativeRecordFilters, listNativeRecords, type NativeRecord, type NativeRecordFilters, type NativeRecordList } from '../../../lib/native-records-api';
+import {
+  listNativeRecordFilters,
+  listNativeRecords,
+  type NativeRecord,
+  type NativeRecordFilters,
+  type NativeRecordList,
+} from '../../../lib/native-records-api';
 
-const qualityLabels: Record<string, string> = { valid: 'Completo', partial: 'Parcial', invalid: 'Inválido', manual_review: 'Revisar' };
-function text(v: unknown, fallback = 'Dado não informado') { return v === null || v === undefined || v === '' ? fallback : String(v); }
-function doc(r: NativeRecord) { return text(r.cte_number ?? r.invoice_number ?? r.document_number ?? r.order_number ?? r.delivery_number, 'Documento não informado'); }
-function money(v: unknown) { return v === null || v === undefined || v === '' ? 'Valor não informado' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(v)); }
-function date(v: unknown, fallback = 'Data não informada') { return v ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(String(v))) : fallback; }
-function quality(q: unknown) { return qualityLabels[String(q)] ?? 'Não disponível'; }
+const qualityLabels: Record<string, string> = {
+  valid: 'Completo',
+  partial: 'Parcial',
+  invalid: 'Inválido',
+  manual_review: 'Revisar',
+};
+const sourceTypeLabels: Record<string, string> = {
+  api: 'Integração API',
+  spreadsheet: 'Integração Planilha',
+  manual_file: 'Integração Planilha',
+};
+function text(v: unknown, fallback = 'Dado não informado') {
+  return v === null || v === undefined || v === '' ? fallback : String(v);
+}
+function doc(r: NativeRecord) {
+  return text(
+    r.cte_number ??
+      r.invoice_number ??
+      r.document_number ??
+      r.order_number ??
+      r.delivery_number,
+    'Documento não informado',
+  );
+}
+function money(v: unknown) {
+  return v === null || v === undefined || v === ''
+    ? 'Valor não informado'
+    : new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+      }).format(Number(v));
+}
+function date(v: unknown, fallback = 'Data não informada') {
+  return v
+    ? new Intl.DateTimeFormat('pt-BR', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date(String(v)))
+    : fallback;
+}
+function quality(q: unknown) {
+  return qualityLabels[String(q)] ?? 'Não disponível';
+}
 
 export default function NativeDataPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [data, setData] = useState<NativeRecordList | null>(null);
-  const [filterOptions, setFilterOptions] = useState<NativeRecordFilters>({ sources: [], batches: [] });
+  const [filterOptions, setFilterOptions] = useState<NativeRecordFilters>({
+    sources: [],
+    batches: [],
+  });
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [qualityFilter, setQualityFilter] = useState('');
@@ -24,13 +75,292 @@ export default function NativeDataPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [includeArchived, setIncludeArchived] = useState(false);
-  const params = useMemo(() => { const p = new URLSearchParams({ limit: '50' }); if (search) p.set('search', search); if (qualityFilter) p.set('quality', qualityFilter); if (sourceId) p.set('source_id', sourceId); if (batchId) p.set('batch_id', batchId); if (dateFrom) p.set('date_from', dateFrom); if (dateTo) p.set('date_to', dateTo); if (includeArchived) p.set('include_archived', 'true'); return p; }, [search, qualityFilter, sourceId, batchId, dateFrom, dateTo, includeArchived]);
-  useEffect(() => { getSessionContext().then((ctx) => setTenantId(ctx.tenantId)); }, []);
-  useEffect(() => { if (!tenantId) return; listNativeRecords(tenantId, params).then(setData).catch((err: Error) => setError(err.message)); }, [tenantId, params]);
-  useEffect(() => { if (!tenantId) return; listNativeRecordFilters(tenantId, includeArchived).then((filters) => { setFilterOptions(filters); if (sourceId && !filters.sources.some((source) => source.id === sourceId)) setSourceId(''); if (batchId && !filters.batches.some((batch) => batch.id === batchId)) setBatchId(''); }).catch((err: Error) => setError(err.message)); }, [tenantId, includeArchived, sourceId, batchId]);
-  return <div className="page-stack app-page"><SectionHeader eyebrow="Base nativa operacional" title="Dados tratados" description="Consulte os registros normalizados a partir das integrações validadas. Campos não enviados pelo legado aparecem como dados não informados." />
-    {error ? <Card><p className="font-semibold text-amber-700">Acesso não disponível</p><p className="mt-2 text-sm text-slate-600">{error}</p></Card> : null}
-    <div className="grid gap-4 md:grid-cols-4">{[['Total de registros tratados', data?.summary.total], ['Registros com dados principais', data?.summary.complete], ['Registros com dados incompletos', data?.summary.partial], ['Última normalização', data?.summary.lastNormalization ? date(data.summary.lastNormalization) : 'Ainda não disponível']].map(([label, value]) => <Card key={label as string}><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-2xl font-bold">{value ?? 'Ainda não disponível'}</p></Card>)}</div>
-    <Card><p className="mb-3 text-sm text-slate-600">{data?.summary.note ?? 'Registro parcial significa que a linha foi processada, mas algum campo mapeado veio vazio ou faltou uma chave operacional. Isso não é a mesma coisa que indicador parcial.'}</p><div className="grid gap-3 md:grid-cols-3"><input className="rounded-xl border px-4 py-2" placeholder="Buscar por documento, entrega, cliente ou status" value={search} onChange={(e) => setSearch(e.target.value)} /><select className="rounded-xl border px-4 py-2" value={sourceId} onChange={(e) => { setSourceId(e.target.value); setBatchId(''); }}><option value="">Integração: todas</option>{filterOptions.sources.map((source) => <option key={source.id} value={source.id}>{source.name}{source.status && source.status !== 'active' ? ` (${source.status})` : ''}</option>)}</select><select className="rounded-xl border px-4 py-2" value={batchId} onChange={(e) => setBatchId(e.target.value)}><option value="">Lote: todos</option>{filterOptions.batches.filter((batch) => !sourceId || batch.data_source_id === sourceId).map((batch) => <option key={batch.id} value={batch.id}>{batch.label}</option>)}</select><select className="rounded-xl border px-4 py-2" value={qualityFilter} onChange={(e) => setQualityFilter(e.target.value)}><option value="">Qualidade do registro: todas</option><option value="valid">Completo</option><option value="partial">Parcial</option><option value="invalid">Inválido</option><option value="manual_review">Revisar</option></select><input type="date" className="rounded-xl border px-4 py-2" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /><input type="date" className="rounded-xl border px-4 py-2" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /><label className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold"><input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />Incluir integrações arquivadas</label></div></Card>
-    <Card className="overflow-x-auto">{data?.data.length ? <table className="min-w-full text-sm"><thead><tr className="text-left text-slate-500"><th className="p-3">Documento</th><th className="p-3">Entrega</th><th className="p-3">Cliente</th><th className="p-3">Status</th><th className="p-3">Valor</th><th className="p-3">Data prevista</th><th className="p-3">Qualidade</th><th className="p-3">Origem</th><th className="p-3">Atualizado em</th><th className="p-3">Ação</th></tr></thead><tbody>{data.data.map((r) => <tr key={r.id} className="border-t"><td className="p-3 font-semibold">{doc(r)}</td><td className="p-3">{text(r.delivery_number, 'Entrega não informada')}</td><td className="p-3">{text(r.customer_name ?? r.customer_document, 'Cliente não informado')}</td><td className="p-3">{text(r.status, 'Status não informado')}</td><td className="p-3">{money(r.total_value ?? r.freight_value)}</td><td className="p-3">{date(r.expected_date)}</td><td className="p-3"><StatusBadge tone={r.data_quality_status === 'valid' ? 'success' : 'warning'}>{quality(r.data_quality_status)}</StatusBadge></td><td className="p-3">{text(r.source_data_source_name ?? r.source_system, 'Origem não informada')}</td><td className="p-3">{date(r.updated_at, 'Não disponível')}</td><td className="p-3"><Link className="font-semibold text-blue-600" href={`/app/native-data/${r.id}`}>Ver detalhes</Link></td></tr>)}</tbody></table> : <EmptyState title="Nenhum registro tratado encontrado" description="Quando a normalização gravar dados na base nativa, eles aparecerão aqui para consulta." />}</Card></div>;
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [sourceType, setSourceType] = useState('');
+  const params = useMemo(() => {
+    const p = new URLSearchParams({ limit: '50' });
+    if (search) p.set('search', search);
+    if (qualityFilter) p.set('quality', qualityFilter);
+    if (sourceId) p.set('source_id', sourceId);
+    if (sourceType) p.set('source_type', sourceType);
+    if (batchId) p.set('batch_id', batchId);
+    if (dateFrom) p.set('date_from', dateFrom);
+    if (dateTo) p.set('date_to', dateTo);
+    if (includeArchived) p.set('include_archived', 'true');
+    if (includeInactive) p.set('include_inactive', 'true');
+    return p;
+  }, [
+    search,
+    qualityFilter,
+    sourceId,
+    sourceType,
+    batchId,
+    dateFrom,
+    dateTo,
+    includeArchived,
+    includeInactive,
+  ]);
+  useEffect(() => {
+    getSessionContext().then((ctx) => setTenantId(ctx.tenantId));
+  }, []);
+  useEffect(() => {
+    if (!tenantId) return;
+    listNativeRecords(tenantId, params)
+      .then(setData)
+      .catch((err: Error) => setError(err.message));
+  }, [tenantId, params]);
+  useEffect(() => {
+    if (!tenantId) return;
+    listNativeRecordFilters(tenantId, includeArchived)
+      .then((filters) => {
+        setFilterOptions(filters);
+        if (
+          sourceId &&
+          !filters.sources.some((source) => source.id === sourceId)
+        )
+          setSourceId('');
+        if (batchId && !filters.batches.some((batch) => batch.id === batchId))
+          setBatchId('');
+      })
+      .catch((err: Error) => setError(err.message));
+  }, [tenantId, includeArchived, sourceId, batchId]);
+  return (
+    <div className="page-stack app-page">
+      <SectionHeader
+        eyebrow="Base nativa operacional"
+        title="Dados tratados"
+        description="Consulte os registros normalizados a partir das integrações validadas. Campos não enviados pelo legado aparecem como dados não informados."
+      />
+      {error ? (
+        <Card>
+          <p className="font-semibold text-amber-700">Acesso não disponível</p>
+          <p className="mt-2 text-sm text-slate-600">{error}</p>
+        </Card>
+      ) : null}
+      <div className="grid gap-4 md:grid-cols-4">
+        {[
+          ['Total de registros tratados', data?.summary.total],
+          ['Registros com dados principais', data?.summary.complete],
+          ['Registros com dados incompletos', data?.summary.partial],
+          [
+            'Última normalização',
+            data?.summary.lastNormalization
+              ? date(data.summary.lastNormalization)
+              : 'Ainda não disponível',
+          ],
+        ].map(([label, value]) => (
+          <Card key={label as string}>
+            <p className="text-sm text-slate-500">{label}</p>
+            <p className="mt-2 text-2xl font-bold">
+              {value ?? 'Ainda não disponível'}
+            </p>
+          </Card>
+        ))}
+      </div>
+      <Card>
+        <p className="mb-3 text-sm text-slate-600">
+          {data?.summary.note ??
+            'Registro parcial significa que a linha foi processada, mas algum campo mapeado veio vazio ou faltou uma chave operacional. Isso não é a mesma coisa que indicador parcial.'}
+        </p>
+        <div className="grid gap-3 md:grid-cols-3">
+          <input
+            className="rounded-xl border px-4 py-2"
+            placeholder="Buscar por documento, entrega, cliente ou status"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <select
+            className="rounded-xl border px-4 py-2"
+            value={sourceType}
+            onChange={(e) => {
+              setSourceType(e.target.value);
+              setSourceId('');
+            }}
+          >
+            <option value="">Origem: todas</option>
+            <option value="api">Integração API</option>
+            <option value="spreadsheet">Integração Planilha</option>
+          </select>
+          <select
+            className="rounded-xl border px-4 py-2"
+            value={sourceId}
+            onChange={(e) => {
+              setSourceId(e.target.value);
+              setBatchId('');
+            }}
+          >
+            <option value="">Integração: todas</option>
+            {filterOptions.sources
+              .filter(
+                (source) =>
+                  !sourceType ||
+                  (sourceType === 'api'
+                    ? source.source_type === 'api'
+                    : sourceType === 'spreadsheet'
+                      ? ['spreadsheet', 'manual_file'].includes(
+                          source.source_type,
+                        )
+                      : source.source_type === sourceType),
+              )
+              .map((source) => (
+                <option key={source.id} value={source.id}>
+                  {sourceTypeLabels[source.source_type] ?? source.source_type} ·{' '}
+                  {source.name}
+                  {source.status && source.status !== 'active'
+                    ? ` (${source.status})`
+                    : ''}
+                </option>
+              ))}
+          </select>
+          <select
+            className="rounded-xl border px-4 py-2"
+            value={batchId}
+            onChange={(e) => setBatchId(e.target.value)}
+          >
+            <option value="">Lote: todos</option>
+            {filterOptions.batches
+              .filter((batch) => !sourceId || batch.data_source_id === sourceId)
+              .map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.label}
+                </option>
+              ))}
+          </select>
+          <select
+            className="rounded-xl border px-4 py-2"
+            value={qualityFilter}
+            onChange={(e) => setQualityFilter(e.target.value)}
+          >
+            <option value="">Qualidade do registro: todas</option>
+            <option value="valid">Completo</option>
+            <option value="partial">Parcial</option>
+            <option value="invalid">Inválido</option>
+            <option value="manual_review">Revisar</option>
+          </select>
+          <input
+            type="date"
+            className="rounded-xl border px-4 py-2"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+          />
+          <input
+            type="date"
+            className="rounded-xl border px-4 py-2"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+          />
+          <label className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+            />
+            Incluir integrações arquivadas
+          </label>
+          <label className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              checked={includeInactive}
+              onChange={(e) => setIncludeInactive(e.target.checked)}
+            />
+            Incluir incompletos/inativos
+          </label>
+        </div>
+      </Card>
+      <Card className="overflow-x-auto">
+        {data?.data.length ? (
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500">
+                <th className="p-3">Documento</th>
+                <th className="p-3">Entrega</th>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Valor</th>
+                <th className="p-3">Data prevista</th>
+                <th className="p-3">Qualidade</th>
+                <th className="p-3">Origem</th>
+                <th className="p-3">Publicação</th>
+                <th className="p-3">Atualizado em</th>
+                <th className="p-3">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.data.map((r) => (
+                <tr key={r.id} className="border-t">
+                  <td className="p-3 font-semibold">{doc(r)}</td>
+                  <td className="p-3">
+                    {text(r.delivery_number, 'Entrega não informada')}
+                  </td>
+                  <td className="p-3">
+                    {text(
+                      r.customer_name ?? r.customer_document,
+                      'Cliente não informado',
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {text(r.status, 'Status não informado')}
+                  </td>
+                  <td className="p-3">
+                    {money(r.total_value ?? r.freight_value)}
+                  </td>
+                  <td className="p-3">{date(r.expected_date)}</td>
+                  <td className="p-3">
+                    <StatusBadge
+                      tone={
+                        r.data_quality_status === 'valid'
+                          ? 'success'
+                          : 'warning'
+                      }
+                    >
+                      {quality(r.data_quality_status)}
+                    </StatusBadge>
+                  </td>
+                  <td className="p-3">
+                    <span className="font-semibold">
+                      {sourceTypeLabels[String(r.source_data_source_type)] ??
+                        text(r.source_data_source_type, 'Integração')}
+                    </span>
+                    <br />
+                    {text(
+                      r.source_data_source_name ?? r.source_system,
+                      'Origem não informada',
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {r.is_current ? (
+                      <StatusBadge tone="success">Atual</StatusBadge>
+                    ) : (
+                      <>
+                        <StatusBadge tone="warning">Não atual</StatusBadge>
+                        <p className="mt-1 max-w-xs text-xs text-slate-600">
+                          {text(r.publication_reason)}
+                        </p>
+                      </>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {date(r.updated_at, 'Não disponível')}
+                  </td>
+                  <td className="p-3">
+                    <Link
+                      className="font-semibold text-blue-600"
+                      href={`/app/native-data/${r.id}`}
+                    >
+                      Ver detalhes
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <EmptyState
+            title="Nenhum registro tratado encontrado"
+            description="Quando a normalização gravar dados na base nativa, eles aparecerão aqui para consulta."
+          />
+        )}
+      </Card>
+    </div>
+  );
 }
