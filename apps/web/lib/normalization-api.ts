@@ -23,6 +23,10 @@ export type NormalizationRun = {
   created_extension_records: number;
   updated_extension_records: number;
   error_records: number;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  error_count: number;
   error_summary: Record<string, number>;
   created_at: string;
   finished_at: string | null;
