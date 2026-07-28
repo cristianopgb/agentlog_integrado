@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { parseTabularFile } from './file-parser';
+import { parseFieldValue, ParseRule } from '../api-integrations/field-value-parser';
 
 const batchFields = 'id,tenant_id,data_source_id,data_contract_id,batch_code,source_reference,status,total_records,valid_records,invalid_records,error_count,metadata,received_at,validated_at,created_at,updated_at,data_source:data_sources!staging_batches_data_source_tenant_fk(id,name),data_contract:data_contracts!staging_batches_data_contract_tenant_fk(id,name)';
 const recordFields = 'id,tenant_id,staging_batch_id,data_contract_id,row_number,raw_payload,normalized_payload,validation_status,error_count,validated_at,created_at,updated_at';
@@ -78,6 +79,7 @@ export class StagingService {
     }
     const allowedValues = await this.supabase.select<Array<{ data_contract_field_id: string; value: string; normalized_value: string | null; is_active: boolean }>>('data_contract_allowed_values', `select=data_contract_field_id,value,normalized_value,is_active&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&is_active=eq.true`);
     const valueMappings = await this.supabase.select<Array<{ data_contract_field_id: string; source_field_name: string; source_value: string; target_value: string }>>('data_source_value_mappings', `select=data_contract_field_id,source_field_name,source_value,target_value&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active`);
+    const parseRules = await this.supabase.select<Array<ParseRule & { data_contract_field_id: string; source_field_name: string }>>('data_source_field_parse_rules', `select=data_contract_field_id,source_field_name,data_type,date_format,timezone,decimal_separator,thousand_separator,boolean_true_values,boolean_false_values&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active`);
     const expected = new Set(fields.map((field) => field.source_field_name));
     const unknown = parsed.headers.filter((header) => !expected.has(header));
     const missing = fields.filter((field) => field.is_required && !parsed.headers.includes(field.source_field_name));
@@ -113,8 +115,15 @@ export class StagingService {
           if (!target) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'VALUE_MAPPING_REQUIRED', `Valor recebido não possui De/Para configurado para o campo ${field.field_key}.`));
           else if (!allowed.includes(target)) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'VALUE_NOT_ALLOWED', `O De/Para configurado não pertence aos valores permitidos de ${field.field_key}.`));
           else normalized[field.field_key] = target;
-        } else if (!empty && !this.matchesType(String(value), field.data_type)) errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, 'INVALID_TYPE', `Tipo esperado: ${field.data_type}.`));
-        else if (!empty) normalized[field.field_key] = this.convertValue(value, field.data_type);
+        } else if (!empty && ['date','datetime','decimal','number','integer','boolean'].includes(field.data_type)) {
+          const rule = parseRules.find((item) => item.data_contract_field_id === field.id && item.source_field_name === field.source_field_name) ?? { data_type: field.data_type, date_format: null, timezone: null, decimal_separator: null, thousand_separator: null, boolean_true_values: null, boolean_false_values: null };
+          const converted = parseFieldValue(value, rule);
+          if (!converted.ok) {
+            const required = converted.required;
+            const message = required ? (['date','datetime'].includes(field.data_type) ? `Configure o formato de data/hora recebido para o campo ${field.field_key}.` : `Configure os separadores numéricos recebidos para o campo ${field.field_key}.`) : (rule.date_format ? `Valor não corresponde ao formato configurado ${rule.date_format}.` : `Tipo esperado: ${field.data_type}.`);
+            errors.push(this.rowError(tenantId, batchId, recordByRow.get(rowNumber) ?? null, field, value, required ? 'FIELD_FORMAT_REQUIRED' : 'INVALID_TYPE', message));
+          } else normalized[field.field_key] = converted.value;
+        } else if (!empty) normalized[field.field_key] = value;
         else if (field.allow_null) normalized[field.field_key] = null;
         if (errors.length > rowErrorsBefore) recordErrors.set(rowNumber, (recordErrors.get(rowNumber) ?? 0) + errors.length - rowErrorsBefore);
       }
@@ -143,8 +152,6 @@ export class StagingService {
     return this.supabase.delete('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`);
   }
 
-  private matchesType(value: string, type: string) { if (['decimal','number','integer'].includes(type)) return !Number.isNaN(Number(value.replace(',', '.'))); if (type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isNaN(Date.parse(value)); if (type === 'datetime') return !Number.isNaN(Date.parse(value)); if (type === 'boolean') return ['true','false','0','1','sim','não','nao'].includes(value.toLowerCase()); return true; }
-  private convertValue(value: unknown, type: string) { const text = String(value); if (type === 'integer') return Number.parseInt(text, 10); if (['decimal','number'].includes(type)) return Number(text.replace(',', '.')); if (type === 'boolean') return ['true','1','sim'].includes(text.toLowerCase()); return value; }
   private async syncSetupContractFields(tenantId: string, contractId: string, headers: string[]) {
     await this.supabase.delete('data_contract_allowed_values', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);
     await this.supabase.delete('data_contract_fields', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);

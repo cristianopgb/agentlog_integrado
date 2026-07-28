@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { clearInvalidRecordStates } from './invalid-record-states';
 
 type JsonRecord = Record<string, unknown>;
 type ControlledField = { id: string; field_key: string; data_type: string };
@@ -58,6 +59,7 @@ export class ValueMappingsService {
       }
       await this.db.upsert('data_source_value_mappings', { tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, data_contract_field_id: item.data_contract_field_id!, source_field_name: item.source_field_name!, source_value: item.source_value!, target_value: item.target_value, status: 'active', revoked_at: null, created_by: userId }, 'tenant_id,data_source_id,data_contract_field_id,source_field_name,source_value');
     }
+    await clearInvalidRecordStates(this.db, tenantId, sourceId);
     return this.list(tenantId, sourceId);
   }
 
