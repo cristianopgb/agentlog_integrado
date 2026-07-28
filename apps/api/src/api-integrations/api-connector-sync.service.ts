@@ -35,6 +35,7 @@ type StagingErrorPreview = {
   source_field_name: string | null;
   field_key: string | null;
   message: string;
+  raw_value: string | null;
   staging_record: { row_number: number } | null;
 };
 
@@ -349,24 +350,156 @@ export class ApiConnectorSyncService {
     );
     return Promise.all(
       runs.map(async (run) => {
-        if (!run.staging_batch_id || !run.rejected_count)
-          return { ...run, errors: [] };
-        const errors = await this.db.select<StagingErrorPreview[]>(
-          'staging_errors',
-          `select=id,error_code,source_field_name,field_key,message,staging_record:staging_records!staging_errors_record_tenant_fk(row_number)&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.asc&limit=5`,
+        if (!run.staging_batch_id)
+          return { ...run, normalization_status: null, errors: [] };
+        const errors = run.rejected_count
+          ? await this.db.select<StagingErrorPreview[]>(
+              'staging_errors',
+              `select=id,error_code,source_field_name,field_key,message,raw_value,staging_record:staging_records!staging_errors_record_tenant_fk(row_number)&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.asc&limit=5`,
+            )
+          : [];
+        const normalizationRuns = await this.db.select<
+          Array<{ status: string }>
+        >(
+          'normalization_runs',
+          `select=status&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.desc&limit=1`,
         );
         return {
           ...run,
+          normalization_status: normalizationRuns[0]?.status ?? null,
           errors: errors.map((error) => ({
             id: error.id,
             row_number: error.staging_record?.row_number ?? null,
             field: error.source_field_name ?? error.field_key,
             error_code: error.error_code,
             message: error.message,
+            raw_value: error.raw_value,
           })),
         };
       }),
     );
+  }
+
+  async revalidateBatchWithCurrentRules(
+    tenantId: string,
+    sourceId: string,
+    batchId: string,
+    userId: string,
+  ) {
+    const batches = await this.db.select<
+      Array<{
+        id: string;
+        data_contract_id: string;
+        data_source: { source_type: string } | null;
+      }>
+    >(
+      'staging_batches',
+      `select=id,data_contract_id,data_source:data_sources!staging_batches_data_source_tenant_fk(source_type)&tenant_id=eq.${tenantId}&id=eq.${batchId}&data_source_id=eq.${sourceId}&limit=1`,
+    );
+    const batch = batches[0];
+    if (!batch)
+      throw new BadRequestException(
+        'Lote API não encontrado para esta integração.',
+      );
+    if (batch.data_source?.source_type !== 'api')
+      throw new BadRequestException(
+        'Somente lotes de integração API podem ser revalidados por esta ação.',
+      );
+    const mappings = await this.activeMappings(
+      tenantId,
+      batch.data_contract_id,
+      sourceId,
+    );
+    if (!mappings.length)
+      throw new BadRequestException(
+        'O contrato do lote não possui pareamentos API ativos.',
+      );
+    const records = await this.db.select<
+      Array<InsertedRecord & { raw_payload: JsonRecord }>
+    >(
+      'staging_records',
+      `select=id,row_number,raw_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&order=row_number.asc`,
+    );
+    await this.db.delete(
+      'staging_errors',
+      `tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}`,
+    );
+    const validation = await this.validate(
+      tenantId,
+      sourceId,
+      batchId,
+      records.map((record) => record.raw_payload),
+      records,
+      mappings,
+    );
+    const status = validation.rejected
+      ? validation.valid
+        ? 'partially_valid'
+        : 'rejected'
+      : 'validated';
+    await this.db.update(
+      'staging_batches',
+      `tenant_id=eq.${tenantId}&id=eq.${batchId}`,
+      {
+        status,
+        total_records: records.length,
+        valid_records: validation.valid,
+        invalid_records: validation.rejected,
+        error_count: validation.errorCount,
+        validated_at: new Date().toISOString(),
+        updated_by: userId,
+      },
+    );
+    await this.db.update(
+      'data_source_api_sync_runs',
+      `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&staging_batch_id=eq.${batchId}`,
+      {
+        status: validation.rejected ? 'completed_with_errors' : 'completed',
+        accepted_count: validation.valid,
+        rejected_count: validation.rejected,
+      },
+    );
+    const config = await this.requiredConfig(tenantId, sourceId);
+    for (const record of records) {
+      if (!(record as InsertedRecord & { valid?: boolean }).valid) continue;
+      const hash = createHash('sha256')
+        .update(JSON.stringify(this.stable(record.raw_payload)))
+        .digest('hex');
+      const externalValue = this.optionalPath(
+        record.raw_payload,
+        config.external_id_field,
+      );
+      const updatedValue = this.optionalPath(
+        record.raw_payload,
+        config.updated_at_field,
+      );
+      await this.db.upsert(
+        'data_source_api_record_states',
+        {
+          tenant_id: tenantId,
+          data_source_id: sourceId,
+          external_id:
+            externalValue == null || externalValue === ''
+              ? hash
+              : String(externalValue),
+          source_updated_at:
+            updatedValue == null || updatedValue === ''
+              ? ''
+              : String(updatedValue),
+          payload_hash: hash,
+          staging_batch_id: batchId,
+          staging_record_id: record.id,
+        },
+        'tenant_id,data_source_id,external_id,source_updated_at,payload_hash',
+      );
+    }
+    return {
+      staging_batch_id: batchId,
+      status,
+      accepted_count: validation.valid,
+      rejected_count: validation.rejected,
+      error_count: validation.errorCount,
+    };
   }
   async syncDue(limit = 10) {
     const due = await this.db.select<
@@ -659,10 +792,14 @@ export class ApiConnectorSyncService {
     };
   }
 
-  private activeMappings(tenantId: string, contractId: string) {
+  private activeMappings(
+    tenantId: string,
+    contractId: string,
+    sourceId?: string,
+  ) {
     return this.db.select<ApiMapping[]>(
       'data_source_api_field_mappings',
-      `select=id,api_source_field_name:source_field_name,data_contract_field_id,data_contract_field:data_contract_fields!api_field_mapping_contract_field_tenant_fk(id,field_key,source_field_name,data_type,is_required,allow_null)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&status=eq.active`,
+      `select=id,api_source_field_name:source_field_name,data_contract_field_id,data_contract_field:data_contract_fields!api_field_mapping_contract_field_tenant_fk(id,field_key,source_field_name,data_type,is_required,allow_null)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}${sourceId ? `&data_source_id=eq.${sourceId}` : ''}&status=eq.active`,
     );
   }
   private async requiredConfig(t: string, s: string) {
