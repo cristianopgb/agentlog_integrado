@@ -346,10 +346,11 @@ export function ApiConnectionPanel({
           : await listNormalizationErrors(tenantId, run.id);
       setProcessingErrors(errors.slice(0, 5));
       setMessageTone(run.status === 'completed' ? 'success' : 'error');
+      const counts = `${run.created_count} criados · ${run.updated_count} atualizados · ${run.skipped_count} ignorados · ${run.error_count} erros.`;
       setMsg(
-        run.status === 'completed'
-          ? 'Dados tratados processados com sucesso. Indicadores e dashboards podem agora refletir a base nativa.'
-          : 'O processamento tratado terminou com inconsistências. Veja os primeiros erros abaixo.',
+        run.created_count + run.updated_count === 0
+          ? `Nenhum registro tratado foi criado ou atualizado. ${counts}`
+          : `${counts} ${run.status === 'completed' ? 'Dados tratados processados com sucesso.' : 'O processamento terminou com inconsistências; veja os primeiros erros abaixo.'}`,
       );
     } catch (error) {
       setMessageTone('error');

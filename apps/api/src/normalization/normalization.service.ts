@@ -16,13 +16,21 @@ type Batch = {
   source_reference?: string | null;
   batch_code?: string | null;
 };
-type CanonicalIntegration = { id: string; active_schema_signature: string; };
+type DataSource = { id: string; source_type: string };
+type DataContract = { id: string; entity_key: string; module_key: string };
+type ContractField = {
+  id: string;
+  data_contract_id: string;
+  field_key: string;
+  data_type: string;
+  is_required: boolean;
+};
+type CanonicalIntegration = { id: string; active_schema_signature: string };
 type RecordRow = {
   id: string;
   tenant_id: string;
   staging_batch_id: string;
   validation_status: string;
-  raw_payload: Record<string, unknown> | null;
   normalized_payload: Record<string, unknown> | null;
 };
 type Mapping = {
@@ -116,7 +124,7 @@ const entityModule: Record<string, string> = {
   warehouse_records: 'armazem',
   team_records: 'equipes',
 };
-const allowedStatuses = new Set(['validated', 'partially_valid']);
+const allowedStatuses = new Set(['validated', 'partially_valid', 'completed']);
 const operationColumns = new Set([
   'external_id',
   'external_code',
@@ -369,31 +377,83 @@ export class NormalizationService {
         'warning',
       );
     try {
-      const mappingsResult = await this.loadMappings(
-        tenantId,
-        batch.data_contract_id,
+      const [dataSource, contract, contractFields, records] = await Promise.all(
+        [
+          this.getDataSource(tenantId, batch.data_source_id),
+          this.getContract(tenantId, batch.data_contract_id),
+          this.getContractFields(tenantId, batch.data_contract_id),
+          this.getValidRecords(tenantId, batchId),
+        ],
       );
-      if ('code' in mappingsResult) {
+      counters.total_records = records.length;
+      if (!records.length) {
         await addError(
-          mappingsResult.code,
-          'Não foi possível carregar os mapeamentos da integração para normalização.',
-          { original_error: this.errorDetails(mappingsResult.originalError) },
+          'NO_VALID_STAGING_RECORDS',
+          'Não há staging_records válidos neste lote para processar.',
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
       }
-      const mappings = mappingsResult.mappings;
+      const recordsWithPayload = records.filter(
+        (record) => Object.keys(record.normalized_payload ?? {}).length > 0,
+      );
+      if (!recordsWithPayload.length) {
+        await addError(
+          'EMPTY_NORMALIZED_PAYLOAD',
+          'Os staging_records válidos não possuem normalized_payload preenchido.',
+        );
+        return this.finish(run.id, 'failed', counters, errorSummary);
+      }
+      for (const record of records.filter(
+        (item) => Object.keys(item.normalized_payload ?? {}).length === 0,
+      )) {
+        await addError(
+          'EMPTY_NORMALIZED_PAYLOAD',
+          'O staging_record válido não possui normalized_payload preenchido.',
+          {},
+          record.id,
+        );
+      }
+
+      // API staging has already applied source mapping, De/Para and formatting.
+      // Build only canonical metadata from the contract; never remap source fields.
+      const nativeMappings =
+        dataSource.source_type === 'api'
+          ? this.contractMappings(contract, contractFields, recordsWithPayload)
+          : [];
+      let mappings = nativeMappings;
+      let mappingsResult: MappingLoadResult | null = null;
+      if (!mappings.length && dataSource.source_type !== 'api') {
+        const loaded = await this.loadMappings(
+          tenantId,
+          batch.data_contract_id,
+        );
+        if ('code' in loaded) {
+          await addError(
+            loaded.code,
+            'Não foi possível carregar os mapeamentos da integração para normalização.',
+            { original_error: this.errorDetails(loaded.originalError) },
+          );
+          return this.finish(run.id, 'failed', counters, errorSummary);
+        }
+        mappingsResult = loaded;
+        mappings = loaded.mappings;
+      }
       if (!mappings.length) {
         await addError(
-          'NO_FIELD_MAPPINGS',
-          'Não há mapeamentos ativos para o contrato do lote validado. Revise o mapeamento ou valide um novo lote com o contrato correto.',
+          dataSource.source_type === 'api'
+            ? 'EMPTY_NORMALIZED_PAYLOAD'
+            : 'NO_FIELD_MAPPINGS',
+          dataSource.source_type === 'api'
+            ? 'O normalized_payload não contém campos nativos reconhecidos pelo contrato.'
+            : 'Não há mapeamentos ativos para o contrato do lote validado.',
           {
             tenant_id: tenantId,
             staging_batch_id: batchId,
             batch_data_contract_id: batch.data_contract_id,
             data_source_id: batch.data_source_id,
-            mappings_found_count: mappingsResult.mappingsFoundCount,
+            mappings_found_count: mappingsResult?.mappingsFoundCount ?? 0,
             active_mappings_found_count:
-              mappingsResult.activeMappingsFoundCount,
+              mappingsResult?.activeMappingsFoundCount ?? 0,
           },
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
@@ -401,23 +461,29 @@ export class NormalizationService {
       const canonicalSourceKey = this.canonicalSourceKey(batch);
       const datasetRole = this.datasetRole(mappings);
       const schemaSignature = this.schemaSignature(mappings);
-      const integration = await this.resolveCanonicalIntegration(tenantId, batch, canonicalSourceKey, datasetRole, schemaSignature);
+      const integration = await this.resolveCanonicalIntegration(
+        tenantId,
+        batch,
+        dataSource.source_type,
+        canonicalSourceKey,
+        datasetRole,
+        schemaSignature,
+      );
       if ('incompatible' in integration) {
-        await addError('SCHEMA_INCOMPATIBLE', 'O arquivo enviado possui um schema diferente da integração ativa. Para proteger os dados operacionais, esta atualização foi bloqueada. Crie uma nova integração ou uma nova versão de contrato/pareamento para este arquivo.', { canonical_source_key: canonicalSourceKey, expected_schema_signature: integration.expected, received_schema_signature: schemaSignature });
-        return this.finish(run.id, 'failed', counters, errorSummary);
-      }
-      const records = await this.getValidRecords(tenantId, batchId);
-      counters.total_records = records.length;
-      if (!records.length) {
         await addError(
-          'NO_VALID_RECORDS',
-          'Não há staging_records válidos com normalized_payload para normalizar.',
+          'SCHEMA_INCOMPATIBLE',
+          'O arquivo enviado possui um schema diferente da integração ativa. Para proteger os dados operacionais, esta atualização foi bloqueada. Crie uma nova integração ou uma nova versão de contrato/pareamento para este arquivo.',
+          {
+            canonical_source_key: canonicalSourceKey,
+            expected_schema_signature: integration.expected,
+            received_schema_signature: schemaSignature,
+          },
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
       }
       const enabledModules = await this.getEnabledModules(tenantId);
       let hasPendingActivation = false;
-      for (const record of records) {
+      for (const record of recordsWithPayload) {
         const buckets: Record<string, Record<string, unknown>> = {
           operation_records: {},
         };
@@ -561,7 +627,16 @@ export class NormalizationService {
           );
         }
         const hasCoreValues = Object.keys(buckets.operation_records).length > 0;
-        const hasDocumentKey = ['delivery_number', 'manifest_number', 'invoice_number', 'cte_number', 'order_number', 'external_code'].some((key) => this.hasOperationalIdentifier(buckets.operation_records[key]));
+        const hasDocumentKey = [
+          'delivery_number',
+          'manifest_number',
+          'invoice_number',
+          'cte_number',
+          'order_number',
+          'external_code',
+        ].some((key) =>
+          this.hasOperationalIdentifier(buckets.operation_records[key]),
+        );
         const op = await this.upsertOperation(
           tenantId,
           batch,
@@ -612,7 +687,11 @@ export class NormalizationService {
         }
         counters.processed_records += 1;
       }
-      if (!counters.error_records && counters.processed_records && hasPendingActivation) {
+      if (
+        !counters.error_records &&
+        counters.processed_records &&
+        hasPendingActivation
+      ) {
         await this.activateBatch(tenantId, integration.id, batchId);
       }
       return this.finish(
@@ -641,7 +720,7 @@ export class NormalizationService {
     counters: Counters,
     errorSummary: Record<string, number>,
   ) {
-    const [row] = await this.supabase.update<unknown[]>(
+    const [row] = await this.supabase.update<Record<string, unknown>[]>(
       'normalization_runs',
       `id=eq.${runId}`,
       {
@@ -651,7 +730,18 @@ export class NormalizationService {
         finished_at: new Date().toISOString(),
       },
     );
-    return row;
+    return {
+      ...row,
+      created_count:
+        counters.created_operation_records + counters.created_extension_records,
+      updated_count:
+        counters.updated_operation_records + counters.updated_extension_records,
+      skipped_count: Math.max(
+        0,
+        counters.total_records - counters.processed_records,
+      ),
+      error_count: counters.error_records,
+    };
   }
   private async getBatch(tenantId: string, batchId: string) {
     const rows = await this.supabase.select<Batch[]>(
@@ -664,8 +754,77 @@ export class NormalizationService {
   private getValidRecords(tenantId: string, batchId: string) {
     return this.supabase.select<RecordRow[]>(
       'staging_records',
-      `select=id,tenant_id,staging_batch_id,validation_status,raw_payload,normalized_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&order=row_number.asc`,
+      `select=id,tenant_id,staging_batch_id,validation_status,normalized_payload&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&order=row_number.asc`,
     );
+  }
+  private async getDataSource(tenantId: string, sourceId: string | null) {
+    const rows = sourceId
+      ? await this.supabase.select<DataSource[]>(
+          'data_sources',
+          `select=id,source_type&tenant_id=eq.${tenantId}&id=eq.${sourceId}&limit=1`,
+        )
+      : [];
+    if (!rows.length) throw new NotFoundException('Data source not found.');
+    return rows[0];
+  }
+  private async getContract(tenantId: string, contractId: string | null) {
+    const rows = contractId
+      ? await this.supabase.select<DataContract[]>(
+          'data_contracts',
+          `select=id,entity_key,module_key&tenant_id=eq.${tenantId}&id=eq.${contractId}&limit=1`,
+        )
+      : [];
+    if (!rows.length) throw new NotFoundException('Data contract not found.');
+    return rows[0];
+  }
+  private getContractFields(tenantId: string, contractId: string | null) {
+    if (!contractId) return Promise.resolve([] as ContractField[]);
+    return this.supabase.select<ContractField[]>(
+      'data_contract_fields',
+      `select=id,data_contract_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&order=sort_order.asc`,
+    );
+  }
+  private contractMappings(
+    contract: DataContract,
+    fields: ContractField[],
+    records: RecordRow[],
+  ): Mapping[] {
+    const payloadKeys = new Set(
+      records.flatMap((record) => Object.keys(record.normalized_payload ?? {})),
+    );
+    return fields
+      .filter((field) => payloadKeys.has(field.field_key))
+      .filter((field) =>
+        this.resolveTarget(contract.entity_key, field.field_key),
+      )
+      .map((field) => ({
+        id: field.id,
+        data_contract_id: field.data_contract_id,
+        data_contract_field_id: field.id,
+        canonical_entity_id: contract.entity_key,
+        canonical_field_id: field.id,
+        mapping_type: 'direct',
+        status: 'active',
+        notes: null,
+        data_contract_field: {
+          id: field.id,
+          data_contract_id: field.data_contract_id,
+          field_key: field.field_key,
+          source_field_name: field.field_key,
+        },
+        canonical_field: {
+          id: field.id,
+          canonical_entity_id: contract.entity_key,
+          field_key: field.field_key,
+          data_type: field.data_type,
+          is_required: field.is_required,
+        },
+        canonical_entity: {
+          id: contract.entity_key,
+          entity_key: contract.entity_key,
+          module_key: contract.module_key,
+        },
+      }));
   }
   private async loadMappings(
     tenantId: string,
@@ -789,9 +948,22 @@ export class NormalizationService {
     canonicalIntegrationId: string,
     datasetRole: string,
   ) {
-    const hasOperationalKey = ['delivery_number', 'manifest_number', 'invoice_number', 'cte_number', 'order_number', 'external_code'].some((key) => this.hasOperationalIdentifier(values[key]));
-    const existing = await this.findOperation(tenantId, { ...values, source_staging_record_id: record.id }, datasetRole);
-    const canActivate = hasOperationalKey && !(existing && 'ambiguous' in existing && existing.ambiguous);
+    const hasOperationalKey = [
+      'delivery_number',
+      'manifest_number',
+      'invoice_number',
+      'cte_number',
+      'order_number',
+      'external_code',
+    ].some((key) => this.hasOperationalIdentifier(values[key]));
+    const existing = await this.findOperation(
+      tenantId,
+      { ...values, source_staging_record_id: record.id },
+      datasetRole,
+    );
+    const canActivate =
+      hasOperationalKey &&
+      !(existing && 'ambiguous' in existing && existing.ambiguous);
     const base = {
       ...values,
       tenant_id: tenantId,
@@ -809,14 +981,20 @@ export class NormalizationService {
       canonical_source_key: canonicalSourceKey,
       canonical_integration_id: canonicalIntegrationId,
       is_current: false,
-      canonical_validity_status: canActivate ? 'pending_activation' : 'incomplete',
+      canonical_validity_status: canActivate
+        ? 'pending_activation'
+        : 'incomplete',
       superseded_at: canActivate ? null : new Date().toISOString(),
       superseded_by_staging_batch_id: null,
     };
     if (existing) {
-      if ('linked' in existing && existing.linked) return { id: existing.id, created: false, pendingActivation: false };
+      if ('linked' in existing && existing.linked)
+        return { id: existing.id, created: false, pendingActivation: false };
       if ('ambiguous' in existing && existing.ambiguous) {
-        const [row] = await this.supabase.insert<Array<{ id: string }>>('operation_records', base);
+        const [row] = await this.supabase.insert<Array<{ id: string }>>(
+          'operation_records',
+          base,
+        );
         return { id: row.id, created: true, pendingActivation: false };
       }
       const [row] = await this.supabase.update<Array<{ id: string }>>(
@@ -832,7 +1010,11 @@ export class NormalizationService {
     );
     return { id: row.id, created: true, pendingActivation: canActivate };
   }
-  private async findOperation(tenantId: string, v: Record<string, unknown>, datasetRole: string) {
+  private async findOperation(
+    tenantId: string,
+    v: Record<string, unknown>,
+    datasetRole: string,
+  ) {
     const queries = [
       `source_staging_record_id=eq.${v.source_staging_record_id}`,
     ].filter(Boolean);
@@ -844,42 +1026,138 @@ export class NormalizationService {
       if (rows.length) return rows[0];
     }
     if (datasetRole === 'deliveries') return null;
-    for (const field of ['manifest_number', 'invoice_number', 'cte_number', 'delivery_number', 'order_number', 'external_code']) {
+    for (const field of [
+      'manifest_number',
+      'invoice_number',
+      'cte_number',
+      'delivery_number',
+      'order_number',
+      'external_code',
+    ]) {
       if (!this.hasOperationalIdentifier(v[field])) continue;
-      const rows = await this.supabase.select<Array<{ id: string }>>('operation_records', `select=id&tenant_id=eq.${tenantId}&${field}=eq.${encodeURIComponent(String(v[field]))}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=2`);
+      const rows = await this.supabase.select<Array<{ id: string }>>(
+        'operation_records',
+        `select=id&tenant_id=eq.${tenantId}&${field}=eq.${encodeURIComponent(String(v[field]))}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=2`,
+      );
       if (rows.length === 1) return { ...rows[0], linked: true };
       if (rows.length > 1) return { id: '', ambiguous: true };
     }
     return null;
   }
   private canonicalSourceKey(batch: Batch) {
-    return (batch.source_reference?.trim() || batch.batch_code?.trim() || batch.data_source_id || 'staging').slice(0, 500);
+    return (
+      batch.source_reference?.trim() ||
+      batch.batch_code?.trim() ||
+      batch.data_source_id ||
+      'staging'
+    ).slice(0, 500);
   }
-  private hasOperationalIdentifier(value: unknown) { return typeof value === 'string' && value.trim().length > 0; }
+  private hasOperationalIdentifier(value: unknown) {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
   private datasetRole(mappings: Mapping[]) {
-    const entity = mappings.map((m) => m.canonical_entity?.entity_key).find((key) => key && key !== 'operation_records' && key !== 'deliveries');
-    return entity === 'attendance_records' ? 'occurrences' : entity === 'finance_records' ? 'finance' : entity === 'warehouse_records' ? 'warehouse' : entity === 'team_records' ? 'team' : 'deliveries';
+    const entity = mappings
+      .map((m) => m.canonical_entity?.entity_key)
+      .find(
+        (key) => key && key !== 'operation_records' && key !== 'deliveries',
+      );
+    return entity === 'attendance_records'
+      ? 'occurrences'
+      : entity === 'finance_records'
+        ? 'finance'
+        : entity === 'warehouse_records'
+          ? 'warehouse'
+          : entity === 'team_records'
+            ? 'team'
+            : 'deliveries';
   }
   private schemaSignature(mappings: Mapping[]) {
-    const schema = mappings.map((m) => ({ source: m.data_contract_field?.source_field_name ?? '', field: m.data_contract_field?.field_key ?? '', entity: m.canonical_entity?.entity_key ?? '', canonical: m.canonical_field?.field_key ?? '', type: m.canonical_field?.data_type ?? '', required: Boolean(m.canonical_field?.is_required) })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const schema = mappings
+      .map((m) => ({
+        source: m.data_contract_field?.source_field_name ?? '',
+        field: m.data_contract_field?.field_key ?? '',
+        entity: m.canonical_entity?.entity_key ?? '',
+        canonical: m.canonical_field?.field_key ?? '',
+        type: m.canonical_field?.data_type ?? '',
+        required: Boolean(m.canonical_field?.is_required),
+      }))
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     return createHash('sha256').update(JSON.stringify(schema)).digest('hex');
   }
-  private async resolveCanonicalIntegration(tenantId: string, batch: Batch, sourceKey: string, datasetRole: string, signature: string): Promise<CanonicalIntegration | { incompatible: true; expected: string }> {
-    const rows = await this.supabase.select<CanonicalIntegration[]>('canonical_integrations', `select=id,active_schema_signature&tenant_id=eq.${tenantId}&integration_type=eq.spreadsheet&canonical_source_key=eq.${encodeURIComponent(sourceKey)}&dataset_role=eq.${datasetRole}&status=eq.active&limit=1`);
+  private async resolveCanonicalIntegration(
+    tenantId: string,
+    batch: Batch,
+    integrationType: string,
+    sourceKey: string,
+    datasetRole: string,
+    signature: string,
+  ): Promise<CanonicalIntegration | { incompatible: true; expected: string }> {
+    const rows = await this.supabase.select<CanonicalIntegration[]>(
+      'canonical_integrations',
+      `select=id,active_schema_signature&tenant_id=eq.${tenantId}&integration_type=eq.${encodeURIComponent(integrationType)}&canonical_source_key=eq.${encodeURIComponent(sourceKey)}&dataset_role=eq.${datasetRole}&status=eq.active&limit=1`,
+    );
     if (rows[0]) {
       if (rows[0].active_schema_signature === 'legacy-pending-signature') {
-        await this.supabase.update('canonical_integrations', `tenant_id=eq.${tenantId}&id=eq.${rows[0].id}`, { active_schema_signature: signature, active_data_contract_id: batch.data_contract_id, updated_at: new Date().toISOString() });
+        await this.supabase.update(
+          'canonical_integrations',
+          `tenant_id=eq.${tenantId}&id=eq.${rows[0].id}`,
+          {
+            active_schema_signature: signature,
+            active_data_contract_id: batch.data_contract_id,
+            updated_at: new Date().toISOString(),
+          },
+        );
         return { ...rows[0], active_schema_signature: signature };
       }
-      return rows[0].active_schema_signature === signature ? rows[0] : { incompatible: true, expected: rows[0].active_schema_signature };
+      return rows[0].active_schema_signature === signature
+        ? rows[0]
+        : { incompatible: true, expected: rows[0].active_schema_signature };
     }
-    const [created] = await this.supabase.insert<CanonicalIntegration[]>('canonical_integrations', { tenant_id: tenantId, integration_type: 'spreadsheet', canonical_source_key: sourceKey, dataset_role: datasetRole, module_scope: datasetRole === 'deliveries' ? 'transporte' : datasetRole, active_data_contract_id: batch.data_contract_id, active_schema_signature: signature, status: 'active' });
-    await this.supabase.update('operation_records', `tenant_id=eq.${tenantId}&canonical_source_key=eq.${encodeURIComponent(sourceKey)}&canonical_integration_id=is.null&deleted_at=is.null`, { canonical_integration_id: created.id });
+    const [created] = await this.supabase.insert<CanonicalIntegration[]>(
+      'canonical_integrations',
+      {
+        tenant_id: tenantId,
+        integration_type: integrationType,
+        canonical_source_key: sourceKey,
+        dataset_role: datasetRole,
+        module_scope: datasetRole === 'deliveries' ? 'transporte' : datasetRole,
+        active_data_contract_id: batch.data_contract_id,
+        active_schema_signature: signature,
+        status: 'active',
+      },
+    );
+    await this.supabase.update(
+      'operation_records',
+      `tenant_id=eq.${tenantId}&canonical_source_key=eq.${encodeURIComponent(sourceKey)}&canonical_integration_id=is.null&deleted_at=is.null`,
+      { canonical_integration_id: created.id },
+    );
     return created;
   }
-  private async activateBatch(tenantId: string, integrationId: string, newBatchId: string) {
-    await this.supabase.update('operation_records', `tenant_id=eq.${tenantId}&canonical_integration_id=eq.${integrationId}&source_staging_batch_id=eq.${newBatchId}&deleted_at=is.null&canonical_validity_status=eq.pending_activation`, { is_current: true, canonical_validity_status: 'valid', superseded_at: null, superseded_by_staging_batch_id: null });
-    await this.supabase.update('operation_records', `tenant_id=eq.${tenantId}&canonical_integration_id=eq.${integrationId}&source_staging_batch_id=neq.${newBatchId}&deleted_at=is.null&is_current=eq.true`, { is_current: false, canonical_validity_status: 'superseded', superseded_at: new Date().toISOString(), superseded_by_staging_batch_id: newBatchId });
+  private async activateBatch(
+    tenantId: string,
+    integrationId: string,
+    newBatchId: string,
+  ) {
+    await this.supabase.update(
+      'operation_records',
+      `tenant_id=eq.${tenantId}&canonical_integration_id=eq.${integrationId}&source_staging_batch_id=eq.${newBatchId}&deleted_at=is.null&canonical_validity_status=eq.pending_activation`,
+      {
+        is_current: true,
+        canonical_validity_status: 'valid',
+        superseded_at: null,
+        superseded_by_staging_batch_id: null,
+      },
+    );
+    await this.supabase.update(
+      'operation_records',
+      `tenant_id=eq.${tenantId}&canonical_integration_id=eq.${integrationId}&source_staging_batch_id=neq.${newBatchId}&deleted_at=is.null&is_current=eq.true`,
+      {
+        is_current: false,
+        canonical_validity_status: 'superseded',
+        superseded_at: new Date().toISOString(),
+        superseded_by_staging_batch_id: newBatchId,
+      },
+    );
   }
   private async upsertExtension(
     entity: string,
