@@ -347,10 +347,15 @@ export function ApiConnectionPanel({
       setProcessingErrors(errors.slice(0, 5));
       setMessageTone(run.status === 'completed' ? 'success' : 'error');
       const counts = `${run.created_count} criados · ${run.updated_count} atualizados · ${run.skipped_count} ignorados · ${run.error_count} erros.`;
+      const missingCanonicalMapping = errors.some(
+        (error) => error.error_code === 'NO_CANONICAL_FIELD_MAPPINGS',
+      );
       setMsg(
-        run.created_count + run.updated_count === 0
-          ? `Nenhum registro tratado foi criado ou atualizado. ${counts}`
-          : `${counts} ${run.status === 'completed' ? 'Dados tratados processados com sucesso.' : 'O processamento terminou com inconsistências; veja os primeiros erros abaixo.'}`,
+        missingCanonicalMapping
+          ? `${counts} Os dados foram validados em staging, mas ainda não possuem mapeamento canônico para publicação no modelo tratado.`
+          : run.created_count + run.updated_count === 0
+            ? `Nenhum registro tratado foi criado ou atualizado. ${counts}`
+            : `${counts} ${run.status === 'completed' ? 'Dados tratados processados com sucesso.' : 'O processamento terminou com inconsistências; veja os primeiros erros abaixo.'}`,
       );
     } catch (error) {
       setMessageTone('error');
@@ -397,6 +402,15 @@ export function ApiConnectionPanel({
                 <span className="font-mono">{error.error_code}</span>
                 <br />
                 {error.error_message}
+                {error.error_code === 'NO_CANONICAL_FIELD_MAPPINGS' &&
+                Array.isArray(error.details.normalized_payload_keys) ? (
+                  <span className="mt-1 block">
+                    Chaves do normalized_payload:{' '}
+                    {error.details.normalized_payload_keys
+                      .map(String)
+                      .join(', ')}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>
