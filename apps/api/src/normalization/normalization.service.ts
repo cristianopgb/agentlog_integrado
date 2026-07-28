@@ -472,8 +472,12 @@ export class NormalizationService {
       );
       if ('incompatible' in integration) {
         await addError(
-          'SCHEMA_INCOMPATIBLE',
-          'O arquivo enviado possui um schema diferente da integração ativa. Para proteger os dados operacionais, esta atualização foi bloqueada. Crie uma nova integração ou uma nova versão de contrato/pareamento para este arquivo.',
+          dataSource.source_type === 'api'
+            ? 'API_SCHEMA_INCOMPATIBLE'
+            : 'SCHEMA_INCOMPATIBLE',
+          dataSource.source_type === 'api'
+            ? 'O lote API foi validado com uma configuração incompatível com a publicação canônica atual. Revalide o lote com as regras atuais antes de processar.'
+            : 'O arquivo enviado possui um schema diferente da integração ativa. Para proteger os dados operacionais, esta atualização foi bloqueada. Crie uma nova integração ou uma nova versão de contrato/pareamento para este arquivo.',
           {
             canonical_source_key: canonicalSourceKey,
             expected_schema_signature: integration.expected,

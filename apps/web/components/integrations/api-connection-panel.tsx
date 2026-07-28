@@ -12,6 +12,7 @@ import {
   saveValueMappings,
   saveFieldParseRules,
   syncApiNow,
+  revalidateApiBatch,
   testApi,
   useApiSample,
   type ApiConnectorConfig,
@@ -29,7 +30,15 @@ import {
 type Phase =
   'connection' | 'sample' | 'mapping' | 'values' | 'formats' | 'sync' | 'done';
 type Action =
-  'save' | 'test' | 'sample' | 'mapping' | 'values' | 'formats' | 'sync' | null;
+  | 'save'
+  | 'test'
+  | 'sample'
+  | 'mapping'
+  | 'values'
+  | 'formats'
+  | 'sync'
+  | 'revalidate'
+  | null;
 const phases: Array<{ key: Phase; label: string }> = [
   { key: 'connection', label: 'Conexão' },
   { key: 'sample', label: 'Amostra' },
@@ -47,6 +56,7 @@ const buttonText: Record<Exclude<Action, null>, [string, string]> = {
   values: ['Salvar De/Para', 'Salvando...'],
   formats: ['Salvar formatos', 'Salvando...'],
   sync: ['Sincronizar para staging', 'Sincronizando...'],
+  revalidate: ['Revalidar com regras atuais', 'Revalidando...'],
 };
 const dateFormats = [
   'YYYY-MM-DD',
@@ -285,6 +295,20 @@ export function ApiConnectionPanel({
     });
   const saveValues = () =>
     act('values', async () => {
+      const pendingCount = valueMappings.filter(
+        (item) =>
+          item.status === 'pending' &&
+          !valueDraft[
+            `${item.data_contract_field_id}\0${item.source_field_name}\0${item.source_value}`
+          ],
+      ).length;
+      if (
+        pendingCount > 0 &&
+        !window.confirm(
+          'Existem valores pendentes conhecidos que podem rejeitar registros. Deseja salvar parcialmente e avançar?',
+        )
+      )
+        return;
       const mappings = valueMappings
         .filter((item) => item.status !== 'exact_match')
         .map((item) => ({
@@ -300,7 +324,7 @@ export function ApiConnectionPanel({
         await saveValueMappings(tenantId, sourceId, mappings);
       await load();
       setMsg(
-        'De/Para salvo. Valores pendentes serão rejeitados com VALUE_MAPPING_REQUIRED.',
+        'Configuração salva. Revalide os lotes pendentes ou sincronize novamente para aplicar as regras atuais.',
       );
       setPhase('formats');
     });
@@ -341,7 +365,7 @@ export function ApiConnectionPanel({
       await saveFieldParseRules(tenantId, sourceId, Object.values(formatDraft));
       await load();
       setMsg(
-        'Formatos salvos. A próxima sincronização revalidará os registros recebidos.',
+        'Configuração salva. Revalide os lotes pendentes ou sincronize novamente para aplicar as regras atuais.',
       );
       setPhase('sync');
     });
@@ -384,6 +408,14 @@ export function ApiConnectionPanel({
       setProcessing(false);
     }
   };
+  const revalidate = (batchId: string) =>
+    act('revalidate', async () => {
+      const response = await revalidateApiBatch(tenantId, sourceId, batchId);
+      await load();
+      setMsg(
+        `Lote API revalidado com as regras atuais: ${response.accepted_count} aceitos e ${response.rejected_count} rejeitados.`,
+      );
+    });
   const sampleValue = (source: string) =>
     sampleRows.find((row) => Object.hasOwn(row, source))?.[source];
   return (
@@ -715,6 +747,50 @@ export function ApiConnectionPanel({
             os valores nativos do sistema. O sistema não adivinha valores
             operacionais.
           </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-4">
+            <p className="rounded-xl bg-slate-50 p-3">
+              <b>
+                {
+                  valueMappings.filter((item) => item.status === 'mapped')
+                    .length
+                }
+              </b>
+              <br />
+              <span className="text-xs">configurados</span>
+            </p>
+            <p className="rounded-xl bg-amber-50 p-3">
+              <b>
+                {
+                  valueMappings.filter((item) => item.status === 'pending')
+                    .length
+                }
+              </b>
+              <br />
+              <span className="text-xs">pendentes</span>
+            </p>
+            <p className="rounded-xl bg-emerald-50 p-3">
+              <b>
+                {
+                  valueMappings.filter((item) => item.status === 'exact_match')
+                    .length
+                }
+              </b>
+              <br />
+              <span className="text-xs">correspondência exata</span>
+            </p>
+            <p className="rounded-xl bg-blue-50 p-3">
+              <b>{valueMappings.length}</b>
+              <br />
+              <span className="text-xs">total conhecidos</span>
+            </p>
+          </div>
+          {valueMappings.some((item) => item.status === 'pending') ? (
+            <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+              Valores pendentes conhecidos podem rejeitar registros na próxima
+              sincronização. Novos valores podem surgir futuramente conforme o
+              legado envie novos status.
+            </p>
+          ) : null}
           <div className="mt-4 space-y-3">
             {valueMappings.length ? (
               valueMappings.map((item) => {
@@ -1024,10 +1100,14 @@ export function ApiConnectionPanel({
             {config?.next_sync_at ?? '—'}
           </p>
           <div className="mt-3 space-y-2">
-            {runs.slice(0, 8).map((run) => (
-              <div key={run.id} className="rounded-xl border p-3 text-sm">
+            {runs.slice(0, 8).map((run, index) => (
+              <div
+                key={run.id}
+                className={`rounded-xl border p-3 text-sm ${index === 0 ? 'border-blue-400 bg-blue-50/40' : ''}`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span>
+                    {index === 0 ? 'Mais recente · ' : 'Histórico · '}
                     {run.sync_type} ·{' '}
                     {new Date(run.created_at).toLocaleString('pt-BR')}
                   </span>
@@ -1048,7 +1128,26 @@ export function ApiConnectionPanel({
                   · {run.rejected_count} rejeitados · {run.unchanged_count} sem
                   alteração
                 </p>
-                {run.accepted_count > 0 && run.staging_batch_id ? (
+                <p className="mt-1 font-semibold">
+                  {run.normalization_status === 'completed'
+                    ? 'Dados tratados processados'
+                    : 'Dados tratados ainda não processados'}
+                </p>
+                {run.rejected_count > 0 && run.staging_batch_id ? (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => revalidate(run.staging_batch_id!)}
+                    className="mt-3 mr-2 rounded-xl border border-amber-500 px-4 py-2 font-semibold text-amber-900 disabled:opacity-50"
+                  >
+                    {busy === 'revalidate'
+                      ? 'Revalidando...'
+                      : 'Revalidar com regras atuais'}
+                  </button>
+                ) : null}
+                {run.accepted_count > 0 &&
+                run.staging_batch_id &&
+                run.normalization_status !== 'completed' ? (
                   <button
                     type="button"
                     disabled={processing}
@@ -1075,6 +1174,7 @@ export function ApiConnectionPanel({
                           <th className="pr-3">Campo</th>
                           <th className="pr-3">Código</th>
                           <th>Mensagem</th>
+                          <th className="pl-3">Valor recebido</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1088,6 +1188,9 @@ export function ApiConnectionPanel({
                               {error.error_code}
                             </td>
                             <td>{error.message}</td>
+                            <td className="pl-3 font-mono">
+                              {error.raw_value ?? '—'}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

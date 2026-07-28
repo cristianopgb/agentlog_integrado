@@ -54,12 +54,14 @@ export type ApiSyncRun = {
   unchanged_count: number;
   staging_batch_id: string | null;
   error_message_safe: string | null;
+  normalization_status: string | null;
   errors: Array<{
     id: string;
     row_number: number | null;
     field: string | null;
     error_code: string;
     message: string;
+    raw_value: string | null;
   }>;
 };
 const route = (t: string, s: string) => `/tenants/${t}/integrations/${s}`;
@@ -98,6 +100,16 @@ export const syncApiNow = (t: string, s: string) =>
   }>(`${route(t, s)}/api-sync-now`, { method: 'POST' });
 export const listApiRuns = (t: string, s: string) =>
   call<ApiSyncRun[]>(`${route(t, s)}/api-sync-runs`);
+export const revalidateApiBatch = (t: string, s: string, batchId: string) =>
+  call<{
+    staging_batch_id: string;
+    status: string;
+    accepted_count: number;
+    rejected_count: number;
+    error_count: number;
+  }>(`${route(t, s)}/staging-batches/${batchId}/revalidate-current-rules`, {
+    method: 'POST',
+  });
 export type ApiFieldMapping = {
   id: string;
   api_source_field_name: string;
