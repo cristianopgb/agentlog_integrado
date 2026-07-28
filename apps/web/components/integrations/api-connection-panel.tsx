@@ -50,6 +50,9 @@ const buttonText: Record<Exclude<Action, null>, [string, string]> = {
 };
 const dateFormats = [
   'YYYY-MM-DD',
+  'YYYY-MM-DD HH:mm',
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm:ss.SSS',
   'YYYY-MM-DDTHH:mm:ss',
   'YYYY-MM-DDTHH:mm:ss.SSSZ',
   'DD/MM/YYYY',
