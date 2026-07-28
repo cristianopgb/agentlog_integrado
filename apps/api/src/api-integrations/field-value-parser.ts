@@ -1,5 +1,8 @@
 export const DATE_FORMATS = [
   'YYYY-MM-DD',
+  'YYYY-MM-DD HH:mm',
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm:ss.SSS',
   'YYYY-MM-DDTHH:mm:ss',
   'YYYY-MM-DDTHH:mm:ss.SSSZ',
   'DD/MM/YYYY',
