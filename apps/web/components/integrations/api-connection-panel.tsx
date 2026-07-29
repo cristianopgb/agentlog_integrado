@@ -401,6 +401,7 @@ export function ApiConnectionPanel({
             ? `Nenhum registro tratado foi criado ou atualizado. ${counts}`
             : `${counts} ${run.status === 'completed' ? 'Dados tratados processados com sucesso.' : 'O processamento terminou com inconsistências; veja os primeiros erros abaixo.'}`,
       );
+      await load();
     } catch (error) {
       setMessageTone('error');
       setMsg((error as Error).message);
@@ -1129,11 +1130,23 @@ export function ApiConnectionPanel({
                   alteração
                 </p>
                 <p className="mt-1 font-semibold">
-                  {run.normalization_status === 'completed'
+                  {run.processed_successfully
                     ? 'Dados tratados processados'
-                    : 'Dados tratados ainda não processados'}
+                    : run.accepted_count === 0 && run.rejected_count === 0
+                      ? 'Sem novos registros para processar'
+                      : run.needs_revalidation
+                        ? 'Este lote precisa ser revalidado antes do processamento tratado.'
+                        : 'Dados tratados ainda não processados'}
                 </p>
-                {run.rejected_count > 0 && run.staging_batch_id ? (
+                {run.processed_successfully ? (
+                  <p className="mt-1 text-slate-600">
+                    {run.latest_normalization_created_count} criados ·{' '}
+                    {run.latest_normalization_updated_count} atualizados ·{' '}
+                    {run.latest_normalization_skipped_count} ignorados ·{' '}
+                    {run.latest_normalization_error_count} erros
+                  </p>
+                ) : null}
+                {run.needs_revalidation && run.staging_batch_id ? (
                   <button
                     type="button"
                     disabled={busy !== null}
@@ -1145,9 +1158,7 @@ export function ApiConnectionPanel({
                       : 'Revalidar com regras atuais'}
                   </button>
                 ) : null}
-                {run.accepted_count > 0 &&
-                run.staging_batch_id &&
-                run.normalization_status !== 'completed' ? (
+                {run.has_processable_records && run.staging_batch_id ? (
                   <button
                     type="button"
                     disabled={processing}
@@ -1160,6 +1171,11 @@ export function ApiConnectionPanel({
                 {run.error_message_safe ? (
                   <p className="mt-2 text-rose-700">
                     Erro: {run.error_message_safe}
+                  </p>
+                ) : null}
+                {run.latest_normalization_error_message ? (
+                  <p className="mt-2 text-rose-700">
+                    Erro tratado: {run.latest_normalization_error_message}
                   </p>
                 ) : null}
                 {run.rejected_count > 0 && run.errors.length ? (

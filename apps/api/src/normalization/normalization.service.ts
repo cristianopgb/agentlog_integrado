@@ -434,13 +434,17 @@ export class NormalizationService {
         ),
       ];
       const contractFieldKeys = contractFields.map((field) => field.field_key);
-      const mappings = loaded.mappings.filter((mapping) =>
+      const recordMappings = loaded.mappings.filter((mapping) =>
         payloadKeys.includes(mapping.data_contract_field?.field_key ?? ''),
       );
-      if (!mappings.length) {
+      const canonicalSourceKey = this.canonicalSourceKey(
+        batch,
+        dataSource.source_type,
+      );
+      if (!recordMappings.length) {
         await addError(
           dataSource.source_type === 'api'
-            ? 'NO_CANONICAL_FIELD_MAPPINGS'
+            ? 'API_SCHEMA_INCOMPATIBLE'
             : 'NO_FIELD_MAPPINGS',
           dataSource.source_type === 'api'
             ? 'Os campos nativos do normalized_payload não possuem mapeamento canônico ativo para publicação no modelo tratado.'
@@ -450,7 +454,15 @@ export class NormalizationService {
             contract_field_keys: contractFieldKeys,
             data_contract_id: contract.id,
             data_source_id: dataSource.id,
+            canonical_source_key: canonicalSourceKey,
             source_type: dataSource.source_type,
+            active_mapping_field_keys: loaded.mappings.map(
+              (mapping) => mapping.data_contract_field?.field_key ?? '',
+            ),
+            schema_signature_mode:
+              dataSource.source_type === 'api'
+                ? 'active_contract_mappings'
+                : 'payload_fields',
             staging_batch_id: batchId,
             mappings_found_count: mappingsResult.mappingsFoundCount,
             active_mappings_found_count:
@@ -459,9 +471,13 @@ export class NormalizationService {
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
       }
-      const canonicalSourceKey = this.canonicalSourceKey(batch);
-      const datasetRole = this.datasetRole(mappings);
-      const schemaSignature = this.schemaSignature(mappings);
+      // API batches are incremental and can contain only a subset of the
+      // contract. Their signature represents the active canonical contract,
+      // while file snapshots retain their payload-shaped signature.
+      const signatureMappings =
+        dataSource.source_type === 'api' ? loaded.mappings : recordMappings;
+      const datasetRole = this.datasetRole(signatureMappings);
+      const schemaSignature = this.schemaSignature(signatureMappings);
       const integration = await this.resolveCanonicalIntegration(
         tenantId,
         batch,
@@ -479,7 +495,18 @@ export class NormalizationService {
             ? 'O lote API foi validado com uma configuração incompatível com a publicação canônica atual. Revalide o lote com as regras atuais antes de processar.'
             : 'O arquivo enviado possui um schema diferente da integração ativa. Para proteger os dados operacionais, esta atualização foi bloqueada. Crie uma nova integração ou uma nova versão de contrato/pareamento para este arquivo.',
           {
+            data_source_id: dataSource.id,
+            data_contract_id: contract.id,
             canonical_source_key: canonicalSourceKey,
+            source_type: dataSource.source_type,
+            normalized_payload_keys: payloadKeys,
+            active_mapping_field_keys: loaded.mappings.map(
+              (mapping) => mapping.data_contract_field?.field_key ?? '',
+            ),
+            schema_signature_mode:
+              dataSource.source_type === 'api'
+                ? 'active_contract_mappings'
+                : 'payload_fields',
             expected_schema_signature: integration.expected,
             received_schema_signature: schemaSignature,
           },
@@ -493,7 +520,7 @@ export class NormalizationService {
           operation_records: {},
         };
         let partial = false;
-        for (const mapping of mappings) {
+        for (const mapping of recordMappings) {
           const entityKey = mapping.canonical_entity?.entity_key;
           const fieldKey = mapping.canonical_field?.field_key;
           if (
@@ -630,7 +657,7 @@ export class NormalizationService {
           );
         }
         const hasCoreValues = Object.keys(buckets.operation_records).length > 0;
-        const operationalKeysUsed = mappings
+        const operationalKeysUsed = recordMappings
           .filter(
             (mapping) =>
               mapping.operational_key && mapping.mapping_type !== 'ignored',
@@ -668,6 +695,7 @@ export class NormalizationService {
           canonicalSourceKey,
           integration.id,
           datasetRole,
+          operationalKeysUsed,
         );
         counters[
           op.created ? 'created_operation_records' : 'updated_operation_records'
@@ -714,7 +742,12 @@ export class NormalizationService {
         counters.processed_records &&
         hasPendingActivation
       ) {
-        await this.activateBatch(tenantId, integration.id, batchId);
+        await this.activateBatch(
+          tenantId,
+          integration.id,
+          batchId,
+          dataSource.source_type,
+        );
       }
       return this.finish(
         run.id,
@@ -928,11 +961,15 @@ export class NormalizationService {
     canonicalSourceKey: string,
     canonicalIntegrationId: string,
     datasetRole: string,
+    operationalKeys: string[],
   ) {
     const existing = await this.findOperation(
       tenantId,
       { ...values, source_staging_record_id: record.id },
       datasetRole,
+      canonicalIntegrationId,
+      batch.data_source_id ? canonicalSourceKey.startsWith('api:') : false,
+      operationalKeys,
     );
     const canActivate =
       hasOperationalKey &&
@@ -987,6 +1024,9 @@ export class NormalizationService {
     tenantId: string,
     v: Record<string, unknown>,
     datasetRole: string,
+    canonicalIntegrationId: string,
+    incrementalApi: boolean,
+    operationalKeys: string[],
   ) {
     const queries = [
       `source_staging_record_id=eq.${v.source_staging_record_id}`,
@@ -998,15 +1038,33 @@ export class NormalizationService {
       );
       if (rows.length) return rows[0];
     }
-    if (datasetRole === 'deliveries') return null;
-    for (const field of [
-      'manifest_number',
-      'invoice_number',
-      'cte_number',
-      'delivery_number',
-      'order_number',
-      'external_code',
-    ]) {
+    if (datasetRole === 'deliveries' && !incrementalApi) return null;
+    if (incrementalApi && operationalKeys.length) {
+      const operationalFilter = operationalKeys
+        .map(
+          (field) =>
+            `${field}=eq.${encodeURIComponent(String(v[field]))}`,
+        )
+        .join('&');
+      const rows = await this.supabase.select<Array<{ id: string }>>(
+        'operation_records',
+        `select=id&tenant_id=eq.${tenantId}&canonical_integration_id=eq.${canonicalIntegrationId}&${operationalFilter}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=2`,
+      );
+      if (rows.length === 1) return rows[0];
+      if (rows.length > 1) return { id: '', ambiguous: true };
+      return null;
+    }
+    const matchFields = incrementalApi
+      ? operationalKeys
+      : [
+          'manifest_number',
+          'invoice_number',
+          'cte_number',
+          'delivery_number',
+          'order_number',
+          'external_code',
+        ];
+    for (const field of matchFields) {
       if (!this.hasOperationalIdentifier(v[field])) continue;
       const rows = await this.supabase.select<Array<{ id: string }>>(
         'operation_records',
@@ -1017,7 +1075,9 @@ export class NormalizationService {
     }
     return null;
   }
-  private canonicalSourceKey(batch: Batch) {
+  private canonicalSourceKey(batch: Batch, sourceType: string) {
+    if (sourceType === 'api' && batch.data_source_id)
+      return `api:${batch.data_source_id}`;
     return (
       batch.source_reference?.trim() ||
       batch.batch_code?.trim() ||
@@ -1069,7 +1129,10 @@ export class NormalizationService {
       `select=id,active_schema_signature&tenant_id=eq.${tenantId}&integration_type=eq.${encodeURIComponent(integrationType)}&canonical_source_key=eq.${encodeURIComponent(sourceKey)}&dataset_role=eq.${datasetRole}&status=eq.active&limit=1`,
     );
     if (rows[0]) {
-      if (rows[0].active_schema_signature === 'legacy-pending-signature') {
+      if (
+        integrationType === 'api' ||
+        rows[0].active_schema_signature === 'legacy-pending-signature'
+      ) {
         await this.supabase.update(
           'canonical_integrations',
           `tenant_id=eq.${tenantId}&id=eq.${rows[0].id}`,
@@ -1109,6 +1172,7 @@ export class NormalizationService {
     tenantId: string,
     integrationId: string,
     newBatchId: string,
+    sourceType: string,
   ) {
     await this.supabase.update(
       'operation_records',
@@ -1120,6 +1184,7 @@ export class NormalizationService {
         superseded_by_staging_batch_id: null,
       },
     );
+    if (sourceType === 'api') return;
     await this.supabase.update(
       'operation_records',
       `tenant_id=eq.${tenantId}&canonical_integration_id=eq.${integrationId}&source_staging_batch_id=neq.${newBatchId}&deleted_at=is.null&is_current=eq.true`,
