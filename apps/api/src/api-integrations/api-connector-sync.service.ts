@@ -372,6 +372,13 @@ export class ApiConnectorSyncService {
           'staging_errors',
           `select=id,error_code,source_field_name,field_key,message,raw_value,staging_record:staging_records!staging_errors_record_tenant_fk(row_number)&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.asc&limit=5`,
         );
+        const batches = await this.db.select<
+          Array<{ api_revalidated_at: string | null }>
+        >(
+          'staging_batches',
+          `select=api_revalidated_at&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&id=eq.${run.staging_batch_id}&limit=1`,
+        );
+        const apiRevalidatedAt = batches[0]?.api_revalidated_at ?? null;
         const normalizationRuns = await this.db.select<
           Array<{
             id: string;
@@ -383,11 +390,12 @@ export class ApiConnectorSyncService {
             created_extension_records: number;
             updated_extension_records: number;
             error_records: number;
+            created_at: string;
             finished_at: string | null;
           }>
         >(
           'normalization_runs',
-          `select=id,status,total_records,processed_records,created_operation_records,updated_operation_records,created_extension_records,updated_extension_records,error_records,finished_at&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.desc&limit=1`,
+          `select=id,status,total_records,processed_records,created_operation_records,updated_operation_records,created_extension_records,updated_extension_records,error_records,created_at,finished_at&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.desc&limit=1`,
         );
         const latest = normalizationRuns[0];
         const normalizationErrors = latest
@@ -409,8 +417,17 @@ export class ApiConnectorSyncService {
             : undefined);
         const processedSuccessfully =
           latest?.status === 'completed' && latest.error_records === 0;
+        const latestNormalizationAt = latest?.finished_at ?? latest?.created_at;
+        const latestErrorIsStale = Boolean(
+          latestError &&
+          apiRevalidatedAt &&
+          latestNormalizationAt &&
+          new Date(latestNormalizationAt).getTime() <
+            new Date(apiRevalidatedAt).getTime(),
+        );
         const needsRevalidation =
-          latestError?.error_code === 'API_SCHEMA_INCOMPATIBLE' ||
+          (latestError?.error_code === 'API_SCHEMA_INCOMPATIBLE' &&
+            !latestErrorIsStale) ||
           errors.length > 0;
         const acceptedCount = Number(run.accepted_count ?? 0);
         return {
@@ -419,10 +436,12 @@ export class ApiConnectorSyncService {
           latest_normalization_run_id: latest?.id ?? null,
           latest_normalization_status: latest?.status ?? null,
           latest_normalization_created_count: latest
-            ? latest.created_operation_records + latest.created_extension_records
+            ? latest.created_operation_records +
+              latest.created_extension_records
             : 0,
           latest_normalization_updated_count: latest
-            ? latest.updated_operation_records + latest.updated_extension_records
+            ? latest.updated_operation_records +
+              latest.updated_extension_records
             : 0,
           latest_normalization_skipped_count: latest
             ? Math.max(0, latest.total_records - latest.processed_records)
@@ -430,13 +449,13 @@ export class ApiConnectorSyncService {
           latest_normalization_error_count: latest?.error_records ?? 0,
           latest_normalization_finished_at: latest?.finished_at ?? null,
           latest_normalization_error_code: latestError?.error_code ?? null,
-          latest_normalization_error_message: latestError?.error_message ?? null,
+          latest_normalization_error_message:
+            latestError?.error_message ?? null,
+          latest_normalization_error_is_stale: latestErrorIsStale,
           processed_successfully: processedSuccessfully,
           needs_revalidation: needsRevalidation,
           has_processable_records:
-            acceptedCount > 0 &&
-            !processedSuccessfully &&
-            !needsRevalidation,
+            acceptedCount > 0 && !processedSuccessfully && !needsRevalidation,
           errors: errors.map((error) => ({
             id: error.id,
             row_number: error.staging_record?.row_number ?? null,
@@ -507,16 +526,19 @@ export class ApiConnectorSyncService {
         ? 'partially_valid'
         : 'rejected'
       : 'validated';
+    const revalidatedAt = new Date().toISOString();
     await this.db.update(
       'staging_batches',
-      `tenant_id=eq.${tenantId}&id=eq.${batchId}`,
+      `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&id=eq.${batchId}`,
       {
         status,
         total_records: records.length,
         valid_records: validation.valid,
         invalid_records: validation.rejected,
         error_count: validation.errorCount,
-        validated_at: new Date().toISOString(),
+        validated_at: revalidatedAt,
+        api_revalidated_at: revalidatedAt,
+        api_revalidated_by: userId,
         updated_by: userId,
       },
     );
