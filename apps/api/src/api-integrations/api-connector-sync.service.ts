@@ -363,6 +363,8 @@ export class ApiConnectorSyncService {
             latest_normalization_finished_at: null,
             latest_normalization_error_code: null,
             latest_normalization_error_message: null,
+            published_current_count: 0,
+            not_published_count: 0,
             processed_successfully: false,
             needs_revalidation: false,
             has_processable_records: false,
@@ -415,8 +417,23 @@ export class ApiConnectorSyncService {
                   'A normalização registrou erro, mas o detalhe não foi encontrado.',
               }
             : undefined);
+        const [publishedCurrent, notPublished] = await Promise.all([
+          this.db.select<Array<{ id: string }>>(
+            'operation_records',
+            `select=id&tenant_id=eq.${tenantId}&source_staging_batch_id=eq.${run.staging_batch_id}&is_current=eq.true&canonical_validity_status=eq.valid`,
+          ),
+          this.db.select<Array<{ id: string }>>(
+            'operation_records',
+            `select=id&tenant_id=eq.${tenantId}&source_staging_batch_id=eq.${run.staging_batch_id}&is_current=eq.false&canonical_validity_status=in.(incomplete,pending_activation,superseded)`,
+          ),
+        ]);
+        const publishedCurrentCount = publishedCurrent.length;
+        const notPublishedCount = notPublished.length;
+        const acceptedCount = Number(run.accepted_count ?? 0);
         const processedSuccessfully =
-          latest?.status === 'completed' && latest.error_records === 0;
+          latest?.status === 'completed' &&
+          latest.error_records === 0 &&
+          (acceptedCount === 0 || publishedCurrentCount > 0);
         const latestNormalizationAt = latest?.finished_at ?? latest?.created_at;
         const latestErrorIsStale = Boolean(
           latestError &&
@@ -429,7 +446,6 @@ export class ApiConnectorSyncService {
           (latestError?.error_code === 'API_SCHEMA_INCOMPATIBLE' &&
             !latestErrorIsStale) ||
           errors.length > 0;
-        const acceptedCount = Number(run.accepted_count ?? 0);
         return {
           ...run,
           normalization_status: latest?.status ?? null,
@@ -451,6 +467,8 @@ export class ApiConnectorSyncService {
           latest_normalization_error_code: latestError?.error_code ?? null,
           latest_normalization_error_message:
             latestError?.error_message ?? null,
+          published_current_count: publishedCurrentCount,
+          not_published_count: notPublishedCount,
           latest_normalization_error_is_stale: latestErrorIsStale,
           processed_successfully: processedSuccessfully,
           needs_revalidation: needsRevalidation,

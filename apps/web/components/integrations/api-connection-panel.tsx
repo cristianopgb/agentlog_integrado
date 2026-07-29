@@ -1132,18 +1132,25 @@ export function ApiConnectionPanel({
                 <p className="mt-1 font-semibold">
                   {run.processed_successfully
                     ? 'Dados tratados processados'
-                    : run.accepted_count === 0 && run.rejected_count === 0
-                      ? 'Sem novos registros para processar'
-                      : run.needs_revalidation
-                        ? 'Este lote precisa ser revalidado antes do processamento tratado.'
-                        : 'Dados tratados ainda não processados'}
+                    : run.latest_normalization_status === 'completed' &&
+                        run.accepted_count > 0 &&
+                        run.published_current_count === 0
+                      ? 'Registros tratados criados, mas ainda não publicados. Verifique chave operacional.'
+                      : run.accepted_count === 0 && run.rejected_count === 0
+                        ? 'Sem novos registros para processar'
+                        : run.needs_revalidation
+                          ? 'Este lote precisa ser revalidado antes do processamento tratado.'
+                          : 'Dados tratados ainda não processados'}
                 </p>
-                {run.processed_successfully ? (
+                {run.latest_normalization_status === 'completed' ? (
                   <p className="mt-1 text-slate-600">
                     {run.latest_normalization_created_count} criados ·{' '}
                     {run.latest_normalization_updated_count} atualizados ·{' '}
                     {run.latest_normalization_skipped_count} ignorados ·{' '}
                     {run.latest_normalization_error_count} erros
+                    {' · '}
+                    {run.published_current_count} publicados ·{' '}
+                    {run.not_published_count} não publicados
                   </p>
                 ) : null}
                 {run.needs_revalidation && run.staging_batch_id ? (
@@ -1165,7 +1172,12 @@ export function ApiConnectionPanel({
                     onClick={() => processAccepted(run.staging_batch_id!)}
                     className="mt-3 rounded-xl bg-slate-950 px-4 py-2 font-semibold text-white disabled:bg-slate-300"
                   >
-                    {processing ? 'Processando...' : 'Processar dados tratados'}
+                    {processing
+                      ? 'Processando...'
+                      : run.latest_normalization_status === 'completed' &&
+                          run.published_current_count === 0
+                        ? 'Reprocessar publicação'
+                        : 'Processar dados tratados'}
                   </button>
                 ) : null}
                 {run.error_message_safe ? (
