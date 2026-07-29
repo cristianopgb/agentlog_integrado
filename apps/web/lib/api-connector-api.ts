@@ -64,6 +64,7 @@ export type ApiSyncRun = {
   latest_normalization_finished_at: string | null;
   latest_normalization_error_code: string | null;
   latest_normalization_error_message: string | null;
+  latest_normalization_error_is_stale?: boolean;
   processed_successfully: boolean;
   needs_revalidation: boolean;
   has_processable_records: boolean;

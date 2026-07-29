@@ -1173,7 +1173,15 @@ export function ApiConnectionPanel({
                     Erro: {run.error_message_safe}
                   </p>
                 ) : null}
-                {run.latest_normalization_error_message ? (
+                {run.latest_normalization_error_is_stale &&
+                !run.processed_successfully ? (
+                  <p className="mt-2 text-amber-700">
+                    Erro anterior resolvido por revalidação. Processe os dados
+                    tratados.
+                  </p>
+                ) : null}
+                {run.latest_normalization_error_message &&
+                !run.latest_normalization_error_is_stale ? (
                   <p className="mt-2 text-rose-700">
                     Erro tratado: {run.latest_normalization_error_message}
                   </p>
