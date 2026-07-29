@@ -55,6 +55,18 @@ export type ApiSyncRun = {
   staging_batch_id: string | null;
   error_message_safe: string | null;
   normalization_status: string | null;
+  latest_normalization_run_id: string | null;
+  latest_normalization_status: string | null;
+  latest_normalization_created_count: number;
+  latest_normalization_updated_count: number;
+  latest_normalization_skipped_count: number;
+  latest_normalization_error_count: number;
+  latest_normalization_finished_at: string | null;
+  latest_normalization_error_code: string | null;
+  latest_normalization_error_message: string | null;
+  processed_successfully: boolean;
+  needs_revalidation: boolean;
+  has_processable_records: boolean;
   errors: Array<{
     id: string;
     row_number: number | null;

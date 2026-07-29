@@ -351,22 +351,92 @@ export class ApiConnectorSyncService {
     return Promise.all(
       runs.map(async (run) => {
         if (!run.staging_batch_id)
-          return { ...run, normalization_status: null, errors: [] };
-        const errors = run.rejected_count
-          ? await this.db.select<StagingErrorPreview[]>(
-              'staging_errors',
-              `select=id,error_code,source_field_name,field_key,message,raw_value,staging_record:staging_records!staging_errors_record_tenant_fk(row_number)&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.asc&limit=5`,
-            )
-          : [];
+          return {
+            ...run,
+            normalization_status: null,
+            latest_normalization_run_id: null,
+            latest_normalization_status: null,
+            latest_normalization_created_count: 0,
+            latest_normalization_updated_count: 0,
+            latest_normalization_skipped_count: 0,
+            latest_normalization_error_count: 0,
+            latest_normalization_finished_at: null,
+            latest_normalization_error_code: null,
+            latest_normalization_error_message: null,
+            processed_successfully: false,
+            needs_revalidation: false,
+            has_processable_records: false,
+            errors: [],
+          };
+        const errors = await this.db.select<StagingErrorPreview[]>(
+          'staging_errors',
+          `select=id,error_code,source_field_name,field_key,message,raw_value,staging_record:staging_records!staging_errors_record_tenant_fk(row_number)&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.asc&limit=5`,
+        );
         const normalizationRuns = await this.db.select<
-          Array<{ status: string }>
+          Array<{
+            id: string;
+            status: string;
+            total_records: number;
+            processed_records: number;
+            created_operation_records: number;
+            updated_operation_records: number;
+            created_extension_records: number;
+            updated_extension_records: number;
+            error_records: number;
+            finished_at: string | null;
+          }>
         >(
           'normalization_runs',
-          `select=status&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.desc&limit=1`,
+          `select=id,status,total_records,processed_records,created_operation_records,updated_operation_records,created_extension_records,updated_extension_records,error_records,finished_at&tenant_id=eq.${tenantId}&staging_batch_id=eq.${run.staging_batch_id}&order=created_at.desc&limit=1`,
         );
+        const latest = normalizationRuns[0];
+        const normalizationErrors = latest
+          ? await this.db.select<
+              Array<{ error_code: string; error_message: string }>
+            >(
+              'normalization_errors',
+              `select=error_code,error_message&tenant_id=eq.${tenantId}&normalization_run_id=eq.${latest.id}&order=created_at.asc&limit=1`,
+            )
+          : [];
+        const latestError =
+          normalizationErrors[0] ??
+          (latest && latest.error_records > 0
+            ? {
+                error_code: 'UNKNOWN_ERROR',
+                error_message:
+                  'A normalização registrou erro, mas o detalhe não foi encontrado.',
+              }
+            : undefined);
+        const processedSuccessfully =
+          latest?.status === 'completed' && latest.error_records === 0;
+        const needsRevalidation =
+          latestError?.error_code === 'API_SCHEMA_INCOMPATIBLE' ||
+          errors.length > 0;
+        const acceptedCount = Number(run.accepted_count ?? 0);
         return {
           ...run,
-          normalization_status: normalizationRuns[0]?.status ?? null,
+          normalization_status: latest?.status ?? null,
+          latest_normalization_run_id: latest?.id ?? null,
+          latest_normalization_status: latest?.status ?? null,
+          latest_normalization_created_count: latest
+            ? latest.created_operation_records + latest.created_extension_records
+            : 0,
+          latest_normalization_updated_count: latest
+            ? latest.updated_operation_records + latest.updated_extension_records
+            : 0,
+          latest_normalization_skipped_count: latest
+            ? Math.max(0, latest.total_records - latest.processed_records)
+            : 0,
+          latest_normalization_error_count: latest?.error_records ?? 0,
+          latest_normalization_finished_at: latest?.finished_at ?? null,
+          latest_normalization_error_code: latestError?.error_code ?? null,
+          latest_normalization_error_message: latestError?.error_message ?? null,
+          processed_successfully: processedSuccessfully,
+          needs_revalidation: needsRevalidation,
+          has_processable_records:
+            acceptedCount > 0 &&
+            !processedSuccessfully &&
+            !needsRevalidation,
           errors: errors.map((error) => ({
             id: error.id,
             row_number: error.staging_record?.row_number ?? null,
