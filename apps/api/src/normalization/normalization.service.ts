@@ -1041,10 +1041,7 @@ export class NormalizationService {
     if (datasetRole === 'deliveries' && !incrementalApi) return null;
     if (incrementalApi && operationalKeys.length) {
       const operationalFilter = operationalKeys
-        .map(
-          (field) =>
-            `${field}=eq.${encodeURIComponent(String(v[field]))}`,
-        )
+        .map((field) => `${field}=eq.${encodeURIComponent(String(v[field]))}`)
         .join('&');
       const rows = await this.supabase.select<Array<{ id: string }>>(
         'operation_records',
@@ -1086,7 +1083,9 @@ export class NormalizationService {
     ).slice(0, 500);
   }
   private hasOperationalIdentifier(value: unknown) {
-    return typeof value === 'string' && value.trim().length > 0;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (typeof value === 'number') return Number.isFinite(value);
+    return false;
   }
   private datasetRole(mappings: Mapping[]) {
     const entity = mappings
