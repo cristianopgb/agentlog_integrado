@@ -1377,7 +1377,10 @@ export class CustomIndicatorsService {
   ) {
     const filters = [`select=*`, `tenant_id=eq.${tenantId}`];
     if (!includeArchived) filters.push('deleted_at=is.null');
-    if (table === 'operation_records') filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
+    if (table === 'operation_records') {
+      filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
+      if (!includeArchived) filters.push(await this.supabase.activeOperationalSourceFilter(tenantId));
+    }
     return this.supabase.select<Record<string, unknown>[]>(
       table,
       `${filters.join('&')}&limit=10000`,

@@ -302,9 +302,11 @@ export class CalculatedFieldsService {
       );
   }
   private async rows(tenantId: string) {
+    const activeSources =
+      await this.supabase.activeOperationalSourceFilter(tenantId);
     return this.supabase.select<Record<string, unknown>[]>(
       'operation_records',
-      `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=10000`,
+      `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&${activeSources}&limit=10000`,
     );
   }
   private calculateRow(rows: Record<string, unknown>[], expr: Expr) {
