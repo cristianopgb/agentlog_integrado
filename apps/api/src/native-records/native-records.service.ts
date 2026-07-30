@@ -24,7 +24,7 @@ const extensionTables = [
   'team_records',
 ] as const;
 const operationColumns =
-  'id,tenant_id,external_id,external_code,source_system,source_data_source_id,source_data_contract_id,source_staging_batch_id,source_staging_record_id,source_payload_hash,module_origin,record_type,document_number,document_type,cte_number,invoice_number,manifest_number,order_number,delivery_number,customer_name,customer_document,shipper_name,shipper_document,recipient_name,recipient_document,payer_name,payer_document,origin_city,origin_state,destination_city,destination_state,vehicle_plate,driver_name,driver_document,status,status_updated_at,occurrence_status,last_event_at,gross_weight,cubed_weight,volume_count,total_value,freight_value,issued_at,expected_date,completed_at,data_quality_status,is_current,canonical_validity_status,created_at,updated_at';
+  'id,tenant_id,external_id,external_code,source_system,source_data_source_id,source_data_contract_id,source_staging_batch_id,source_staging_record_id,source_payload_hash,module_origin,record_type,document_number,document_type,cte_number,invoice_number,manifest_number,order_number,delivery_number,customer_name,customer_document,shipper_external_id,shipper_name,shipper_document,carrier_external_id,carrier_name,service_taker_external_id,service_taker_name,recipient_name,recipient_document,payer_name,payer_document,origin_city,origin_state,destination_city,destination_state,vehicle_plate,vehicle_profile,driver_name,driver_document,status,status_updated_at,occurrence_status,last_event_at,gross_weight,cubed_weight,volume_count,pending_volume_count,total_value,pending_total_value,freight_value,pending_gross_weight,issued_at,expected_date,scheduled_at,completed_at,data_quality_status,is_current,canonical_validity_status,created_at,updated_at';
 
 @Injectable()
 export class NativeRecordsService {
@@ -33,8 +33,9 @@ export class NativeRecordsService {
   async list(tenantId: string, query: Query) {
     const limit = Math.min(Math.max(Number(query.limit) || 25, 1), 100);
     const offset = Math.max(Number(query.offset) || 0, 0);
-    const includeArchived = query.include_archived === 'true';
-    let sourceIds = includeArchived
+    const includeHistory =
+      query.include_archived === 'true' || query.include_inactive === 'true';
+    let sourceIds = includeHistory
       ? await this.operationalAndArchivedSourceIds(tenantId)
       : await this.activeSourceIds(tenantId);
     if (query.source_type) {
@@ -42,8 +43,7 @@ export class NativeRecordsService {
       sourceIds = sourceIds.filter((id) => typed.includes(id));
       if (!sourceIds.length) return this.emptyList(limit, offset);
     }
-    if (!sourceIds.length)
-      return this.emptyList(limit, offset);
+    if (!sourceIds.length) return this.emptyList(limit, offset);
     const filters = this.recordFilters(
       tenantId,
       query,
@@ -276,10 +276,18 @@ export class NativeRecordsService {
   }
   private async sourcesById(tenantId: string, sourceIds: string[]) {
     if (!sourceIds.length)
-      return new Map<string, { name: string; source_type: string; status: string }>();
+      return new Map<
+        string,
+        { name: string; source_type: string; status: string }
+      >();
     const ids = sourceIds.map((id) => `"${id}"`).join(',');
     const rows = await this.supabase.select<
-      Array<{ id: string; name: string | null; source_type: string; status: string }>
+      Array<{
+        id: string;
+        name: string | null;
+        source_type: string;
+        status: string;
+      }>
     >(
       'data_sources',
       `select=id,name,source_type,status&tenant_id=eq.${tenantId}&id=in.(${ids})`,

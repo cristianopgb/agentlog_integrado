@@ -341,6 +341,47 @@ const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
     date_format: null,
     sort_order: 180,
   },
+  ...(
+    [
+      ['embarcador_id', 'text'],
+      ['embarcador', 'text'],
+      ['transportadora_id', 'text'],
+      ['transportadora', 'text'],
+      ['tomador_id', 'text'],
+      ['tomador', 'text'],
+      ['data_agendamento', 'datetime'],
+      ['perfil_veiculo', 'text'],
+      ['volume_pendente', 'decimal'],
+      ['valor_pendente', 'decimal'],
+      ['peso_pendente', 'decimal'],
+      ['shipper_id', 'text'],
+      ['shipper_name', 'text'],
+      ['carrier_id', 'text'],
+      ['carrier_name', 'text'],
+      ['service_taker_id', 'text'],
+      ['service_taker_name', 'text'],
+      ['scheduled_at', 'datetime'],
+      ['vehicle_profile', 'text'],
+      ['pending_volume_count', 'decimal'],
+      ['pending_total_value', 'decimal'],
+      ['pending_gross_weight', 'decimal'],
+    ] as const
+  ).map(([field_key, data_type], index) => ({
+    field_key,
+    source_field_name: field_key,
+    description: null,
+    data_type,
+    is_required: false,
+    is_unique: false,
+    allow_null: true,
+    min_length: null,
+    max_length: null,
+    min_value: null,
+    max_value: null,
+    regex_pattern: null,
+    date_format: null,
+    sort_order: 190 + index * 10,
+  })),
 ];
 
 const deliveryStatusValues = [
@@ -431,47 +472,58 @@ export async function listIntegrations(
     .order('created_at', { ascending: false });
   if (batchError) throw batchError;
 
-  return ((sources ?? []) as IntegrationSource[]).filter((source) => !['archived','inactive'].includes(source.status)).map((source) => {
-    const contract =
-      ((contracts ?? []) as DataContract[]).find(
-        (item) => item.data_source_id === source.id,
-      ) ?? null;
-    const contractFields = contract
-      ? ((fields ?? []) as DataContractField[]).filter(
-          (item) => item.data_contract_id === contract.id,
-        )
-      : [];
-    const mappedCount = source.source_type === 'api'
-      ? ((apiMappings ?? []) as Array<{ data_source_id: string }>).filter((item) => item.data_source_id === source.id).length
-      : contract
-      ? new Set(
-          ((mappings ?? []) as FieldMapping[])
-            .filter((item) => item.data_contract_id === contract.id)
-            .map((item) => item.id),
-        ).size
-      : 0;
-    const detectedApiFields = ((apiConfigs ?? []) as Array<{ data_source_id: string; detected_fields: unknown }>).find((item) => item.data_source_id === source.id)?.detected_fields;
-    const foundCount = source.source_type === 'api' && Array.isArray(detectedApiFields)
-      ? detectedApiFields.length
-      : contractFields.length;
-    const latestBatch =
-      ((batches ?? []) as StagingBatch[]).find(
-        (item) => item.data_source_id === source.id,
-      ) ?? null;
-    return {
-      source,
-      contract,
-      contractFieldCount: foundCount,
-      mappedFieldCount: mappedCount,
-      latestBatch,
-      generalStatus: getGeneralStatus(
+  return ((sources ?? []) as IntegrationSource[])
+    .filter((source) => !['archived', 'inactive'].includes(source.status))
+    .map((source) => {
+      const contract =
+        ((contracts ?? []) as DataContract[]).find(
+          (item) => item.data_source_id === source.id,
+        ) ?? null;
+      const contractFields = contract
+        ? ((fields ?? []) as DataContractField[]).filter(
+            (item) => item.data_contract_id === contract.id,
+          )
+        : [];
+      const mappedCount =
+        source.source_type === 'api'
+          ? ((apiMappings ?? []) as Array<{ data_source_id: string }>).filter(
+              (item) => item.data_source_id === source.id,
+            ).length
+          : contract
+            ? new Set(
+                ((mappings ?? []) as FieldMapping[])
+                  .filter((item) => item.data_contract_id === contract.id)
+                  .map((item) => item.id),
+              ).size
+            : 0;
+      const detectedApiFields = (
+        (apiConfigs ?? []) as Array<{
+          data_source_id: string;
+          detected_fields: unknown;
+        }>
+      ).find((item) => item.data_source_id === source.id)?.detected_fields;
+      const foundCount =
+        source.source_type === 'api' && Array.isArray(detectedApiFields)
+          ? detectedApiFields.length
+          : contractFields.length;
+      const latestBatch =
+        ((batches ?? []) as StagingBatch[]).find(
+          (item) => item.data_source_id === source.id,
+        ) ?? null;
+      return {
         source,
         contract,
-        foundCount,
-        mappedCount,
-      ),
-    };
-  });
+        contractFieldCount: foundCount,
+        mappedFieldCount: mappedCount,
+        latestBatch,
+        generalStatus: getGeneralStatus(
+          source,
+          contract,
+          foundCount,
+          mappedCount,
+        ),
+      };
+    });
 }
 
 export async function getIntegrationSource(tenantId: string, sourceId: string) {
@@ -619,7 +671,9 @@ export async function createInitialDeliveryContract(
               ? String(source.metadata?.file_type ?? 'xlsx')
               : 'other',
         direction: 'inbound',
-        status: ['spreadsheet', 'api'].includes(source.source_type) ? 'active' : 'draft',
+        status: ['spreadsheet', 'api'].includes(source.source_type)
+          ? 'active'
+          : 'draft',
         periodicity: 'on_demand',
       })
       .select(contractSelect);

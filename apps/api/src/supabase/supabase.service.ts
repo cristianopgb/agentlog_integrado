@@ -28,6 +28,11 @@ export class SupabaseService {
     return this.parseResponse<T>(response);
   }
 
+  async activeOperationalSourceFilter(tenantId: string): Promise<string> {
+    const sources = await this.select<Array<{ id: string }>>('data_sources', `select=id&tenant_id=eq.${tenantId}&status=eq.active&limit=10000`);
+    return sources.length ? `source_data_source_id=in.(${sources.map(({ id }) => `"${id}"`).join(',')})` : 'source_data_source_id=in.(00000000-0000-0000-0000-000000000000)';
+  }
+
   async upsert<T>(table: string, payload: Record<string, unknown>, onConflict: string): Promise<T> { const response = await fetch(`${this.url}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, { method: "POST", headers: { ...this.adminHeaders(), Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }); return this.parseResponse<T>(response); }
   async insert<T>(table: string, payload: Record<string, unknown> | Record<string, unknown>[]): Promise<T> {
     const response = await fetch(`${this.url}/rest/v1/${table}`, { method: 'POST', headers: { ...this.adminHeaders(), Prefer: 'return=representation' }, body: JSON.stringify(payload) });

@@ -167,6 +167,16 @@ const operationColumns = new Set([
   'issued_at',
   'expected_date',
   'completed_at',
+  'shipper_external_id',
+  'carrier_external_id',
+  'carrier_name',
+  'service_taker_external_id',
+  'service_taker_name',
+  'scheduled_at',
+  'vehicle_profile',
+  'pending_volume_count',
+  'pending_total_value',
+  'pending_gross_weight',
   'data_quality_status',
 ]);
 const extensionColumns: Record<string, Set<string>> = {
@@ -742,12 +752,21 @@ export class NormalizationService {
         counters.processed_records &&
         hasPendingActivation
       ) {
+        if (dataSource.source_type === 'api' && batch.data_source_id)
+          await this.assertApiSourceActivationAllowed(
+            tenantId,
+            batch.data_source_id,
+            contract.module_key,
+            contract.entity_key,
+          );
         await this.activateBatch(
           tenantId,
           integration.id,
           batchId,
           dataSource.source_type,
         );
+        if (dataSource.source_type === 'api' && batch.data_source_id)
+          await this.activateApiSource(tenantId, batch.data_source_id);
       }
       return this.finish(
         run.id,
@@ -963,12 +982,15 @@ export class NormalizationService {
     datasetRole: string,
     operationalKeys: string[],
   ) {
+    const incrementalApi = Boolean(
+      batch.data_source_id && canonicalSourceKey.startsWith('api:'),
+    );
     const existing = await this.findOperation(
       tenantId,
       { ...values, source_staging_record_id: record.id },
       datasetRole,
       canonicalIntegrationId,
-      batch.data_source_id ? canonicalSourceKey.startsWith('api:') : false,
+      incrementalApi,
       operationalKeys,
     );
     const canActivate =
@@ -1006,6 +1028,26 @@ export class NormalizationService {
           base,
         );
         return { id: row.id, created: true, pendingActivation: false };
+      }
+      // API updates are immutable versions: retire the current row and insert
+      // the replacement. This preserves audit history and lets activation be
+      // atomic from the consumers' perspective.
+      if (incrementalApi && canActivate) {
+        await this.supabase.update(
+          'operation_records',
+          `tenant_id=eq.${tenantId}&id=eq.${existing.id}`,
+          {
+            is_current: false,
+            canonical_validity_status: 'superseded',
+            superseded_at: new Date().toISOString(),
+            superseded_by_staging_batch_id: batch.id,
+          },
+        );
+        const [row] = await this.supabase.insert<Array<{ id: string }>>(
+          'operation_records',
+          base,
+        );
+        return { id: row.id, created: true, pendingActivation: true };
       }
       const [row] = await this.supabase.update<Array<{ id: string }>>(
         'operation_records',
@@ -1193,6 +1235,44 @@ export class NormalizationService {
         superseded_at: new Date().toISOString(),
         superseded_by_staging_batch_id: newBatchId,
       },
+    );
+  }
+  private async assertApiSourceActivationAllowed(
+    tenantId: string,
+    sourceId: string,
+    moduleKey: string,
+    entityKey: string,
+  ) {
+    const source = await this.supabase.select<Array<{ status: string }>>(
+      'data_sources',
+      `select=status&tenant_id=eq.${tenantId}&id=eq.${sourceId}&limit=1`,
+    );
+    if (!source[0] || !['configuring', 'active'].includes(source[0].status))
+      throw new BadRequestException(
+        'A integração não está em configuração e não pode ser ativada automaticamente.',
+      );
+    const modules = await this.supabase.select<
+      Array<{ data_source_id: string }>
+    >(
+      'data_source_modules',
+      `select=data_source_id&tenant_id=eq.${tenantId}&module_key=eq.${encodeURIComponent(moduleKey)}&data_source_id=neq.${sourceId}`,
+    );
+    for (const candidate of modules) {
+      const conflicts = await this.supabase.select<Array<{ id: string }>>(
+        'data_sources',
+        `select=id,data_contracts!inner(id)&tenant_id=eq.${tenantId}&id=eq.${candidate.data_source_id}&status=eq.active&data_contracts.entity_key=eq.${encodeURIComponent(entityKey)}&data_contracts.status=eq.active&limit=1`,
+      );
+      if (conflicts.length)
+        throw new BadRequestException(
+          'Já existe uma fonte ativa para este módulo e entidade operacional. Arquive-a antes de ativar esta integração.',
+        );
+    }
+  }
+  private async activateApiSource(tenantId: string, sourceId: string) {
+    await this.supabase.update(
+      'data_sources',
+      `tenant_id=eq.${tenantId}&id=eq.${sourceId}&status=eq.configuring`,
+      { status: 'active', updated_at: new Date().toISOString() },
     );
   }
   private async upsertExtension(

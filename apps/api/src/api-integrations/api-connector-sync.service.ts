@@ -71,7 +71,9 @@ export class ApiConnectorSyncService {
       `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`,
       {
         detected_fields: result.fields,
-        sample_preview: preview,
+        // The visual preview stays deliberately small, but De/Para needs the
+        // complete bounded sample to discover controlled values before sync.
+        sample_preview: result.records,
         sample_http_status: result.status,
       },
     );
@@ -829,10 +831,10 @@ export class ApiConnectorSyncService {
     let status = 0;
     let cursor = config.last_cursor;
     const maxPages = sample
-      ? 1
+      ? Math.min(10, Number(process.env.API_SAMPLE_MAX_PAGES ?? 5))
       : Math.min(50, Number(process.env.API_SYNC_MAX_PAGES ?? 20));
     const maxRecords = sample
-      ? 20
+      ? Math.min(1000, Number(process.env.API_SAMPLE_MAX_RECORDS ?? 500))
       : Math.min(10000, Number(process.env.API_SYNC_MAX_RECORDS ?? 5000));
     for (
       let page = 1;
