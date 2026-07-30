@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { DATE_FORMATS, parseFieldValue, ParseRule } from './field-value-parser';
+import {
+  DATE_FORMATS,
+  normalizeDateFormat,
+  parseFieldValue,
+  ParseRule,
+} from './field-value-parser';
 import { clearInvalidRecordStates } from './invalid-record-states';
 type Rule = ParseRule & {
   id: string;
@@ -19,6 +24,7 @@ export class FieldParseRulesService {
     );
     return rows.map((r) => ({
       ...r,
+      date_format: normalizeDateFormat(r.date_format),
       field_key: (
         r as unknown as { data_contract_field?: { field_key: string } }
       ).data_contract_field?.field_key,
@@ -55,7 +61,11 @@ export class FieldParseRulesService {
       `select=sample_preview&tenant_id=eq.${t}&data_source_id=eq.${s}&limit=1`,
     );
     const map = new Map(fields.map((f) => [f.id, f]));
-    for (const rule of body.rules ?? []) {
+    for (const receivedRule of body.rules ?? []) {
+      const rule = {
+        ...receivedRule,
+        date_format: normalizeDateFormat(receivedRule.date_format),
+      };
       const field = map.get(rule.data_contract_field_id ?? '');
       if (
         !field ||

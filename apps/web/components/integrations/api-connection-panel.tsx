@@ -19,6 +19,7 @@ import {
   type ApiSyncRun,
   type ValueMappingItem,
   type FieldParseRule,
+  normalizeFieldParseRule,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
 import type { TenantModuleOption } from '../../lib/modules-api';
@@ -198,7 +199,7 @@ export function ApiConnectionPanel({
       Object.fromEntries(
         formats.map((rule) => [
           `${rule.data_contract_field_id}\0${rule.source_field_name}`,
-          rule,
+          normalizeFieldParseRule(rule),
         ]),
       ),
     );
