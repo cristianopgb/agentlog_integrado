@@ -37,10 +37,22 @@ export class FieldParseRulesService {
     if (!contracts[0])
       throw new BadRequestException('Contrato ativo não encontrado.');
     const fields = await this.db.select<
-      Array<{ id: string; data_type: string }>
+      Array<{
+        id: string;
+        data_type: string;
+        field_key: string;
+        source_field_name: string;
+        allow_null: boolean;
+      }>
     >(
       'data_contract_fields',
-      `select=id,data_type&tenant_id=eq.${t}&data_contract_id=eq.${contracts[0].id}`,
+      `select=id,data_type,field_key,source_field_name,allow_null&tenant_id=eq.${t}&data_contract_id=eq.${contracts[0].id}`,
+    );
+    const configs = await this.db.select<
+      Array<{ sample_preview?: Record<string, unknown>[] }>
+    >(
+      'data_source_api_configs',
+      `select=sample_preview&tenant_id=eq.${t}&data_source_id=eq.${s}&limit=1`,
     );
     const map = new Map(fields.map((f) => [f.id, f]));
     for (const rule of body.rules ?? []) {
@@ -59,7 +71,12 @@ export class FieldParseRulesService {
           rule.date_format as (typeof DATE_FORMATS)[number],
         )
       )
-        throw new BadRequestException('Formato de data/hora não suportado.');
+        throw this.formatError(
+          rule,
+          field,
+          null,
+          'Formato de data/hora não suportado.',
+        );
       if (rule.timezone) {
         try {
           new Intl.DateTimeFormat('pt-BR', { timeZone: rule.timezone });
@@ -90,6 +107,25 @@ export class FieldParseRulesService {
         throw new BadRequestException(
           'Um valor booleano não pode representar verdadeiro e falso ao mesmo tempo.',
         );
+      const sample = (configs[0]?.sample_preview ?? [])
+        .map((row) => row[rule.source_field_name!])
+        .find((value) => value !== null && value !== undefined && value !== '');
+      if (
+        sample !== undefined &&
+        ['date', 'datetime', 'decimal', 'number', 'integer'].includes(
+          field.data_type,
+        ) &&
+        !parseFieldValue(sample, {
+          ...rule,
+          data_type: field.data_type,
+        } as ParseRule).ok
+      )
+        throw this.formatError(
+          rule,
+          field,
+          sample,
+          `O valor da amostra não é conversível para ${field.data_type} com o formato selecionado.`,
+        );
       await this.db.upsert(
         'data_source_field_parse_rules',
         {
@@ -116,5 +152,21 @@ export class FieldParseRulesService {
   }
   convert(value: unknown, rule: Rule) {
     return parseFieldValue(value, rule);
+  }
+  private formatError(
+    rule: Partial<Rule>,
+    field: { field_key: string; source_field_name: string },
+    sample: unknown,
+    reason: string,
+  ) {
+    return new BadRequestException({
+      message: reason,
+      field_key: field.field_key,
+      source_field_name: rule.source_field_name ?? field.source_field_name,
+      received_format: rule.date_format ?? null,
+      allowed_formats: DATE_FORMATS,
+      sample_value: sample ?? null,
+      motivo: reason,
+    });
   }
 }

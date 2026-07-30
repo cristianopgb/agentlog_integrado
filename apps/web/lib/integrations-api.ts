@@ -130,7 +130,7 @@ const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
     min_value: null,
     max_value: null,
     regex_pattern: null,
-    date_format: 'YYYY-MM-DD',
+    date_format: 'yyyy_mm_dd',
     sort_order: 50,
   },
   {
@@ -146,7 +146,7 @@ const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
     min_value: null,
     max_value: null,
     regex_pattern: null,
-    date_format: 'YYYY-MM-DD',
+    date_format: 'yyyy_mm_dd',
     sort_order: 60,
   },
   {
@@ -354,17 +354,6 @@ const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
       ['volume_pendente', 'decimal'],
       ['valor_pendente', 'decimal'],
       ['peso_pendente', 'decimal'],
-      ['shipper_id', 'text'],
-      ['shipper_name', 'text'],
-      ['carrier_id', 'text'],
-      ['carrier_name', 'text'],
-      ['service_taker_id', 'text'],
-      ['service_taker_name', 'text'],
-      ['scheduled_at', 'datetime'],
-      ['vehicle_profile', 'text'],
-      ['pending_volume_count', 'decimal'],
-      ['pending_total_value', 'decimal'],
-      ['pending_gross_weight', 'decimal'],
     ] as const
   ).map(([field_key, data_type], index) => ({
     field_key,
