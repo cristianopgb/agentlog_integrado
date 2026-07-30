@@ -8,6 +8,19 @@ export const DATE_FORMATS = [
 ] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
 
+const LEGACY_DATE_FORMATS: Record<string, DateFormat> = {
+  'YYYY-MM-DD': 'yyyy_mm_dd',
+  'YYYY-MM-DD HH:mm:ss': 'yyyy_mm_dd_hh_mm_ss',
+  'YYYY-MM-DDTHH:mm:ss': 'yyyy_mm_dd_t_hh_mm_ss',
+  'DD/MM/YYYY': 'dd_mm_yyyy',
+  'DD/MM/YYYY HH:mm:ss': 'dd_mm_yyyy_hh_mm_ss',
+};
+
+export function normalizeDateFormat(format: string | null | undefined) {
+  if (!format) return format ?? null;
+  return LEGACY_DATE_FORMATS[format] ?? format;
+}
+
 const DATE_PATTERNS: Record<Exclude<DateFormat, 'iso_auto'>, string> = {
   yyyy_mm_dd: 'YYYY-MM-DD',
   yyyy_mm_dd_hh_mm_ss: 'YYYY-MM-DD HH:mm:ss',
@@ -163,11 +176,11 @@ export function parseFieldValue(value: unknown, rule: ParseRule): ParseResult {
   const type = rule.data_type;
   if (type === 'date' || type === 'datetime') {
     if (typeof value !== 'string') return { ok: false, value };
-    if (!rule.date_format) return { ok: false, value, required: true };
-    if (rule.date_format === 'iso_auto')
+    const dateFormat = normalizeDateFormat(rule.date_format);
+    if (!dateFormat) return { ok: false, value, required: true };
+    if (dateFormat === 'iso_auto')
       return parseIsoAuto(value, rule.timezone ?? 'UTC', type);
-    const pattern =
-      DATE_PATTERNS[rule.date_format as keyof typeof DATE_PATTERNS];
+    const pattern = DATE_PATTERNS[dateFormat as keyof typeof DATE_PATTERNS];
     return pattern
       ? parseDate(value, pattern, rule.timezone ?? 'UTC', type)
       : { ok: false, value };

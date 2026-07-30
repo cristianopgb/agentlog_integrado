@@ -12,10 +12,24 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok)
+  if (!response.ok) {
+    const error = body as {
+      message?: string;
+      source_field_name?: string;
+      sample_value?: unknown;
+      received_format?: string | null;
+    };
+    const details = [
+      error.source_field_name && `campo: ${error.source_field_name}`,
+      error.sample_value !== undefined &&
+        `amostra: ${JSON.stringify(error.sample_value)}`,
+      error.received_format !== undefined &&
+        `formato recebido: ${error.received_format ?? 'não informado'}`,
+    ].filter(Boolean);
     throw new Error(
-      (body as { message?: string }).message ?? 'Falha na integração API.',
+      `${error.message ?? 'Falha na integração API.'}${details.length ? ` (${details.join('; ')})` : ''}`,
     );
+  }
   return body as T;
 }
 export type ApiConnectorConfig = {
@@ -183,6 +197,19 @@ export type FieldParseRule = {
   boolean_false_values: string[] | null;
   status?: string;
 };
+const legacyDateFormats: Record<string, string> = {
+  'YYYY-MM-DD': 'yyyy_mm_dd',
+  'YYYY-MM-DD HH:mm:ss': 'yyyy_mm_dd_hh_mm_ss',
+  'YYYY-MM-DDTHH:mm:ss': 'yyyy_mm_dd_t_hh_mm_ss',
+  'DD/MM/YYYY': 'dd_mm_yyyy',
+  'DD/MM/YYYY HH:mm:ss': 'dd_mm_yyyy_hh_mm_ss',
+};
+export const normalizeFieldParseRule = (rule: FieldParseRule) => ({
+  ...rule,
+  date_format: rule.date_format
+    ? (legacyDateFormats[rule.date_format] ?? rule.date_format)
+    : null,
+});
 export const listFieldParseRules = (t: string, s: string) =>
   call<FieldParseRule[]>(`${route(t, s)}/field-parse-rules`);
 export const saveFieldParseRules = (
