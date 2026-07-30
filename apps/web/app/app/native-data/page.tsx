@@ -326,6 +326,9 @@ export default function NativeDataPage() {
                       r.source_data_source_name ?? r.source_system,
                       'Origem não informada',
                     )}
+                    {['archived', 'inactive'].includes(String(r.source_data_source_status)) ? (
+                      <span className="mt-1 block"><StatusBadge tone="warning">Fonte arquivada</StatusBadge></span>
+                    ) : null}
                   </td>
                   <td className="p-3">
                     {r.is_current ? (

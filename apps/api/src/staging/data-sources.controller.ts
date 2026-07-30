@@ -29,6 +29,12 @@ export class DataSourceUploadsController {
     return this.service.archiveDataSource(tenantId, sourceId, req.user.id, body.status);
   }
 
+  @Patch(':sourceId/configuration')
+  @RequirePermission('integrations.manage')
+  configuration(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string, @Req() req: AuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    return this.service.configureDataSource(tenantId, sourceId, req.user.id, body);
+  }
+
   @Delete(':sourceId')
   @RequirePermission('integrations.manage')
   remove(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string) {

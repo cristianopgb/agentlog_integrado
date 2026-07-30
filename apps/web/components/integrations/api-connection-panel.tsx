@@ -21,6 +21,8 @@ import {
   type FieldParseRule,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
+import type { TenantModuleOption } from '../../lib/modules-api';
+import { updateIntegrationConnection } from '../../lib/integrations-api';
 import {
   listNormalizationErrors,
   processNormalization,
@@ -132,10 +134,14 @@ export function ApiConnectionPanel({
   tenantId,
   sourceId,
   fields,
+  modules,
+  source,
 }: {
   tenantId: string;
   sourceId: string;
   fields: DataContractField[];
+  modules: TenantModuleOption[];
+  source: { name: string; module_key: string; metadata?: Record<string, unknown> | null };
 }) {
   const [phase, setPhase] = useState<Phase>('connection');
   const [config, setConfig] = useState<ApiConnectorConfig | null>(null);
@@ -226,6 +232,15 @@ export function ApiConnectionPanel({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await act('save', async () => {
+      const moduleKeys = form.getAll('module_keys').map(String);
+      if (!moduleKeys.length)
+        throw new Error('Selecione ao menos um módulo alimentado pela integração.');
+      await updateIntegrationConnection(tenantId, sourceId, {
+        name: source.name,
+        source_type: 'api',
+        module_key: moduleKeys[0],
+        metadata: { ...(source.metadata ?? {}), module_keys: moduleKeys },
+      });
       await saveApiConfig(
         tenantId,
         sourceId,
@@ -476,6 +491,21 @@ export function ApiConnectionPanel({
             Somente GET. O segredo nunca é devolvido ao navegador.
           </p>
           <form onSubmit={save} className="mt-4 grid gap-3 md:grid-cols-2">
+            <fieldset className="text-sm font-semibold md:col-span-2">
+              <legend>Módulos que esta integração alimenta</legend>
+              <div className="mt-2 grid gap-2 rounded-xl border p-3 font-normal md:grid-cols-3">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" onChange={(event) => event.currentTarget.form?.querySelectorAll<HTMLInputElement>('input[name="module_keys"]').forEach((input) => { input.checked = event.currentTarget.checked; })} />
+                  Todos
+                </label>
+                {modules.map((module) => (
+                  <label key={module.key} className="flex items-center gap-2">
+                    <input name="module_keys" type="checkbox" value={module.key} defaultChecked={((source.metadata?.module_keys as string[] | undefined) ?? [source.module_key]).includes(module.key)} />
+                    {module.name}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             {[
               ['base_url', 'URL base', 'https://legado.exemplo.com'],
               ['endpoint_path', 'Endpoint', '/api/entregas'],
