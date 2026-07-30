@@ -28,6 +28,7 @@ type ApiMapping = {
   data_contract_field_id: string;
   data_contract_field: ContractField;
 };
+type ApiContract = { id: string; entity_key: string };
 type InsertedRecord = { id: string; row_number: number };
 type StagingErrorPreview = {
   id: string;
@@ -135,6 +136,22 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Cada campo nativo pode receber somente um campo da API.',
       );
+    if (contract.entity_key === 'deliveries') {
+      const deliveryNumber = fields.find(
+        (field) =>
+          field.field_key === 'numero_entrega' ||
+          field.field_key === 'delivery_number',
+      );
+      if (
+        !deliveryNumber ||
+        !requested.some(
+          (item) => item.data_contract_field_id === deliveryNumber.id,
+        )
+      )
+        throw new BadRequestException(
+          'Pareie um campo da API com numero_entrega antes de avançar. Esta é a chave operacional delivery_number de entregas.',
+        );
+    }
     await this.db.delete(
       'data_source_api_field_mappings',
       `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`,
@@ -921,9 +938,9 @@ export class ApiConnectorSyncService {
     return config;
   }
   private async contract(t: string, s: string) {
-    const rows = await this.db.select<Array<{ id: string }>>(
+    const rows = await this.db.select<ApiContract[]>(
       'data_contracts',
-      `select=id&tenant_id=eq.${t}&data_source_id=eq.${s}&status=eq.active&order=contract_version.desc&limit=1`,
+      `select=id,entity_key&tenant_id=eq.${t}&data_source_id=eq.${s}&status=eq.active&order=contract_version.desc&limit=1`,
     );
     if (!rows[0])
       throw new BadRequestException('Contrato nativo ativo não encontrado.');
