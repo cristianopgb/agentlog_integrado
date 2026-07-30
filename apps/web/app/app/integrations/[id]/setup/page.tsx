@@ -791,7 +791,7 @@ export default function IntegrationSetupPage() {
       <div className="page-stack app-page max-w-[96rem]">
         <SectionHeader eyebrow="Integração API" title={titleType} description="Configure a leitura, confirme a amostra e pareie cada campo recebido com o contrato nativo." />
         {msg ? <EmptyState title="Setup" description={msg} /> : null}
-        <ApiConnectionPanel tenantId={tenantId} sourceId={source.id} fields={fields} />
+        <ApiConnectionPanel tenantId={tenantId} sourceId={source.id} fields={fields} modules={tenantModules} source={source} />
       </div>
     );
   }

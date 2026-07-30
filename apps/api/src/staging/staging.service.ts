@@ -144,7 +144,74 @@ export class StagingService {
     if (!['archived','inactive'].includes(String(status))) throw new BadRequestException('Status de arquivamento inválido.');
     await this.ensureExists('data_sources', tenantId, sourceId, 'Integração não encontrada para este tenant.');
     const rows = await this.supabase.update<Record<string, unknown>[]>('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, { status: String(status), updated_by: userId });
+    await this.supabase.update(
+      'operation_records',
+      `tenant_id=eq.${tenantId}&source_data_source_id=eq.${sourceId}&deleted_at=is.null&is_current=eq.true`,
+      {
+        is_current: false,
+        canonical_validity_status: 'superseded',
+        superseded_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    );
     return { ...(rows[0] ?? {}), message: 'Esta integração possui histórico vinculado e foi arquivada para preservar a rastreabilidade.' };
+  }
+
+  async configureDataSource(tenantId: string, sourceId: string, userId: string, body: Record<string, unknown>) {
+    const moduleKeys = [...new Set((Array.isArray(body.module_keys) ? body.module_keys : []).map(String).filter(Boolean))];
+    if (!moduleKeys.length) throw new BadRequestException('Selecione ao menos um módulo alimentado pela integração.');
+    const sources = await this.supabase.select<Array<{ id: string; metadata: Record<string, unknown> | null; source_type: string; status: string }>>(
+      'data_sources',
+      `select=id,metadata,source_type,status&tenant_id=eq.${tenantId}&id=eq.${sourceId}&limit=1`,
+    );
+    if (!sources[0]) throw new NotFoundException('Integração não encontrada para este tenant.');
+    const tenantModuleRows = await this.supabase.select<Array<{ module_id: string }>>(
+      'tenant_modules',
+      `select=module_id&tenant_id=eq.${tenantId}&is_active=eq.true`,
+    );
+    const enabledModules = tenantModuleRows.length
+      ? await this.supabase.select<Array<{ key: string }>>(
+          'modules',
+          `select=key&id=in.(${tenantModuleRows.map((row) => `"${row.module_id}"`).join(',')})&is_active=eq.true`,
+        )
+      : [];
+    const enabledModuleKeys = new Set(enabledModules.map((module) => module.key));
+    const invalidModuleKeys = moduleKeys.filter((moduleKey) => !enabledModuleKeys.has(moduleKey));
+    if (invalidModuleKeys.length)
+      throw new BadRequestException(`Módulo inválido ou não habilitado para este tenant: ${invalidModuleKeys.join(', ')}.`);
+    const contracts = await this.supabase.select<Array<{ entity_key: string }>>(
+      'data_contracts',
+      `select=entity_key&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=eq.active`,
+    );
+    const entityKeys = [...new Set(contracts.map((contract) => contract.entity_key))];
+    const nextStatus = sources[0].source_type === 'api' ? 'configuring' : 'active';
+    if (nextStatus === 'active' && entityKeys.length) {
+      const otherModules = await this.supabase.select<Array<{ data_source_id: string; module_key: string }>>(
+        'data_source_modules',
+        `select=data_source_id,module_key&tenant_id=eq.${tenantId}&module_key=in.(${moduleKeys.map((key) => `"${key}"`).join(',')})&data_source_id=neq.${sourceId}`,
+      );
+      for (const other of otherModules) {
+        const activeSources = await this.supabase.select<Array<{ id: string }>>(
+          'data_sources',
+          `select=id&tenant_id=eq.${tenantId}&id=eq.${other.data_source_id}&status=eq.active&limit=1`,
+        );
+        if (!activeSources.length) continue;
+        const conflicts = await this.supabase.select<Array<{ id: string }>>(
+          'data_contracts',
+          `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${other.data_source_id}&entity_key=in.(${entityKeys.map((key) => `"${key}"`).join(',')})&status=eq.active&limit=1`,
+        );
+        if (conflicts.length)
+          throw new BadRequestException('Já existe uma integração ativa para este módulo. Arquive a fonte atual antes de ativar outra.');
+      }
+    }
+    await this.supabase.delete('data_source_modules', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`);
+    await this.supabase.insert('data_source_modules', moduleKeys.map((moduleKey) => ({ tenant_id: tenantId, data_source_id: sourceId, module_key: moduleKey })) as unknown as Record<string, unknown>);
+    const metadata = { ...(sources[0].metadata ?? {}), ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {}), module_keys: moduleKeys };
+    const rows = await this.supabase.update<Record<string, unknown>[]>('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, {
+      name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined,
+      module_key: moduleKeys[0], metadata, status: nextStatus, updated_by: userId,
+    });
+    return rows[0];
   }
   async deleteDataSourceIfUnused(tenantId: string, sourceId: string) {
     const batches = await this.supabase.select<unknown[]>('staging_batches', `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&limit=1`);

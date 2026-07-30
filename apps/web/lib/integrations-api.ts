@@ -526,18 +526,15 @@ export async function updateIntegrationConnection(
     metadata: Record<string, unknown>;
   },
 ) {
-  const { error } = await createBrowserSupabaseClient()
-    .from('data_sources')
-    .update({
+  return api(`/tenants/${tenantId}/data-sources/${sourceId}/configuration`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       name: input.name,
-      source_type: input.source_type,
-      module_key: input.module_key,
-      status: 'active',
+      module_keys: input.metadata.module_keys ?? [input.module_key],
       metadata: input.metadata,
-    })
-    .eq('tenant_id', tenantId)
-    .eq('id', sourceId);
-  if (error) throw error;
+    }),
+  });
 }
 
 export async function getPrimaryContractForSource(

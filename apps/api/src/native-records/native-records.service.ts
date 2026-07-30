@@ -34,15 +34,15 @@ export class NativeRecordsService {
     const limit = Math.min(Math.max(Number(query.limit) || 25, 1), 100);
     const offset = Math.max(Number(query.offset) || 0, 0);
     const includeArchived = query.include_archived === 'true';
-    let sourceIds = includeArchived ? [] : await this.activeSourceIds(tenantId);
+    let sourceIds = includeArchived
+      ? await this.operationalAndArchivedSourceIds(tenantId)
+      : await this.activeSourceIds(tenantId);
     if (query.source_type) {
       const typed = await this.sourceIdsByType(tenantId, query.source_type);
-      sourceIds = includeArchived
-        ? typed
-        : sourceIds.filter((id) => typed.includes(id));
+      sourceIds = sourceIds.filter((id) => typed.includes(id));
       if (!sourceIds.length) return this.emptyList(limit, offset);
     }
-    if (!includeArchived && !sourceIds.length)
+    if (!sourceIds.length)
       return this.emptyList(limit, offset);
     const filters = this.recordFilters(
       tenantId,
@@ -79,6 +79,7 @@ export class NativeRecordsService {
           ...clean(row),
           source_data_source_name: source?.name ?? null,
           source_data_source_type: source?.source_type ?? null,
+          source_data_source_status: source?.status ?? null,
           publication_reason: row.is_current
             ? null
             : row.canonical_validity_status === 'incomplete'
@@ -92,7 +93,9 @@ export class NativeRecordsService {
   }
 
   async filters(tenantId: string, includeArchived = false) {
-    const sourceStatus = includeArchived ? '' : '&status=eq.active';
+    const sourceStatus = includeArchived
+      ? '&status=in.(active,archived,inactive)'
+      : '&status=eq.active';
     const sources = await this.supabase.select<
       Array<{
         id: string;
@@ -201,7 +204,7 @@ export class NativeRecordsService {
     select: string,
   ) {
     const filters = [select, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null'];
-    if (query.include_inactive !== 'true')
+    if (query.include_archived !== 'true' && query.include_inactive !== 'true')
       filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
     if (sourceIds.length)
       filters.push(
@@ -253,6 +256,13 @@ export class NativeRecordsService {
     );
     return rows.map((r) => r.id);
   }
+  private async operationalAndArchivedSourceIds(tenantId: string) {
+    const rows = await this.supabase.select<Array<{ id: string }>>(
+      'data_sources',
+      `select=id&tenant_id=eq.${tenantId}&status=in.(active,archived,inactive)&limit=10000`,
+    );
+    return rows.map((row) => row.id);
+  }
   private async sourceIdsByType(tenantId: string, sourceType: string) {
     const filter =
       sourceType === 'spreadsheet'
@@ -266,13 +276,13 @@ export class NativeRecordsService {
   }
   private async sourcesById(tenantId: string, sourceIds: string[]) {
     if (!sourceIds.length)
-      return new Map<string, { name: string; source_type: string }>();
+      return new Map<string, { name: string; source_type: string; status: string }>();
     const ids = sourceIds.map((id) => `"${id}"`).join(',');
     const rows = await this.supabase.select<
-      Array<{ id: string; name: string | null; source_type: string }>
+      Array<{ id: string; name: string | null; source_type: string; status: string }>
     >(
       'data_sources',
-      `select=id,name,source_type&tenant_id=eq.${tenantId}&id=in.(${ids})`,
+      `select=id,name,source_type,status&tenant_id=eq.${tenantId}&id=in.(${ids})`,
     );
     return new Map(
       rows.map((row) => [
@@ -280,6 +290,7 @@ export class NativeRecordsService {
         {
           name: row.name ?? 'Origem não informada',
           source_type: row.source_type,
+          status: row.status,
         },
       ]),
     );

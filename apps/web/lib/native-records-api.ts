@@ -32,6 +32,7 @@ export type NativeRecord = Record<string, string | number | boolean | null> & {
   data_quality_status: string | null;
   source_data_source_name?: string | null;
   source_data_source_type?: string | null;
+  source_data_source_status?: string | null;
   publication_reason?: string | null;
 };
 export type NativeRecordFilterSource = {
