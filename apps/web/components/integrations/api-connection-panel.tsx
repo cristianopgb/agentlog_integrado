@@ -291,6 +291,14 @@ export function ApiConnectionPanel({
   const missingRequired = fields.filter(
     (field) => field.is_required && !Object.values(draft).includes(field.id),
   );
+  const deliveryOperationalField = fields.find(
+    (field) =>
+      field.field_key === 'numero_entrega' ||
+      field.field_key === 'delivery_number',
+  );
+  const missingDeliveryOperationalKey =
+    Boolean(deliveryOperationalField) &&
+    !Object.values(draft).includes(deliveryOperationalField!.id);
   const confirmMappings = () =>
     act('mapping', async () => {
       await saveApiFieldMappings(
@@ -433,6 +441,40 @@ export function ApiConnectionPanel({
         `Lote API revalidado com as regras atuais: ${response.accepted_count} aceitos e ${response.rejected_count} rejeitados.`,
       );
     });
+  const revalidateAndProcess = async (batchId: string) => {
+    setProcessing(true);
+    setMsg('');
+    setProcessingErrors([]);
+    try {
+      const validation = await revalidateApiBatch(tenantId, sourceId, batchId);
+      if (validation.accepted_count === 0) {
+        setMessageTone('error');
+        setMsg(
+          `O lote foi revalidado, mas nenhum registro está apto ao processamento (${validation.rejected_count} rejeitados).`,
+        );
+        await load();
+        return;
+      }
+      const run = await processNormalization(tenantId, batchId);
+      const errors =
+        run.status === 'completed'
+          ? []
+          : await listNormalizationErrors(tenantId, run.id);
+      setProcessingErrors(errors.slice(0, 5));
+      setMessageTone(run.status === 'completed' ? 'success' : 'error');
+      setMsg(
+        run.status === 'completed'
+          ? `Lote revalidado e reprocessado com as regras atuais: ${validation.accepted_count} aceitos · ${run.created_count} criados · ${run.updated_count} atualizados.`
+          : `O lote foi revalidado, mas o reprocessamento terminou com ${run.error_count} erro(s).`,
+      );
+      await load();
+    } catch (error) {
+      setMessageTone('error');
+      setMsg((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
   const sampleValue = (source: string) =>
     sampleRows.find((row) => Object.hasOwn(row, source))?.[source];
   return (
@@ -779,11 +821,21 @@ export function ApiConnectionPanel({
                 Corrija os pareamentos duplicados antes de confirmar.
               </p>
             ) : null}
+            {missingDeliveryOperationalKey ? (
+              <p className="mt-3 text-sm font-semibold text-rose-700">
+                Pareie um campo da API com numero_entrega antes de avançar. Esta
+                é a chave operacional delivery_number de entregas.
+              </p>
+            ) : null}
             <div className="mt-4">
               <ActionButton
                 action="mapping"
                 busy={busy}
-                disabled={!detected.length || duplicates.size > 0}
+                disabled={
+                  !detected.length ||
+                  duplicates.size > 0 ||
+                  missingDeliveryOperationalKey
+                }
                 onClick={confirmMappings}
               />
             </div>
@@ -1208,6 +1260,31 @@ export function ApiConnectionPanel({
                     {run.published_current_count} publicados ·{' '}
                     {run.not_published_count} não publicados
                   </p>
+                ) : null}
+                {run.latest_normalization_status === 'completed' &&
+                run.accepted_count > 0 &&
+                run.not_published_count > 0 &&
+                run.published_current_count === 0 ? (
+                  <>
+                    <p className="mt-2 font-semibold text-amber-800">
+                      Os registros foram tratados antes da correção do
+                      pareamento. Revalide e reprocesse com as regras atuais.
+                    </p>
+                    {run.staging_batch_id ? (
+                      <button
+                        type="button"
+                        disabled={processing || busy !== null}
+                        onClick={() =>
+                          revalidateAndProcess(run.staging_batch_id!)
+                        }
+                        className="mt-3 mr-2 rounded-xl bg-amber-600 px-4 py-2 font-semibold text-white disabled:bg-slate-300"
+                      >
+                        {processing
+                          ? 'Revalidando e reprocessando...'
+                          : 'Revalidar e reprocessar com regras atuais'}
+                      </button>
+                    ) : null}
+                  </>
                 ) : null}
                 {run.needs_revalidation && run.staging_batch_id ? (
                   <button
