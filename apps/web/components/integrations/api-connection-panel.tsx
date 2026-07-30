@@ -61,19 +61,13 @@ const buttonText: Record<Exclude<Action, null>, [string, string]> = {
   revalidate: ['Revalidar com regras atuais', 'Revalidando...'],
 };
 const dateFormats = [
-  'YYYY-MM-DD',
-  'YYYY-MM-DD HH:mm',
-  'YYYY-MM-DD HH:mm:ss',
-  'YYYY-MM-DD HH:mm:ss.SSS',
-  'YYYY-MM-DDTHH:mm:ss',
-  'YYYY-MM-DDTHH:mm:ss.SSSZ',
-  'DD/MM/YYYY',
-  'DD/MM/YYYY HH:mm',
-  'DD/MM/YYYY HH:mm:ss',
-  'MM/DD/YYYY',
-  'MM/DD/YYYY HH:mm',
-  'MM/DD/YYYY HH:mm:ss',
-];
+  ['iso_auto', 'ISO automático'],
+  ['yyyy_mm_dd', 'AAAA-MM-DD'],
+  ['yyyy_mm_dd_hh_mm_ss', 'AAAA-MM-DD HH:mm:ss'],
+  ['yyyy_mm_dd_t_hh_mm_ss', 'AAAA-MM-DDTHH:mm:ss'],
+  ['dd_mm_yyyy', 'DD/MM/AAAA'],
+  ['dd_mm_yyyy_hh_mm_ss', 'DD/MM/AAAA HH:mm:ss'],
+] as const;
 function valuePreview(value: unknown) {
   if (value == null) return 'Sem valor na amostra';
   return typeof value === 'object'
@@ -141,7 +135,11 @@ export function ApiConnectionPanel({
   sourceId: string;
   fields: DataContractField[];
   modules: TenantModuleOption[];
-  source: { name: string; module_key: string; metadata?: Record<string, unknown> | null };
+  source: {
+    name: string;
+    module_key: string;
+    metadata?: Record<string, unknown> | null;
+  };
 }) {
   const [phase, setPhase] = useState<Phase>('connection');
   const [config, setConfig] = useState<ApiConnectorConfig | null>(null);
@@ -234,7 +232,9 @@ export function ApiConnectionPanel({
     await act('save', async () => {
       const moduleKeys = form.getAll('module_keys').map(String);
       if (!moduleKeys.length)
-        throw new Error('Selecione ao menos um módulo alimentado pela integração.');
+        throw new Error(
+          'Selecione ao menos um módulo alimentado pela integração.',
+        );
       await updateIntegrationConnection(tenantId, sourceId, {
         name: source.name,
         source_type: 'api',
@@ -495,12 +495,31 @@ export function ApiConnectionPanel({
               <legend>Módulos que esta integração alimenta</legend>
               <div className="mt-2 grid gap-2 rounded-xl border p-3 font-normal md:grid-cols-3">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" onChange={(event) => event.currentTarget.form?.querySelectorAll<HTMLInputElement>('input[name="module_keys"]').forEach((input) => { input.checked = event.currentTarget.checked; })} />
+                  <input
+                    type="checkbox"
+                    onChange={(event) =>
+                      event.currentTarget.form
+                        ?.querySelectorAll<HTMLInputElement>(
+                          'input[name="module_keys"]',
+                        )
+                        .forEach((input) => {
+                          input.checked = event.currentTarget.checked;
+                        })
+                    }
+                  />
                   Todos
                 </label>
                 {modules.map((module) => (
                   <label key={module.key} className="flex items-center gap-2">
-                    <input name="module_keys" type="checkbox" value={module.key} defaultChecked={((source.metadata?.module_keys as string[] | undefined) ?? [source.module_key]).includes(module.key)} />
+                    <input
+                      name="module_keys"
+                      type="checkbox"
+                      value={module.key}
+                      defaultChecked={(
+                        (source.metadata?.module_keys as
+                          string[] | undefined) ?? [source.module_key]
+                      ).includes(module.key)}
+                    />
                     {module.name}
                   </label>
                 ))}
@@ -970,9 +989,11 @@ export function ApiConnectionPanel({
                           }
                           className="mt-1 w-full rounded-xl border p-2 text-sm"
                         >
-                          <option value="">Somente ISO automático</option>
-                          {dateFormats.map((format) => (
-                            <option key={format}>{format}</option>
+                          <option value="">Selecione</option>
+                          {dateFormats.map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
                           ))}
                         </select>
                       </label>
@@ -1063,19 +1084,23 @@ export function ApiConnectionPanel({
                   <div>
                     <span className="text-xs text-slate-500">Preview</span>
                     <p className="break-all text-sm">
-                      {automatic && sample
-                        ? new Date(
-                            String(sample).length === 10
-                              ? `${sample}T00:00:00Z`
-                              : String(sample),
-                          ).toISOString()
-                        : jsonNumberWithTextSeparators
-                          ? String(sample)
-                          : numeric
-                            ? String(numeric.converted)
-                            : rule
-                              ? 'Formato configurado; amostra não convertível'
-                              : 'Configure o formato'}
+                      {sample == null || sample === ''
+                        ? field.allow_null
+                          ? 'Sem valor na amostra'
+                          : 'Aguardando amostra'
+                        : automatic && sample
+                          ? new Date(
+                              String(sample).length === 10
+                                ? `${sample}T00:00:00Z`
+                                : String(sample),
+                            ).toISOString()
+                          : jsonNumberWithTextSeparators
+                            ? String(sample)
+                            : numeric
+                              ? String(numeric.converted)
+                              : rule
+                                ? 'Formato configurado; amostra não convertível'
+                                : 'Configure o formato'}
                     </p>
                     {numeric?.suspicious ? (
                       <p className="mt-2 text-xs font-semibold text-amber-700">

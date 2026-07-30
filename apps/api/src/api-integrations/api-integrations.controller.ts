@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   Param,
+  Patch,
   Post,
   Put,
   Req,
@@ -110,6 +111,26 @@ export class ApiIntegrationsController {
   @Put('field-parse-rules')
   @RequirePermission('integrations.field_formats.manage')
   saveFieldFormats(
+    @Param('tenantId') t: string,
+    @Param('sourceId') s: string,
+    @Req() req: AuthenticatedRequest,
+    @Body() body: { rules?: Array<Record<string, unknown>> },
+  ) {
+    return this.formats.save(t, s, req.user.id, body as never);
+  }
+  @Post('field-parse-rules')
+  @RequirePermission('integrations.field_formats.manage')
+  createFieldFormats(
+    @Param('tenantId') t: string,
+    @Param('sourceId') s: string,
+    @Req() req: AuthenticatedRequest,
+    @Body() body: { rules?: Array<Record<string, unknown>> },
+  ) {
+    return this.formats.save(t, s, req.user.id, body as never);
+  }
+  @Patch('field-parse-rules')
+  @RequirePermission('integrations.field_formats.manage')
+  patchFieldFormats(
     @Param('tenantId') t: string,
     @Param('sourceId') s: string,
     @Req() req: AuthenticatedRequest,

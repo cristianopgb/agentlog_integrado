@@ -1,17 +1,20 @@
 export const DATE_FORMATS = [
-  'YYYY-MM-DD',
-  'YYYY-MM-DD HH:mm',
-  'YYYY-MM-DD HH:mm:ss',
-  'YYYY-MM-DD HH:mm:ss.SSS',
-  'YYYY-MM-DDTHH:mm:ss',
-  'YYYY-MM-DDTHH:mm:ss.SSSZ',
-  'DD/MM/YYYY',
-  'DD/MM/YYYY HH:mm',
-  'DD/MM/YYYY HH:mm:ss',
-  'MM/DD/YYYY',
-  'MM/DD/YYYY HH:mm',
-  'MM/DD/YYYY HH:mm:ss',
+  'iso_auto',
+  'yyyy_mm_dd',
+  'yyyy_mm_dd_hh_mm_ss',
+  'yyyy_mm_dd_t_hh_mm_ss',
+  'dd_mm_yyyy',
+  'dd_mm_yyyy_hh_mm_ss',
 ] as const;
+export type DateFormat = (typeof DATE_FORMATS)[number];
+
+const DATE_PATTERNS: Record<Exclude<DateFormat, 'iso_auto'>, string> = {
+  yyyy_mm_dd: 'YYYY-MM-DD',
+  yyyy_mm_dd_hh_mm_ss: 'YYYY-MM-DD HH:mm:ss',
+  yyyy_mm_dd_t_hh_mm_ss: 'YYYY-MM-DDTHH:mm:ss',
+  dd_mm_yyyy: 'DD/MM/YYYY',
+  dd_mm_yyyy_hh_mm_ss: 'DD/MM/YYYY HH:mm:ss',
+};
 export type ParseRule = {
   data_type: string;
   date_format: string | null;
@@ -129,20 +132,45 @@ function parseDate(
   const iso = zonedIso(y, m, d, h, min, s, ms, timezone);
   return { ok: Boolean(iso), value: iso ?? value };
 }
+function parseIsoAuto(value: string, timezone: string, type: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return parseDate(value, 'YYYY-MM-DD', timezone, type);
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value))
+    return parseDate(value, 'YYYY-MM-DD HH:mm:ss', timezone, type);
+  if (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:?\d{2})?$/.test(
+      value,
+    )
+  ) {
+    if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(value)) {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime()))
+        return {
+          ok: true,
+          value: type === 'date' ? value.slice(0, 10) : parsed.toISOString(),
+        };
+    }
+    return parseDate(
+      value,
+      value.includes('.') ? 'YYYY-MM-DDTHH:mm:ss.SSS' : 'YYYY-MM-DDTHH:mm:ss',
+      timezone,
+      type,
+    );
+  }
+  return { ok: false, value };
+}
 export function parseFieldValue(value: unknown, rule: ParseRule): ParseResult {
   const type = rule.data_type;
   if (type === 'date' || type === 'datetime') {
     if (typeof value !== 'string') return { ok: false, value };
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value))
-      return parseDate(value, 'YYYY-MM-DD', rule.timezone ?? 'UTC', type);
-    if (/^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value)))
-      return {
-        ok: true,
-        value:
-          type === 'date' ? value.slice(0, 10) : new Date(value).toISOString(),
-      };
     if (!rule.date_format) return { ok: false, value, required: true };
-    return parseDate(value, rule.date_format, rule.timezone ?? 'UTC', type);
+    if (rule.date_format === 'iso_auto')
+      return parseIsoAuto(value, rule.timezone ?? 'UTC', type);
+    const pattern =
+      DATE_PATTERNS[rule.date_format as keyof typeof DATE_PATTERNS];
+    return pattern
+      ? parseDate(value, pattern, rule.timezone ?? 'UTC', type)
+      : { ok: false, value };
   }
   if (['decimal', 'number', 'integer'].includes(type)) {
     if (typeof value === 'number')
