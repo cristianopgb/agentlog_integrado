@@ -17,7 +17,7 @@ export const GENERAL_CHAT_FUNCTION_TO_KEY:Record<string,GeneralChatToolKey>={
 
 export const GENERAL_CHAT_FUNCTION_NAMES=Object.keys(GENERAL_CHAT_FUNCTION_TO_KEY);
 
-export function isOperationalMessage(message:string){return /\b(opera[cç][aã]o|dashboard|relat[oó]rio|entregas?|status|frete|cliente|motorista|ve[ií]culo|placa|atraso|indicadores?|resumo|melhoria|performance|sla|dados tratados|registros?|cte|nota|manifesto)\b/i.test(message);}
+export function isOperationalMessage(message:string){return /\b(opera[cç][aã]o|dashboard|relat[oó]rio|entregas?|status|frete|cliente|motorista|ve[ií]culo|placa|atraso|atraso\s+m[eé]dio|indicadores?|resumo|vis[aã]o\s+geral|geral\s+do\s+per[ií]odo\s+total|desde\s+o\s+in[ií]cio|melhoria|performance|sla|otif|transitime|transit\s+time|tempo\s+(?:m[eé]dio\s+de\s+entrega|de\s+tr[aâ]nsito)|prazo|lead\s+time|dados tratados|registros?|cte|nota|manifesto)\b/i.test(message);}
 
 const period={type:'object',properties:{preset:{type:'string',enum:['today','current_week','current_month','previous_month','custom']},start:{type:'string'},end:{type:'string'}},additionalProperties:false};
 const filters={type:'object',properties:{delivery_number:{type:'string'},cte_number:{type:'string'},invoice_number:{type:'string'},manifest_number:{type:'string'},customer_name:{type:'string'},shipper_name:{type:'string'},driver_name:{type:'string'},vehicle_plate:{type:'string'},status:{type:'string'},origin_state:{type:'string'},origin_city:{type:'string'},destination_state:{type:'string'},destination_city:{type:'string'}},additionalProperties:false};
@@ -33,7 +33,7 @@ export function generalChatToolDefinitions(){return [
   fn('indicators_list_available','Lista indicadores nativos e personalizados disponíveis para o tenant.',{}),
   fn('indicators_get_result','Consulta o resultado oficial de um indicador disponível.',{id:{type:'string'},name:{type:'string'} }),
   fn('dashboard_get_snapshot','Consulta widgets e valores reais do dashboard publicado informado ou mais recente.',{dashboard_id:{type:'string'}}),
-  fn('reports_get_job_snapshot','Consulta o snapshot determinístico do job informado ou relatório concluído mais recente.',{report_job_id:{type:'string'}}),
+  fn('reports_get_job_snapshot','Consulta o snapshot determinístico por job, relatório, nome ou o concluído mais recente.',{report_job_id:{type:'string'},report_id:{type:'string'},report_name:{type:'string'}}),
   fn('treated_data_summary_get','Retorna resumo seguro dos registros canônicos vigentes.',{}),
   fn('treated_data_aggregate_records','Executa agregação permitida sobre registros canônicos vigentes.',{metric:{type:'string',enum:['deliveries_count','occurrences_count','cte_count','sum_freight','sum_weight','volume_count','avg_freight_informed']},group_by:{type:'string',enum:['driver_name','customer_name','shipper_name','status','origin_city','origin_state','destination_city','destination_state','origin','destination','route','none']},filters},['metric']),
   fn('treated_data_search_records','Busca limitada de registros canônicos vigentes.',{identifier:{type:'string'},filters,limit:{type:'integer',minimum:1,maximum:10}}),
