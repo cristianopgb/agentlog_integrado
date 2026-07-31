@@ -5,6 +5,27 @@ import { ChatService } from './chat.service';
 import { AgentToolExecutorService } from './agent-tool-executor.service';
 
 async function main(){
+  const hotfixCalls:Array<{key:string;input:any}>=[];
+  const hotfixTools:any={execute:async(_tenant:string,key:string,input:any)=>{hotfixCalls.push({key,input});if(key==='indicators.list_available')return{indicators:[{id:'transitime',name:'Transitime médio',type:'native'}]};if(key==='indicators.get_result')return{found:true,total:18,indicator:{name:'Transitime médio'}};if(key==='treated_data.aggregate_records')return{rows:[{label:'São Paulo',value:input.metric==='deliveries_count'?10:100}],metric:input.metric,group_by:input.group_by};return{found:true,context_type:input.context_type,totals:{deliveries_total:10},deliveries_by_status:[{label:'delivered',value:8}],financial:{freight_total:1000,freight_average:100},weight:{gross_weight_total_kg:500},volume:{volume_total:20}};}};
+  const hotfixDb:any={select:async(table:string)=>table==='ai_tools'?[{id:'tool'}]:[{id:'enabled'}],insert:async()=>[],update:async()=>[]};
+  const hotfixChat:any=new ChatService(hotfixDb,{} as any,hotfixTools,{} as any),hotfixAgent={id:'agent'};
+  const driver='qual a performance do motorista Rafael de Souza Martins';
+  assert.equal(hotfixChat.broadAnalysis(driver,{},null),'driver');
+  const driverPack=await hotfixChat.buildOperationalAnalysisPack('tenant','run',hotfixAgent,driver,{},null,'driver');
+  assert.equal(driverPack.ambiguity,null);assert.ok(driverPack.detected_metrics.includes('frete_total'));assert.ok(driverPack.detected_metrics.includes('peso_total'));assert.ok(driverPack.detected_metrics.includes('volume_total'));assert.ok(driverPack.detected_metrics.includes('entregas_por_status'));assert.equal(hotfixCalls.at(-1)?.input.context_value,'Rafael De Souza Martins');
+  const customer='me fale sobre o cliente Materiais de Construcao Planalto Ltda';
+  assert.equal(hotfixChat.broadAnalysis(customer,{},null),'customer');
+  const customerPack=await hotfixChat.buildOperationalAnalysisPack('tenant','run',hotfixAgent,customer,{},null,'customer');
+  assert.equal(customerPack.ambiguity,null);assert.ok(customerPack.detected_metrics.includes('motoristas'));assert.ok(customerPack.detected_metrics.includes('recomendacoes'));assert.equal(hotfixCalls.at(-1)?.input.context_value,'Materiais De Construcao Planalto Ltda');
+  const compound='entrega por cidade, qnt, peso e frete';assert.equal(hotfixChat.broadAnalysis(compound,{},null),'city_compound');
+  await hotfixChat.buildOperationalAnalysisPack('tenant','run',hotfixAgent,'cidade destino periodo toda a base',{}, {question:compound,resolved_entities:{filters:{driver_name:'Motorista Antigo'}}},'city_compound');
+  const compoundCalls=hotfixCalls.filter(call=>call.key==='treated_data.aggregate_records');assert.deepEqual(compoundCalls.slice(-3).map(call=>call.input.metric),['deliveries_count','sum_weight','sum_freight']);assert.ok(compoundCalls.slice(-3).every(call=>call.input.group_by==='destination_city'&&Object.keys(call.input.filters).length===0));
+  assert.equal(hotfixChat.broadAnalysis('sim..já te falei',{}, {question:compound}),'city_compound');
+  assert.equal(hotfixChat.broadAnalysis('qual o transitime médio do período',{page:'dashboard'},null),'transitime');
+  const transitimePack=await hotfixChat.buildOperationalAnalysisPack('tenant','run',hotfixAgent,'qual o transitime médio do período',{page:'dashboard',dashboard_id:'dash'},null,'transitime');assert.equal(transitimePack.ambiguity,null);assert.ok(transitimePack.detected_metrics.includes('transitime_medio'));assert.ok(hotfixCalls.some(call=>call.key==='dashboard.get_snapshot'));assert.ok(hotfixCalls.some(call=>call.key==='indicators.get_result'));
+  assert.equal(hotfixChat.broadAnalysis('como está minha operação?',{},null),'operation');
+  const operationPack=await hotfixChat.buildOperationalAnalysisPack('tenant','run',hotfixAgent,'como está minha operação?',{},null,'operation');assert.equal(operationPack.ambiguity,null);assert.ok(operationPack.detected_metrics.includes('total_entregas'));assert.ok(operationPack.evidence.length>0);
+
   const executed:string[]=[],logged:string[]=[],inputs:any[]=[];
   const gateway:any={generalChatToolCall:async()=>({calls:[],response_id:'selection',tool_choice:'auto'}),generalChatToolFinal:async()=>({answer:'Resposta baseada em evidência controlada.',model_provider:'system',llm_final_called:true})};
   const tools:any={execute:async(_tenant:string,key:string,input:any)=>{executed.push(key);inputs.push(input);return key==='treated_data.summary.get'?{found:true,record_count:60}:{found:true,tool_key:key};}};
