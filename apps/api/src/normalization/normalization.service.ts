@@ -1258,11 +1258,16 @@ export class NormalizationService {
       `select=data_source_id&tenant_id=eq.${tenantId}&module_key=eq.${encodeURIComponent(moduleKey)}&data_source_id=neq.${sourceId}`,
     );
     for (const candidate of modules) {
-      const conflicts = await this.supabase.select<Array<{ id: string }>>(
+      const activeSources = await this.supabase.select<Array<{ id: string }>>(
         'data_sources',
-        `select=id,data_contracts!inner(id)&tenant_id=eq.${tenantId}&id=eq.${candidate.data_source_id}&status=eq.active&data_contracts.entity_key=eq.${encodeURIComponent(entityKey)}&data_contracts.status=eq.active&limit=1`,
+        `select=id&tenant_id=eq.${tenantId}&id=eq.${candidate.data_source_id}&status=eq.active&limit=1`,
       );
-      if (conflicts.length)
+      if (!activeSources.length) continue;
+      const activeContracts = await this.supabase.select<Array<{ id: string }>>(
+        'data_contracts',
+        `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${candidate.data_source_id}&entity_key=eq.${encodeURIComponent(entityKey)}&status=eq.active&limit=1`,
+      );
+      if (activeContracts.length)
         throw new BadRequestException(
           'Já existe uma fonte ativa para este módulo e entidade operacional. Arquive-a antes de ativar esta integração.',
         );
