@@ -9,6 +9,7 @@ import { isOperationalMessage } from './general-chat-tool-contracts';
 
 type Evidence={source_type:string;source_name:string;source_id:string;confidence:number;reason:string;data:unknown};
 type Pack={question:string;normalized_question:string;detected_terms:string[];detected_entities:Record<string,unknown>;detected_metrics:string[];detected_dimensions:string[];evidence:Evidence[];ambiguity:string|null;allowed_calculations:string[];denied_calculations:string[]};
+type BroadAnalysis='driver'|'customer'|'vehicle'|'operation'|'city_compound'|'dashboard'|'report'|'transitime';
 const GENERAL_FALLBACK='Não encontrei evidência oficial suficiente para responder. Informe a entidade, métrica ou fonte que deseja consultar.';
 
 @Injectable()
@@ -43,12 +44,54 @@ export class ChatService {
     const [run]=await this.db.insert<any[]>('ai_runs',{tenant_id:t,agent_id:agent.id,run_type:'general_chat',trigger_type:'chat_message',status:'processing',input_snapshot:{conversation_id:id,message:message.slice(0,500),client_context:clientContext},requested_by:u,started_at:new Date().toISOString()});
     try {
       if(this.isSimpleGreeting(message))return this.complete(t,id,conversation,run,agent,this.greeting(agent),{model_provider:'system',model_name:null,input_tokens:0,output_tokens:0,total_tokens:0,dry_run:false},{intent:'greeting',main_tool:null,tool_keys:[],tool_calls_count:0,llm_called:false,llm_tool_choice:'none',llm_final_called:false,cache_hit:false,needs_clarification:false,stage_failed:null,error_code:null},{content:this.greeting(agent)});
-      const history=await this.recentHistory(t,id),orchestrated:any=await this.orchestrator.execute(t,agent,message,history,run.id,clientContext);
+      const history=await this.recentHistory(t,id),lastContext=await this.lastContext(t,id),broad=this.broadAnalysis(message,clientContext,lastContext);
+      if(broad){
+        const pack=await this.buildOperationalAnalysisPack(t,run.id,agent,message,clientContext,lastContext,broad),selected=pack.evidence.slice(0,12),toolKeys=[...new Set(selected.map(item=>item.source_name))];
+        const response=await this.gateway.generalChat({agent,message,history,toolResult:pack,toolResults:selected.map(item=>({tool_key:item.source_name,result:item.data}))});
+        const content=pack.ambiguity||response.answer;
+        return this.complete(t,id,conversation,run,agent,content,response,{intent:broad,main_tool:'official_evidence_pack',tool_keys:toolKeys,tool_calls_count:toolKeys.length,llm_called:response.model_provider==='openai',llm_tool_choice:'none',llm_final_called:response.model_provider==='openai',cache_hit:false,needs_clarification:!!pack.ambiguity,stage_failed:null,error_code:null},{flow:'operational_analysis_pack',selected_evidence:selected,resolved_entities:pack.detected_entities,metrics_included:pack.detected_metrics,fallback_used:response.model_provider!=='openai',tool_keys_called:toolKeys,last_context:{question:message,broad_analysis:broad,selected_evidence:selected,resolved_entities:pack.detected_entities,pending_clarification:pack.ambiguity}});
+      }
+      const orchestrated:any=await this.orchestrator.execute(t,agent,message,history,run.id,clientContext);
       return this.complete(t,id,conversation,run,agent,orchestrated.content,orchestrated.response||{model_provider:'system',model_name:null},orchestrated.observability,orchestrated.output_json);
     }catch(error){const reason=error instanceof Error?error.message:'erro desconhecido';await this.db.update('ai_runs',`tenant_id=eq.${t}&id=eq.${run.id}`,{status:'failed',error_message:`Chat Geral: ${reason}`.slice(0,500),output_json:(error as any)?.generalChatFailure||{agent_flow:'openai_tool_calling',stage_failed:'chat_execution',error_code:'general_chat_execution_failed',error_message_safe:'Não foi possível concluir a resposta com segurança.',tool_keys:[]},finished_at:new Date().toISOString()});throw new BadRequestException('Não consegui concluir a resposta agora. Tente novamente em instantes.')}
   }
   private clientContext(value:unknown,channel:'text'|'voice'){const source=value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};const allowed=['page','current_path','dashboard_id','report_id','report_job_id','module_key'];const clean=allowed.reduce((out,key)=>{if(typeof source[key]==='string'&&source[key])out[key]=String(source[key]).slice(0,200);return out;},{} as Record<string,unknown>);return {...clean,channel};}
-  /** LEGACY - not used by Chat Geral OpenAI tool calling. Builds a bounded evidence pack for legacy callers only. */
+  private broadAnalysis(message:string,context:Record<string,unknown>,last:any):BroadAnalysis|null{
+    const q=this.normalize(message),confirmation=/^(sim|isso|correto|pode)(?:[.!\s]*(?:ja[.!\s]*te[.!\s]*falei))?[.!\s]*$/.test(q)||/^ja[.!\s]*te[.!\s]*falei[.!\s]*$/.test(q),base=confirmation?this.normalize(last?.question):q;
+    if(/\b(transitime|transit time|tempo medio (?:de )?entrega)\b/.test(base))return'transitime';
+    if(context.page==='dashboard'&&/\b(analis|analise|como esta|resum|panorama|transitime)\b/.test(base))return'dashboard';
+    if(context.page==='report'&&/\b(analis|analise|como esta|resum|panorama|transitime)\b/.test(base))return'report';
+    if(/\b(entrega|entregas)\b.*\b(cidade|destino)\b.*\b(qnt|quantidade|peso|frete)\b/.test(base)||/\bcidade destino\b.*\b(toda a base|periodo)\b/.test(base))return'city_compound';
+    if(/\b(performance|desempenho|analise|resumo|me fale|fale sobre)\b.*\bmotorista\b|\bmotorista\b.*\b(performance|desempenho|analise|resumo)\b/.test(base))return'driver';
+    if(/\b(performance|desempenho|analise|resumo|me fale|fale sobre)\b.*\bcliente\b|\bcliente\b.*\b(performance|desempenho|analise|resumo)\b/.test(base))return'customer';
+    if(/\b(performance|desempenho|analise|resumo)\b.*\b(veiculo|placa)\b/.test(base))return'vehicle';
+    if(/\b(como esta|analise|analisar|panorama|resumo)\b.*\b(minha |da |a )?operacao\b|\bresumo operacional\b/.test(base))return'operation';
+    return null;
+  }
+  private async buildOperationalAnalysisPack(t:string,run:string,agent:any,message:string,clientContext:Record<string,unknown>,last:any,kind:BroadAnalysis):Promise<Pack>{
+    const confirmation=/^(sim|isso|correto|pode)(?:[.!\s]*(?:ja[.!\s]*te[.!\s]*falei))?[.!\s]*$/.test(this.normalize(message)),effective=confirmation&&last?.question?String(last.question):message,intent=parseChatIntent(effective),allBase=/\b(toda a base|base toda|sem filtro|todos os dados)\b/i.test(`${effective} ${message}`),filters=allBase?{}:{...(intent.filters||{})};
+    const metricMap:Record<BroadAnalysis,string[]>={driver:['total_entregas','entregas_por_status','frete_total','frete_medio','peso_total','volume_total','atrasos','atraso_medio','transitime_medio','clientes_atendidos','cidades_rotas','pontos_de_atencao'],customer:['total_entregas','entregas_por_status','frete_total','frete_medio','peso_total','volume_total','pendencias','falhas','atrasos','motoristas','cidades_rotas','recomendacoes'],vehicle:['total_entregas','entregas_por_status','frete_total','frete_medio','peso_total','volume_total','atrasos','rotas'],operation:['total_entregas','entregas_por_status','frete_total','frete_medio','peso_total','volume_total','atrasos','clientes','motoristas','rotas'],city_compound:['deliveries_count','sum_weight','sum_freight'],dashboard:['dashboard_snapshot'],report:['report_snapshot'],transitime:['transitime_medio']};
+    const pack:Pack={question:message,normalized_question:this.normalize(message),detected_terms:this.normalize(message).split(/\s+/).filter(x=>x.length>2).slice(0,15),detected_entities:{filters,scope:allBase?'all_records':'contextual',context:clientContext},detected_metrics:metricMap[kind],detected_dimensions:kind==='city_compound'?['destination_city']:[],evidence:[],ambiguity:null,allowed_calculations:['compor resultados canônicos retornados por ferramentas controladas'],denied_calculations:['SQL livre','métrica não homologada','inferir dados ausentes']};
+    if(kind==='city_compound'){
+      for(const metric of ['deliveries_count','sum_weight','sum_freight']){const key='treated_data.aggregate_records',result=await this.controlled(t,run,agent,key,{metric,group_by:'destination_city',filters},()=>this.tools.execute(t,key,{metric,group_by:'destination_city',filters}));if(!result.blocked)pack.evidence.push({source_type:'operation_aggregate',source_name:key,source_id:`destination_city:${metric}`,confidence:.98,reason:'Agregação determinística na base canônica por cidade de destino.',data:this.sanitize(result.value)});}
+      return pack;
+    }
+    let key='analytics.context.analyze',input:Record<string,unknown>={context_type:kind==='driver'?'driver':kind==='customer'?'customer':kind==='vehicle'?'vehicle_plate':'operation'};
+    const value=kind==='driver'?filters.driver_name:kind==='customer'?filters.customer_name:kind==='vehicle'?filters.vehicle_plate:undefined;
+    if(['driver','customer','vehicle'].includes(kind)&&!value){pack.ambiguity=`Informe ${kind==='driver'?'o motorista':kind==='customer'?'o cliente':'a placa do veículo'} para realizar a análise.`;return pack;}
+    if(value)input.context_value=value;
+    if(kind==='dashboard'){key='dashboard.get_snapshot';input={dashboard_id:clientContext.dashboard_id||'latest',client_context:clientContext};}
+    if(kind==='report'){key='reports.get_job_snapshot';input={report_job_id:clientContext.report_job_id,report_id:clientContext.report_id,client_context:clientContext};}
+    const primary=await this.controlled(t,run,agent,key,input,()=>this.tools.execute(t,key,input));if(!primary.blocked)pack.evidence.push({source_type:kind==='dashboard'?'dashboard_snapshot':kind==='report'?'report_snapshot':'operational_analysis',source_name:key,source_id:String(value||kind),confidence:.98,reason:'Composição determinística ampla do backend sobre fontes oficiais.',data:this.sanitize(primary.value)});
+    if(kind==='transitime')await this.transitimeEvidence(t,run,agent,message,clientContext,pack);
+    return pack;
+  }
+  private async transitimeEvidence(t:string,run:string,agent:any,message:string,context:Record<string,unknown>,pack:Pack){
+    if(context.page==='dashboard'){const key='dashboard.get_snapshot',r=await this.controlled(t,run,agent,key,{dashboard_id:context.dashboard_id||'latest',client_context:context},()=>this.tools.execute(t,key,{dashboard_id:context.dashboard_id||'latest',client_context:context}));if(!r.blocked)pack.evidence.push({source_type:'dashboard_snapshot',source_name:key,source_id:String(context.dashboard_id||'latest'),confidence:.99,reason:'Snapshot do dashboard atual consultado para transitime.',data:this.sanitize(r.value)});}
+    if(context.page==='report'){const key='reports.get_job_snapshot',input={report_job_id:context.report_job_id,report_id:context.report_id,client_context:context},r=await this.controlled(t,run,agent,key,input,()=>this.tools.execute(t,key,input));if(!r.blocked)pack.evidence.push({source_type:'report_snapshot',source_name:key,source_id:String(context.report_job_id||context.report_id||'latest'),confidence:.99,reason:'Snapshot do relatório atual consultado para transitime.',data:this.sanitize(r.value)});}
+    await this.indicatorEvidence(t,run,agent,message,pack);
+  }
+  /** Builds a bounded evidence pack for compatibility with legacy callers. */
   private async legacyBuildOfficialEvidencePack(t:string,run:string,agent:any,message:string,context:any):Promise<Pack>{
     const intent=parseChatIntent(message),normalized=this.normalize(message),terms=normalized.split(/\s+/).filter(x=>x.length>2).slice(0,15),metrics=this.detect(message,['peso','frete','volume','entrega','status','r$/ton','sla']),dimensions=this.detect(message,['cliente','embarcador','motorista','placa','origem','destino','status']),entities={identifier:intent.identifier,filters:intent.filters||{},previous:context?.resolved_entities||undefined};
     const pack:Pack={question:message,normalized_question:normalized,detected_terms:terms,detected_entities:entities,detected_metrics:metrics,detected_dimensions:dimensions,evidence:[],ambiguity:null,allowed_calculations:['somar valores oficiais recebidos','contar registros oficiais recebidos','calcular média simples de valores oficiais recebidos','identificar maior ou menor em lista oficial recebida','ordenar lista oficial recebida','responder campo de uma linha oficial'],denied_calculations:['fórmula de negócio não homologada','R$/ton sem indicador ou regra homologada','SLA, score, margem ou performance composta sem fonte homologada']};
