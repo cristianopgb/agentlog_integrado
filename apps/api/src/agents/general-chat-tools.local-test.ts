@@ -29,18 +29,250 @@ async function main(){
   voiceDb.select=async(table:string)=>{if(table==='ai_chat_conversations')return[{id:'conversation'}];if(table==='ai_agents')return[{id:'agent',status:'active'}];if(table==='ai_runs')return[{id:'voice-run',output_json:{}}];if(table==='ai_chat_messages')return[{content:'Qual o transitime?',created_at:'2026-07-31T00:00:00.000Z'}];if(table==='ai_tool_calls')return[{tool_key:'dashboard.get_snapshot',output_json:{found:true,status:'available'}}];return[];};
   await chat.realtimeEvent('tenant','user','conversation',{ai_run_id:'voice-run',stage:'responded',text:'Resposta consultada.'});assert.equal(updates[1].output_json.operational_response_without_tool,false);assert.equal(updates[1].output_json.main_tool,'dashboard.get_snapshot');assert.equal(updates[1].output_json.error_code,null);assert.equal(updates[1].output_json.tool_results_summary[0].found,true);
 
-  const dashboardId='ed99a93f-7ae5-44ce-824d-7fd6847c9653',otherDashboard='11111111-1111-4111-8111-111111111111',reportId='22222222-2222-4222-8222-222222222222',jobId='33333333-3333-4333-8333-333333333333';
-  const queries:string[]=[];const executorDb:any={activeOperationalSourceFilter:async()=> 'data_source_id=in.(source)',select:async(table:string,query:string)=>{queries.push(`${table}?${query}`);if(table==='dashboard_definitions')return[{id:query.includes(otherDashboard)?otherDashboard:dashboardId,title:'Operação',published_version_id:'version-1'}];if(table==='dashboard_versions')return[{id:'version-1',snapshot:{widgets:[{id:'w1',title:'Frete total',visual_type:'kpi',indicator_id:'freight',result:{value:1200}},{id:'w2',title:'Entregas por cliente',visual_type:'bar',indicator_id:'deliveries',result:{rows:[{label:'Cliente A',value:60}]}},{id:'w3',title:'Transitime médio',visual_type:'kpi',indicator_id:'transitime',deterministic_summary:{value:23}}]}}];if(table==='dashboard_widgets')return[];if(table==='report_definitions')return[{id:reportId,name:'TesteV10'}];if(table==='report_jobs')return[{id:jobId,report_definition_id:reportId,created_at:'2026-07-31',render_snapshot:{blocks:[{title:'Transitime',value:23}]},data_snapshot:{records_count:60},ai_snapshot:null}];return[];}};
-  const executor=new AgentToolExecutorService(executorDb,{list:async()=>({data:[]})} as any,{list:async()=>({data:[]})} as any);
-  const real:any=await executor.execute('tenant','dashboard.get_snapshot',{dashboard_id:dashboardId});assert.equal(real.dashboard_id,dashboardId);assert.equal(real.key_indicators[0].value,1200);assert.equal(real.rankings[0].rows[0].value,60);assert.equal(real.key_indicators[1].value,23);
-  await executor.execute('tenant','dashboard.get_snapshot',{dashboard_id:'latest'});assert.ok(!queries.at(-3)?.includes('id=eq.latest'));
-  const contextual:any=await executor.execute('tenant','dashboard.get_snapshot',{dashboard_id:'latest',client_context:{dashboard_id:otherDashboard}});assert.equal(contextual.dashboard_id,otherDashboard);assert.ok(queries.some(query=>query.includes(`id=eq.${otherDashboard}`)));
-  const byContext:any=await executor.execute('tenant','reports.get_job_snapshot',{client_context:{report_id:reportId}});assert.equal(byContext.report_job_id,jobId);assert.ok(queries.some(query=>query.includes(`report_definition_id=eq.${reportId}`)));
-  await executor.execute('tenant','reports.get_job_snapshot',{report_job_id:'testev10'});assert.ok(!queries.some(query=>query.includes('id=eq.testev10')));assert.ok(queries.some(query=>query.includes('report_definitions?')));
-  await executor.execute('tenant','reports.get_job_snapshot',{report_job_id:'latest'});assert.ok(!queries.some(query=>query.includes('id=eq.latest')));
-  const sixty=Array.from({length:60},(_,index)=>({id:String(index),status:index<12?'delivered':'in_transit',created_at:'2026-01-01T00:00:00.000Z',freight_value:1,gross_weight:1,volume_count:1}));
-  const totalDb:any={activeOperationalSourceFilter:async()=> 'data_source_id=in.(source)',select:async(table:string)=>table==='operation_records'?sixty:[]};
-  const totalExecutor=new AgentToolExecutorService(totalDb,{list:async()=>({data:[]})} as any,{list:async()=>({data:[]})} as any),total:any=await totalExecutor.execute('tenant','analytics.context.analyze',{context_type:'operation',period:{preset:'custom',start:'2000-01-01',end:'2099-12-31'}});assert.equal(total.totals.total_records,60);assert.equal(total.totals.delivered,12);assert.ok(!total.data_quality_notes.some((note:string)=>note.includes('ficaram fora do período')));
+  const dashboardId = 'ed99a93f-7ae5-44ce-824d-7fd6847c9653',
+    otherDashboard = '11111111-1111-4111-8111-111111111111',
+    reportId = '22222222-2222-4222-8222-222222222222',
+    jobId = '33333333-3333-4333-8333-333333333333';
+  const queries: string[] = [];
+  const executorDb: any = {
+    activeOperationalSourceFilter: async () => 'data_source_id=in.(source)',
+    select: async (table: string, query: string) => {
+      queries.push(`${table}?${query}`);
+      if (table === 'dashboard_definitions')
+        return [
+          {
+            id: query.includes(otherDashboard) ? otherDashboard : dashboardId,
+            title: 'Operação',
+            published_version_id: 'version-1',
+          },
+        ];
+      if (table === 'dashboard_versions')
+        return [
+          {
+            id: 'version-1',
+            snapshot: {
+              widgets: [
+                {
+                  id: 'w1',
+                  title: 'Frete total',
+                  visual_type: 'kpi',
+                  indicator_id: 'freight',
+                  result: { value: 1200 },
+                },
+                {
+                  id: 'w2',
+                  title: 'Entregas por cliente',
+                  visual_type: 'bar',
+                  indicator_id: 'deliveries',
+                  result: { rows: [{ label: 'Cliente A', value: 60 }] },
+                },
+                {
+                  id: 'w3',
+                  title: 'Transitime médio',
+                  visual_type: 'kpi',
+                  indicator_id: 'transitime',
+                  deterministic_summary: { value: 23 },
+                },
+              ],
+            },
+          },
+        ];
+      if (table === 'dashboard_widgets') return [];
+      if (table === 'report_definitions')
+        return [{ id: reportId, name: 'TesteV10' }];
+      if (table === 'report_jobs')
+        return [
+          {
+            id: jobId,
+            report_definition_id: reportId,
+            created_at: '2026-07-31',
+            render_snapshot: { blocks: [{ title: 'Transitime', value: 23 }] },
+            data_snapshot: { records_count: 60 },
+            ai_snapshot: null,
+          },
+        ];
+      return [];
+    },
+  };
+  const widgets: any[] = [
+    {
+      id: 'freight',
+      title: 'Frete total',
+      visual_type: 'kpi',
+      indicator_source: 'native',
+      indicator_id: 'freight',
+    },
+    {
+      id: 'records',
+      title: 'Registros totais',
+      visual_type: 'kpi',
+      indicator_source: 'native',
+      indicator_id: 'records',
+    },
+    {
+      id: 'transitime',
+      title: 'Transitime médio do período',
+      visual_type: 'kpi',
+      indicator_source: 'native',
+      indicator_id: 'transitime',
+    },
+    {
+      id: 'status',
+      title: 'Entregas por status',
+      visual_type: 'pie',
+      indicator_source: 'native',
+      indicator_id: 'status',
+    },
+    {
+      id: 'ranking',
+      title: 'Entregas por cliente',
+      visual_type: 'bar',
+      indicator_source: 'native',
+      indicator_id: 'ranking',
+    },
+    {
+      id: 'timeline',
+      title: 'Entregas no período',
+      visual_type: 'line',
+      indicator_source: 'native',
+      indicator_id: 'timeline',
+    },
+    {
+      id: 'table',
+      title: 'Entregas',
+      visual_type: 'table',
+      indicator_source: 'custom',
+      indicator_id: 'table',
+    },
+    {
+      id: 'matrix',
+      title: 'Matriz de rotas',
+      visual_type: 'matrix',
+      indicator_source: 'custom',
+      indicator_id: 'matrix',
+    },
+  ];
+  const previews: any = {
+    freight: { status: 'available', value: 1200 },
+    records: { status: 'available', display_value: '60 registros' },
+    transitime: { status: 'partial', value: 23, display_value: '23 horas' },
+    status: {
+      status: 'available',
+      series: [
+        { label: 'Entregue', value: 40 },
+        { label: 'Em trânsito', value: 20 },
+      ],
+    },
+    ranking: {
+      status: 'available',
+      series: [{ label: 'Cliente A', value: 60 }],
+    },
+    timeline: { status: 'available', series: [{ label: 'Julho', value: 60 }] },
+    table: {
+      status: 'available',
+      table: { rows: [{ documento: 'CTE-1', status: 'Entregue' }] },
+    },
+    matrix: {
+      status: 'available',
+      table: { rows: [{ rota: 'SP/RJ', entregas: 12 }] },
+      series: [{ label: 'SP/RJ', value: 12 }],
+    },
+  };
+  const publishedPreview: any = {
+    load: async () => ({ version: { id: 'version-1' }, widgets }),
+    previewWidget: async (_t: string, w: any) => previews[w.id],
+  };
+  const executor = new AgentToolExecutorService(
+    executorDb,
+    { list: async () => ({ data: [] }) } as any,
+    { list: async () => ({ data: [] }) } as any,
+    publishedPreview,
+  );
+  const real: any = await executor.execute('tenant', 'dashboard.get_snapshot', {
+    dashboard_id: dashboardId,
+  });
+  assert.equal(real.dashboard_id, dashboardId);
+  assert.equal(real.key_indicators.length, 3);
+  assert.equal(real.key_indicators[0].value, 1200);
+  assert.equal(real.key_indicators[1].value, '60 registros');
+  assert.equal(real.rankings[0].series[0].value, 60);
+  assert.ok(real.breakdowns.length > 1);
+  assert.equal(real.tables.length, 2);
+  assert.equal(real.unavailable_widgets.length, 0);
+  assert.equal(
+    real.key_indicators.find((widget: any) =>
+      widget.title.includes('Transitime'),
+    ).value,
+    23,
+  );
+  await executor.execute('tenant', 'dashboard.get_snapshot', {
+    dashboard_id: 'latest',
+  });
+  assert.ok(!queries.some((query) => query.includes('id=eq.latest')));
+  const contextual: any = await executor.execute(
+    'tenant',
+    'dashboard.get_snapshot',
+    {
+      dashboard_id: 'latest',
+      client_context: { dashboard_id: otherDashboard },
+    },
+  );
+  assert.equal(contextual.dashboard_id, otherDashboard);
+  assert.ok(queries.some((query) => query.includes(`id=eq.${otherDashboard}`)));
+  const byContext: any = await executor.execute(
+    'tenant',
+    'reports.get_job_snapshot',
+    { client_context: { report_id: reportId } },
+  );
+  assert.equal(byContext.report_job_id, jobId);
+  assert.ok(
+    queries.some((query) =>
+      query.includes(`report_definition_id=eq.${reportId}`),
+    ),
+  );
+  await executor.execute('tenant', 'reports.get_job_snapshot', {
+    report_job_id: 'testev10',
+  });
+  assert.ok(!queries.some((query) => query.includes('id=eq.testev10')));
+  assert.ok(queries.some((query) => query.includes('report_definitions?')));
+  await executor.execute('tenant', 'reports.get_job_snapshot', {
+    report_job_id: 'latest',
+  });
+  assert.ok(!queries.some((query) => query.includes('id=eq.latest')));
+  const sixty = Array.from({ length: 60 }, (_, index) => ({
+    id: String(index),
+    status: index < 12 ? 'delivered' : 'in_transit',
+    created_at: '2026-01-01T00:00:00.000Z',
+    freight_value: 1,
+    gross_weight: 1,
+    volume_count: 1,
+  }));
+  const totalDb: any = {
+    activeOperationalSourceFilter: async () => 'data_source_id=in.(source)',
+    select: async (table: string) =>
+      table === 'operation_records' ? sixty : [],
+  };
+  const totalExecutor = new AgentToolExecutorService(
+      totalDb,
+      { list: async () => ({ data: [] }) } as any,
+      { list: async () => ({ data: [] }) } as any,
+      publishedPreview,
+    ),
+    total: any = await totalExecutor.execute(
+      'tenant',
+      'analytics.context.analyze',
+      {
+        context_type: 'operation',
+        period: { preset: 'custom', start: '2000-01-01', end: '2099-12-31' },
+      },
+    );
+  assert.equal(total.totals.total_records, 60);
+  assert.equal(total.totals.delivered, 12);
+  assert.ok(
+    !total.data_quality_notes.some((note: string) =>
+      note.includes('ficaram fora do período'),
+    ),
+  );
   console.log('general-chat-tools.local-test: ok');
 }
 

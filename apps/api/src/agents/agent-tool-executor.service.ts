@@ -2,10 +2,12 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { NativeIndicatorsService } from '../native-indicators/native-indicators.service';
 import { CustomIndicatorsService } from '../custom-indicators/custom-indicators.service';
+import { PublishedDashboardPreviewService, PublishedDashboardWidget } from '../dashboards/published-dashboard-preview.service';
+import { summarizeWidgetResult } from '../shared/widget-result-snapshot';
 const recordFields='id,document_number,cte_number,invoice_number,manifest_number,delivery_number,customer_name,shipper_name,driver_name,vehicle_plate,status,expected_date,completed_at,created_at,freight_value,gross_weight,volume_count,origin_city,origin_state,destination_city,destination_state,last_event_at';
 const metrics=new Set(['deliveries_count','occurrences_count','cte_count','sum_freight','sum_weight','volume_count','avg_freight_informed']),groups=new Set(['driver_name','customer_name','shipper_name','status','origin_city','origin_state','destination_city','destination_state','origin','destination','route','none']);
 @Injectable() export class AgentToolExecutorService {
- constructor(private db:SupabaseService,private native:NativeIndicatorsService,private custom:CustomIndicatorsService){}
+ constructor(private db:SupabaseService,private native:NativeIndicatorsService,private custom:CustomIndicatorsService,private publishedPreview:PublishedDashboardPreviewService){}
  supports(tool:string){return ['analytics.map.get','analytics.result.get','analytics.context.analyze','operational.record.find','knowledge.guidance.search','knowledge_base.search','treated_data.search_records','treated_data.get_record_detail','treated_data.aggregate_records','treated_data.get_summary','treated_data.summary.get','indicators.list_available','indicators.get_result','dashboard.get_snapshot','reports.get_job_snapshot'].includes(tool)}
  async execute(t:string,tool:string,input:Record<string,unknown>){if(tool==='analytics.map.get')return this.analyticsMap(t,input);if(tool==='analytics.result.get')return this.analyticsResultHonest(t,input);if(tool==='analytics.context.analyze')return this.analyticsContextHonest(t,input);if(tool==='operational.record.find')return this.recordFindHonest(t,input);if(tool==='knowledge.guidance.search')return this.guidanceHonest(t,input);if(tool==='knowledge_base.search')return this.knowledge(t,input);if(tool==='treated_data.search_records')return this.search(t,input);if(tool==='treated_data.get_record_detail')return this.detail(t,input);if(tool==='treated_data.aggregate_records')return this.aggregate(t,input);if(tool==='treated_data.get_summary'||tool==='treated_data.summary.get')return this.summary(t);if(tool==='indicators.list_available')return this.indicators(t);if(tool==='indicators.get_result')return this.indicator(t,input);if(tool==='dashboard.get_snapshot')return this.dashboardSnapshot(t,input);if(tool==='reports.get_job_snapshot')return this.reportJobSnapshot(t,input);throw new BadRequestException('Ferramenta não permitida.')}
  private hasRecut(i:Record<string,unknown>){return (i.filters&&typeof i.filters==='object'&&Object.keys(i.filters as object).length>0)||i.period!==undefined||i.breakdown_by!==undefined}
@@ -43,17 +45,189 @@ const metrics=new Set(['deliveries_count','occurrences_count','cte_count','sum_f
   const buckets=new Map<string,any[]>();valid.forEach(row=>{const key=String(label(row));buckets.set(key,[...(buckets.get(key)||[]),row]);});
   return {metric,group_by:group,unit,filters_applied:f,data_quality_notes:notes,status:notes.length?'result_may_be_truncated':'available',rows:[...buckets.entries()].map(([label,x])=>({label,value:value(x)})).sort((a,b)=>b.value-a.value).slice(0,20)};
  }
- private async dashboardSnapshot(t:string,i:Record<string,unknown>){
-  const context=this.toolContext(i),contextId=String(context.dashboard_id||'').trim(),requested=contextId||String(i.dashboard_id||'').trim(),filter=this.isUuid(requested)&&!this.isLatest(requested)?`id=eq.${encodeURIComponent(requested)}&`:'';
-  const dashboard=(await this.db.select<any[]>('dashboard_definitions',`select=id,title,description,published_version_id,updated_at&tenant_id=eq.${t}&${filter}status=eq.published&order=updated_at.desc&limit=1`))[0];
-  if(!dashboard)return {found:false,status:'not_found',message:'Nenhum dashboard publicado foi encontrado.',key_indicators:[],breakdowns:[],rankings:[],tables:[],data_quality_notes:['Dados insuficientes.'],unavailable_items:[],unavailable_widgets:[]};
-  const version=dashboard.published_version_id?(await this.db.select<any[]>('dashboard_versions',`select=id,snapshot&tenant_id=eq.${t}&id=eq.${dashboard.published_version_id}&limit=1`))[0]:null;
-  if(!version)return {found:false,status:'published_version_not_found',message:'A versão publicada do dashboard não foi encontrada.',key_indicators:[],breakdowns:[],rankings:[],tables:[],data_quality_notes:['Snapshot publicado ausente.'],unavailable_items:[],unavailable_widgets:[]};
-  const root=version.snapshot?.data??version.snapshot??{},persisted=Array.isArray(root.widgets)?root.widgets:[],definitions=await this.db.select<any[]>('dashboard_widgets',`select=id,title,indicator_source,indicator_id,visual_type,properties&tenant_id=eq.${t}&dashboard_id=eq.${dashboard.id}&limit=100`),widgets=persisted.length?persisted:definitions;
-  const values=await Promise.all(widgets.slice(0,50).map(async(widget:any)=>{const saved=widget.result??widget.data??widget.value??widget.deterministic_summary??widget.data_summary;if(saved!==undefined)return {...widget,result:saved};const definition=definitions.find((x:any)=>x.id===widget.id)||widget;if(!definition.indicator_id)return {...widget,unavailable_reason:'O snapshot publicado não informa o indicador homologado deste widget.'};try{const result:any=await this.indicator(t,{id:definition.indicator_id});return result.found?{...definition,...widget,result}:{...definition,...widget,unavailable_reason:result.message||'Indicador homologado não encontrado.'};}catch{return {...definition,...widget,unavailable_reason:'O cálculo determinístico do indicador falhou.'};}}));
-  const usable=values.filter((x:any)=>!x.unavailable_reason&&x.result!==undefined),compact=(x:any)=>({widget_id:x.id,title:x.title,value:x.result?.total??x.result?.value??x.result?.result?.value??x.result,rows:(x.result?.rows??x.result?.result?.rows??[]).slice(0,20)});
-  const unavailable=values.filter((x:any)=>x.unavailable_reason).map((x:any)=>({widget_id:x.id,title:x.title,reason:x.unavailable_reason}));
-  return {found:true,status:unavailable.length?'partial':'available',message:unavailable.length?'Dashboard publicado carregado parcialmente; consulte os motivos por widget.':'Dashboard publicado carregado com os resultados visíveis.',dashboard_title:dashboard.title,dashboard_id:dashboard.id,published_version_id:version.id,total_widgets:widgets.length,key_indicators:usable.filter((x:any)=>x.visual_type==='kpi').map(compact),breakdowns:usable.filter((x:any)=>['pie','line','area'].includes(x.visual_type)).map(compact),rankings:usable.filter((x:any)=>x.visual_type==='bar').map(compact),tables:usable.filter((x:any)=>['table','matrix'].includes(x.visual_type)).map(compact),data_quality_notes:[...new Set(usable.flatMap((x:any)=>x.result?.data_quality_notes??[]))],unavailable_items:unavailable,unavailable_widgets:unavailable};
+ private async dashboardSnapshot(t: string, i: Record<string, unknown>) {
+   const context = this.toolContext(i),
+     contextId = String(context.dashboard_id || '').trim(),
+     requested = contextId || String(i.dashboard_id || '').trim(),
+     filter =
+       this.isUuid(requested) && !this.isLatest(requested)
+         ? `id=eq.${encodeURIComponent(requested)}&`
+         : '';
+   const dashboard = (
+     await this.db.select<any[]>(
+       'dashboard_definitions',
+       `select=id,title,description,published_version_id,updated_at&tenant_id=eq.${t}&${filter}status=eq.published&order=updated_at.desc&limit=1`,
+     )
+   )[0];
+   if (!dashboard)
+     return {
+       found: false,
+       status: 'not_found',
+       message: 'Nenhum dashboard publicado foi encontrado.',
+       key_indicators: [],
+       breakdowns: [],
+       rankings: [],
+       tables: [],
+       data_quality_notes: ['Dados insuficientes.'],
+       unavailable_items: [],
+       unavailable_widgets: [],
+     };
+   let published: {
+     version: { id: string };
+     widgets: PublishedDashboardWidget[];
+   };
+   try {
+     published = await this.publishedPreview.load(t, dashboard.id);
+   } catch {
+     return {
+       found: false,
+       status: 'published_version_not_found',
+       message: 'A versão publicada do dashboard não foi encontrada.',
+       key_indicators: [],
+       breakdowns: [],
+       rankings: [],
+       tables: [],
+       data_quality_notes: ['Snapshot publicado ausente.'],
+       unavailable_items: [],
+       unavailable_widgets: [],
+     };
+   }
+   const values = await Promise.all(
+     published.widgets.slice(0, 50).map(async (widget) => {
+       if (!widget.indicator_id)
+         return {
+           ...widget,
+           unavailable_reason:
+             'O widget publicado não informa um indicador homologado.',
+         };
+       if (
+         !['kpi', 'bar', 'pie', 'line', 'table', 'matrix'].includes(
+           widget.visual_type,
+         )
+       )
+         return {
+           ...widget,
+           unavailable_reason: 'O tipo visual do widget não é suportado.',
+         };
+       try {
+         const result: any = await this.publishedPreview.previewWidget(
+           t,
+           widget,
+         );
+         if (
+           ['failed', 'empty', 'waiting_data'].includes(String(result?.status))
+         )
+           return {
+             ...widget,
+             result,
+             unavailable_reason:
+               result?.message ||
+               'O preview do widget não possui dados renderizáveis.',
+           };
+         const compact = this.compactDashboardWidget(widget, result);
+         return compact.renderable
+           ? { ...widget, result, compact }
+           : {
+               ...widget,
+               result,
+               unavailable_reason:
+                 result?.message ||
+                 'O preview do widget não possui dados renderizáveis.',
+             };
+       } catch {
+         return {
+           ...widget,
+           unavailable_reason: 'O preview real do indicador falhou.',
+         };
+       }
+     }),
+   );
+   const usable = values.filter((x: any) => x.compact),
+     unavailable = values
+       .filter((x: any) => x.unavailable_reason)
+       .map((x: any) => ({
+         widget_id: x.id,
+         title: x.title,
+         visual_type: x.visual_type,
+         status: x.result?.status ?? 'unavailable',
+         reason: x.unavailable_reason,
+       }));
+   const items = (visuals: string[]) =>
+     usable
+       .filter((x: any) => visuals.includes(x.visual_type))
+       .map((x: any) => x.compact.output);
+   return {
+     found: true,
+     status: unavailable.length ? 'partial' : 'available',
+     message: unavailable.length
+       ? 'Dashboard publicado carregado parcialmente; consulte os motivos por widget.'
+       : 'Dashboard publicado carregado com os resultados visíveis.',
+     dashboard_title: dashboard.title,
+     dashboard_id: dashboard.id,
+     published_version_id: published.version.id,
+     total_widgets: published.widgets.length,
+     key_indicators: items(['kpi']),
+     breakdowns: items(['pie', 'line']),
+     rankings: items(['bar']),
+     tables: items(['table', 'matrix']),
+     data_quality_notes: [
+       ...new Set(
+         usable.flatMap((x: any) => x.compact.output.data_quality_notes),
+       ),
+     ],
+     unavailable_items: unavailable,
+     unavailable_widgets: unavailable,
+   };
+ }
+ private compactDashboardWidget(
+   widget: PublishedDashboardWidget,
+   result: any,
+ ) {
+   const shape =
+       widget.visual_type === 'kpi'
+         ? 'scalar'
+         : widget.visual_type === 'matrix'
+           ? 'matrix'
+           : widget.visual_type === 'line'
+             ? 'timeseries'
+             : widget.visual_type === 'pie'
+               ? 'distribution'
+               : widget.visual_type === 'bar'
+                 ? 'ranking'
+                 : 'table',
+     snapshot = summarizeWidgetResult(
+       result,
+       shape,
+       'Dados insuficientes no widget.',
+     ),
+     summary: any = snapshot.deterministicSummary,
+     value = result?.value ?? result?.display_value ?? summary.value ?? null,
+     rows =
+       summary.sample_rows ??
+       summary.items_sample ??
+       summary.points_sample ??
+       [],
+     series =
+       summary.items_sample ??
+       summary.points_sample ??
+       (Array.isArray(result?.series) ? result.series.slice(0, 20) : []),
+     renderable =
+       (value !== null && value !== undefined) ||
+       rows.length > 0 ||
+       series.length > 0;
+   return {
+     renderable,
+     output: {
+       widget_id: widget.id,
+       title: widget.title,
+       visual_type: widget.visual_type,
+       ...(value !== null && value !== undefined ? { value } : {}),
+       ...(rows.length ? { rows } : {}),
+       ...(series.length ? { series } : {}),
+       data_quality_notes: snapshot.dataSummary.data_quality_notes ?? [],
+       status: result?.status ?? 'available',
+     },
+   };
  }
  private async reportJobSnapshot(t:string,i:Record<string,unknown>){const context=this.toolContext(i),jobId=String(context.report_job_id||i.report_job_id||i.job_id||'').trim();let reportId=String(context.report_id||i.report_id||'').trim();const requestedName=String(i.report_name||(!this.isLatest(jobId)&&!this.isUuid(jobId)?jobId:'')).trim();if(!reportId&&requestedName){const definitions=await this.db.select<any[]>('report_definitions',`select=id,name&tenant_id=eq.${t}&status=eq.active&deleted_at=is.null&limit=100`),needle=this.normalizedName(requestedName),definition=definitions.find((x:any)=>this.normalizedName(x.name)===needle);reportId=String(definition?.id||'');}const filter=this.isUuid(jobId)&&!context.report_id?`id=eq.${encodeURIComponent(jobId)}&`:this.isUuid(reportId)?`report_definition_id=eq.${encodeURIComponent(reportId)}&`:'';const job=(await this.db.select<any[]>('report_jobs',`select=id,report_definition_id,created_at,finished_at,render_snapshot,data_snapshot,ai_snapshot&tenant_id=eq.${t}&${filter}status=eq.completed&order=created_at.desc&limit=1`))[0];if(!job)return {found:false,status:'not_found',message:requestedName&&!reportId?`Relatório "${requestedName}" não encontrado.`:'Nenhum relatório concluído foi encontrado.',data_quality_notes:['Não há snapshot concluído para o alvo solicitado.'],unavailable_items:[]};return {found:true,status:'available',message:'Snapshot do relatório concluído carregado.',report_job_id:job.id,report_id:job.report_definition_id,generated_at:job.finished_at||job.created_at,snapshot:{render:job.render_snapshot??{},data:job.data_snapshot??{}},narrative:job.ai_snapshot??null,data_quality_notes:[],unavailable_items:[]};}
  private toolContext(i:Record<string,unknown>){return i.client_context&&typeof i.client_context==='object'&&!Array.isArray(i.client_context)?i.client_context as Record<string,unknown>:{};}
