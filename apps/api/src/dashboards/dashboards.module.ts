@@ -8,6 +8,7 @@ import { AgentsModule } from '../agents/agents.module';
 import { DashboardsController } from './dashboards.controller';
 import { DashboardsService } from './dashboards.service';
 import { DashboardSnapshotSummarizerService } from './dashboard-snapshot-summarizer.service';
+import { PublishedDashboardPreviewService } from './published-dashboard-preview.service';
 
 @Module({
   imports: [
@@ -19,6 +20,10 @@ import { DashboardSnapshotSummarizerService } from './dashboard-snapshot-summari
     AgentsModule,
   ],
   controllers: [DashboardsController],
-  providers: [DashboardsService, DashboardSnapshotSummarizerService],
+  providers: [
+    DashboardsService,
+    DashboardSnapshotSummarizerService,
+    PublishedDashboardPreviewService,
+  ],
 })
 export class DashboardsModule {}
