@@ -43,7 +43,7 @@ export class AiGatewayService {
     this.guard.inspect({message:input.message,history:input.history,tool_result:input.toolResult,tool_results:input.toolResults,plan:input.plan});
     const enabled = process.env.AI_GATEWAY_ENABLED === 'true';
     const dryRun = !enabled || process.env.AI_GATEWAY_DRY_RUN === 'true';
-    const prompt = this.prompts.build({agent:input.agent,runType:'general_chat',allowedTools:input.toolResults?.map((x:any)=>String(x.tool_key)).filter(Boolean),evidencePack:input.toolResult,context:'chat',structuredOutput:true}); const model_name = prompt.model.name;
+    const prompt = this.prompts.build({agent:input.agent,runType:'general_chat',allowedTools:[],evidencePack:input.toolResult,context:'chat',structuredOutput:false}); const model_name = prompt.model.name;
     if (dryRun) return this.generalResult(this.safeGeneralAnswer(this.simulatedChatAnswer(input.agent,input.toolResult),input.agent,input.message), 'system', model_name, true);
 
     if (!process.env.OPENAI_API_KEY) {
@@ -54,7 +54,7 @@ export class AiGatewayService {
     try {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model_name, temperature: prompt.model.temperature, max_output_tokens: prompt.model.maxOutputTokens, input: [{ role: 'system', content: prompt.systemPrompt }, { role: 'user', content: JSON.stringify({ message: input.message, history: input.history.map(x => ({ role: x.role, content: x.content.slice(0, 1000) })), plan:input.plan, official_evidence_pack: input.toolResult, controlled_tool_results: input.toolResults ?? [input.toolResult], capability_summary:input.capabilitySummary }) }], text: { format: { type: 'json_object' } },
+        body: JSON.stringify({ model: model_name, temperature: prompt.model.temperature, max_output_tokens: prompt.model.maxOutputTokens, input: [{ role: 'system', content: this.generalAgentInstructions(prompt.systemPrompt,input.agent)+'\nO backend já montou o pacote oficial abaixo. Apenas narre as evidências recebidas, sem escolher ferramentas nem buscar dados. Não invente números. Se houver ambiguidade, peça somente o esclarecimento objetivo indicado. Se não houver evidência, informe indisponibilidade.' }, { role: 'user', content: JSON.stringify({ message: input.message, history: input.history.map(x => ({ role: x.role, content: x.content.slice(0, 1000) })), plan:input.plan, official_evidence_pack: input.toolResult, controlled_tool_results: input.toolResults ?? [input.toolResult], capability_summary:input.capabilitySummary }) }],
         }),
       });
       if (!response.ok) throw new Error(`OpenAI respondeu HTTP ${response.status}`);
@@ -113,8 +113,10 @@ export class AiGatewayService {
 
   private answerFromResponse(raw: string): string {
     if (!raw.trim()) return '';
-    try { const parsed = JSON.parse(raw); return typeof parsed?.answer === 'string' ? parsed.answer.trim() : ''; } catch { return raw.trim(); }
+    try { const parsed = JSON.parse(raw); if(typeof parsed?.answer==='string')return parsed.answer.trim();return this.readableAssistantJson(parsed).trim(); } catch { return raw.trim(); }
   }
+
+  private readableAssistantJson(value:unknown,depth=0):string {if(value===null||value===undefined)return'';if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')return String(value);if(depth>4)return'';if(Array.isArray(value))return value.map(item=>this.readableAssistantJson(item,depth+1)).filter(Boolean).map(item=>`- ${item}`).join('\n');if(typeof value==='object')return Object.entries(value as Record<string,unknown>).map(([key,item])=>{const text=this.readableAssistantJson(item,depth+1);return text?`${key.replace(/_/g,' ')}: ${text}`:''}).filter(Boolean).join('\n');return'';}
 
   private generalResult(answer: string, model_provider: 'openai'|'system', model_name: string, dry_run: boolean, usage?: any, gateway_error?: string): GeneralChatResult {
     return { answer: answer.trim() || GENERAL_CHAT_FALLBACK, model_provider, model_name, input_tokens: Number(usage?.input_tokens) || 0, output_tokens: Number(usage?.output_tokens) || 0, total_tokens: Number(usage?.total_tokens) || 0, dry_run, ...(gateway_error ? { gateway_error } : {}) };
