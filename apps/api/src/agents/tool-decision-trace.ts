@@ -121,6 +121,8 @@ export function classifyToolDecision(trace: any, answer = ''): RootCauseStage {
   if (trace.permission_checked && trace.permission_allowed === false)
     return 'permission_denied';
   if (trace.invalid_arguments) return 'invalid_tool_arguments';
+  if (trace.resolved_tool_key === 'indicators.get_result' && ['custom_indicator', 'native_indicator'].includes(trace.resolved_source_type) && trace.executed_tool_key !== 'indicators.get_result' && ['analytics.context.analyze', 'analytics.result.get', 'analytics.map.get', 'treated_data.aggregate_records'].includes(trace.executed_tool_key)) return 'model_selected_wrong_tool';
+  if (trace.executed_tool_key === 'dashboard.get_snapshot' && trace.model_selected_tool_key === 'treated_data.aggregate_records' && /\b(?:por\s+(?:cliente|motorista|uf|status)|m[eé]di[oa]|total)\b/i.test(trace.user_message || '') && !/\bdashboard\b/i.test(trace.user_message || '')) return 'resolver_failed_to_match_indicator';
   if (facts.tool_output_status === 'not_found')
     return 'executor_returned_not_found';
   if (facts.tool_output_status === 'unavailable')
@@ -146,6 +148,8 @@ export function finalizeToolDecisionTrace(trace: any, answer = '') {
     final_answer_classification = 'contradicts_available_tool_output';
   if (root_cause_stage === 'final_answer_not_grounded_in_tool_output')
     final_answer_classification = 'misrepresented_existing_indicator';
+  if (root_cause_stage === 'model_selected_wrong_tool') final_answer_classification = 'specific_indicator_not_executed';
+  if (root_cause_stage === 'resolver_failed_to_match_indicator') final_answer_classification = 'resolver_rerouted_to_generic_dashboard';
   const { _tool_output, invalid_arguments, ...safe } = trace;
   return safeTraceValue({
     ...safe,
@@ -209,11 +213,11 @@ export class ToolDecisionTrace {
       arguments_after_resolver: safeTraceValue(resolved),
     });
   }
-  reroute(from: string, to: string, rerouted: boolean) {
+  reroute(from: string, to: string, rerouted: boolean, reason?: string) {
     if (rerouted)
       Object.assign(this.data, {
         tool_rerouted: true,
-        reroute_reason: `resolver selected ${to} instead of ${from}`,
+        reroute_reason: reason || `resolver selected ${to} instead of ${from}`,
         resolved_tool_key: to,
       });
   }
