@@ -329,7 +329,7 @@ export class CustomIndicatorsService {
   async previewSaved(
     tenantId: string,
     id: string,
-    userId: string,
+    userId?: string | null,
     filters: Record<string, unknown> = {},
   ) {
     const row = (await this.get(tenantId, id)) as {
@@ -339,7 +339,7 @@ export class CustomIndicatorsService {
       tenantId,
       row.calculation_config,
       id,
-      userId,
+      userId ?? undefined,
       filters,
     );
   }
@@ -661,10 +661,25 @@ export class CustomIndicatorsService {
         },
       );
       failureStage = 'log_result';
-      await this.log(tenantId, indicatorId, userId, res);
+      try {
+        await this.log(tenantId, indicatorId, userId, res);
+      } catch {
+        return {
+          ...res,
+          data_quality_notes: [
+            ...(Array.isArray(res.data_quality_notes)
+              ? res.data_quality_notes
+              : []),
+            'O cálculo foi concluído, mas o registro de auditoria não pôde ser salvo.',
+          ],
+        };
+      }
       return res;
     } catch (error) {
-      const reason = this.safeFailureReason(error);
+      const reason =
+        failureStage === 'log_result'
+          ? 'Falha ao registrar auditoria do cálculo do indicador.'
+          : this.safeFailureReason(error);
       return this.result(
         'failed',
         null,
@@ -1605,14 +1620,14 @@ export class CustomIndicatorsService {
   }
   private async log(
     tenantId: string,
-    custom_indicator_id: string | undefined,
-    user_id: string | undefined,
+    custom_indicator_id: string | null | undefined,
+    user_id: string | null | undefined,
     result: Record<string, unknown>,
   ) {
     await this.supabase.insert('custom_indicator_calculation_logs', {
       tenant_id: tenantId,
-      custom_indicator_id: custom_indicator_id ?? null,
-      user_id: user_id ?? null,
+      custom_indicator_id: this.nullableUuid(custom_indicator_id),
+      user_id: this.nullableUuid(user_id),
       status: result.status,
       records_considered: result.records_considered,
       formula_preview: result.formula_preview,
@@ -1625,5 +1640,8 @@ export class CustomIndicatorsService {
       },
       message: result.message,
     });
+  }
+  private nullableUuid(value?: string | null) {
+    return typeof value === 'string' && value.trim() ? value : null;
   }
 }
