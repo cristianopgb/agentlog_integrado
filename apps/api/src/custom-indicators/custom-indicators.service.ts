@@ -597,19 +597,29 @@ export class CustomIndicatorsService {
     userId?: string,
     filters: Record<string, unknown> = {},
   ) {
+    let failureStage = 'validate_config';
+    let by = new Map<string, Field>();
+    const diagnostics: Record<string, unknown> = this.configDiagnostics(
+      cfg,
+      filters,
+    );
     try {
-      const { by } = await this.validate(tenantId, cfg);
-      const scope = await this.previewScope(
+      ({ by } = await this.validate(tenantId, cfg));
+      failureStage = 'load_rows';
+      const loadedRows = await this.rows(
         tenantId,
-        await this.rows(
-          tenantId,
-          cfg.base_table,
-          filters.include_archived === true,
-        ),
-        filters,
+        cfg.base_table,
+        filters.include_archived === true,
       );
+      diagnostics.records_before_filter = loadedRows.length;
+      failureStage = 'apply_runtime_filters';
+      const scope = await this.previewScope(tenantId, loadedRows, filters, by);
+      diagnostics.records_after_runtime_filter = scope.rows.length;
+      failureStage = 'apply_config_filters';
       scope.rows = this.applyConfigFilters(scope.rows, cfg);
-      if (!scope.rows.length)
+      diagnostics.records_after_config_filter = scope.rows.length;
+      if (!scope.rows.length) {
+        diagnostics.records_used = 0;
         return this.result(
           'empty',
           null,
@@ -618,11 +628,21 @@ export class CustomIndicatorsService {
           0,
           cfg,
           by,
-          'Dados ainda não disponíveis para este indicador.',
+          'Não há registros compatíveis com o filtro informado.',
           0,
           scope.scope,
+          0,
+          {
+            config_diagnostics: diagnostics,
+            filters_applied: scope.filters_applied,
+          },
         );
+      }
+      failureStage = 'calculate';
       const r = this.calculate(scope.rows, cfg, by);
+      diagnostics.records_used =
+        'used' in r ? r.used : Math.max(scope.rows.length - r.ignored, 0);
+      failureStage = 'build_result';
       const res = this.result(
         'success',
         r.value,
@@ -635,21 +655,38 @@ export class CustomIndicatorsService {
         r.ignored,
         scope.scope,
         'used' in r ? r.used : undefined,
+        {
+          config_diagnostics: diagnostics,
+          filters_applied: scope.filters_applied,
+        },
       );
+      failureStage = 'log_result';
       await this.log(tenantId, indicatorId, userId, res);
       return res;
-    } catch {
+    } catch (error) {
+      const reason = this.safeFailureReason(error);
       return this.result(
         'failed',
         null,
         [],
         [],
-        0,
+        Number(
+          diagnostics.records_after_config_filter ??
+            diagnostics.records_after_runtime_filter ??
+            0,
+        ),
         cfg,
-        new Map(),
-        'Não foi possível calcular este indicador. Revise os seletores controlados.',
+        by,
+        reason,
         0,
         { scope: 'all' },
+        0,
+        {
+          failure_stage: failureStage,
+          failure_reason: reason,
+          failure_code: this.failureCode(failureStage, reason),
+          config_diagnostics: diagnostics,
+        },
       );
     }
   }
@@ -1036,6 +1073,7 @@ export class CustomIndicatorsService {
     ignored = 0,
     scope: Record<string, unknown> = { scope: 'all' },
     usedOverride?: number,
+    extra: Record<string, unknown> = {},
   ) {
     const used =
       cfg.operation_key === 'PIVOT_CONTROLLED'
@@ -1068,7 +1106,110 @@ export class CustomIndicatorsService {
       records_ignored_missing_data: ignored,
       scope,
       message,
+      data_quality_notes:
+        status === 'failed' || status === 'empty' ? [message] : [],
+      ...extra,
     };
+  }
+
+  private configDiagnostics(cfg: Config, filters: Record<string, unknown>) {
+    return {
+      operation_key: cfg.operation_key,
+      base_table: cfg.base_table,
+      rows_selector: (cfg.rows ?? []).map((x) => x.field),
+      columns_selector: (cfg.columns ?? []).map((x) => x.field),
+      values_selector: (cfg.values ?? []).map((x) => ({
+        field: x.field,
+        aggregation: x.aggregation,
+      })),
+      aggregation:
+        cfg.values?.[0]?.aggregation ??
+        cfg.grouping?.metric_operation ??
+        cfg.numerator_operation ??
+        cfg.operation_key,
+      filters_configured: (cfg.filters ?? []).map((x) => ({
+        field: x.field,
+        operator: x.operator,
+      })),
+      filters_runtime: Object.keys(filters).filter(
+        (key) =>
+          !['scope', 'include_archived', 'global_filters', 'filters'].includes(
+            key,
+          ),
+      ),
+      records_before_filter: null,
+      records_after_runtime_filter: null,
+      records_after_config_filter: null,
+      records_used: null,
+    };
+  }
+  private simpleRuntimeFilters(
+    filters: Record<string, unknown>,
+    by: Map<string, Field>,
+  ) {
+    const allowed: Record<string, string> = {
+      customer_name: 'igual a',
+      driver_name: 'igual a',
+      vehicle_plate: 'igual a',
+      status: 'igual a',
+      origin_state: 'igual a',
+      destination_state: 'igual a',
+      origin_city: 'contém',
+      destination_city: 'contém',
+      delivery_number: 'igual a',
+      cte_number: 'igual a',
+      invoice_number: 'igual a',
+      manifest_number: 'igual a',
+    };
+    return Object.entries(allowed).flatMap(([field, operator]) => {
+      const value = filters[field];
+      if (
+        value === null ||
+        value === undefined ||
+        (typeof value === 'string' && !value.trim()) ||
+        !by.has(field)
+      )
+        return [];
+      const meta = by.get(field);
+      if (!meta?.allowed_filters?.includes(operator)) return [];
+      return [
+        {
+          field,
+          operator,
+          value: typeof value === 'string' ? value.trim() : value,
+        },
+      ];
+    });
+  }
+  private safeFailureReason(error: unknown) {
+    const raw =
+      error instanceof Error
+        ? error.message
+        : String(error || 'Falha ao calcular indicador.');
+    const cleaned = raw
+      .replace(
+        /\b(?:select|from|where|join|insert|update|delete|tenant_id|source_id|batch_id|raw_payload|payload|staging|stack)\b/gi,
+        '[removido]',
+      )
+      .replace(/[\r\n]+/g, ' ')
+      .slice(0, 240)
+      .trim();
+    return cleaned || 'Falha controlada ao calcular este indicador.';
+  }
+  private failureCode(stage: string, reason: string) {
+    return (
+      (
+        stage +
+        '_' +
+        reason
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+      )
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 80) || 'custom_indicator_failed'
+    );
   }
   private applyConfigFilters(rows: Record<string, unknown>[], cfg: Config) {
     return (cfg.filters ?? []).reduce(
@@ -1094,7 +1235,8 @@ export class CustomIndicatorsService {
     const filled = this.filled(actual);
     if (operator === 'preenchido') return filled;
     if (operator === 'não preenchido') return !filled;
-    if (operator === 'em') return Array.isArray(expected) && expected.map(String).includes(value);
+    if (operator === 'em')
+      return Array.isArray(expected) && expected.map(String).includes(value);
     if (operator === 'igual a') return value === String(expected ?? '');
     if (operator === 'diferente de') return value !== String(expected ?? '');
     if (operator === 'contém')
@@ -1103,18 +1245,57 @@ export class CustomIndicatorsService {
     const fromDate = this.parseDateStart(expected);
     if (actualDate !== null && fromDate !== null) {
       if (operator === 'maior que') return actualDate >= fromDate;
-      if (operator === 'menor que') { const toDate = this.parseDateEnd(expected); return toDate !== null && actualDate <= toDate; }
-      if (operator === 'entre') { const toDate = this.parseDateEnd(expectedTo); return toDate !== null && actualDate >= fromDate && actualDate <= toDate; }
+      if (operator === 'menor que') {
+        const toDate = this.parseDateEnd(expected);
+        return toDate !== null && actualDate <= toDate;
+      }
+      if (operator === 'entre') {
+        const toDate = this.parseDateEnd(expectedTo);
+        return (
+          toDate !== null && actualDate >= fromDate && actualDate <= toDate
+        );
+      }
     }
-    const number = Number(actual); const from = Number(expected); const to = Number(expectedTo);
-    if (operator === 'maior que') return Number.isFinite(number) && Number.isFinite(from) && number > from;
-    if (operator === 'menor que') return Number.isFinite(number) && Number.isFinite(from) && number < from;
-    if (operator === 'entre') return Number.isFinite(number) && Number.isFinite(from) && Number.isFinite(to) && number >= from && number <= to;
+    const number = Number(actual);
+    const from = Number(expected);
+    const to = Number(expectedTo);
+    if (operator === 'maior que')
+      return Number.isFinite(number) && Number.isFinite(from) && number > from;
+    if (operator === 'menor que')
+      return Number.isFinite(number) && Number.isFinite(from) && number < from;
+    if (operator === 'entre')
+      return (
+        Number.isFinite(number) &&
+        Number.isFinite(from) &&
+        Number.isFinite(to) &&
+        number >= from &&
+        number <= to
+      );
     return false;
   }
-  private isDateLike(value: unknown) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value); }
-  private parseDateStart(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T00:00:00.000Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
-  private parseDateEnd(value: unknown) { if (!this.isDateLike(value)) return null; const date = new Date(String(value).length === 10 ? String(value) + 'T23:59:59.999Z' : String(value)); return Number.isFinite(date.getTime()) ? date.getTime() : null; }
+  private isDateLike(value: unknown) {
+    return (
+      typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)
+    );
+  }
+  private parseDateStart(value: unknown) {
+    if (!this.isDateLike(value)) return null;
+    const date = new Date(
+      String(value).length === 10
+        ? String(value) + 'T00:00:00.000Z'
+        : String(value),
+    );
+    return Number.isFinite(date.getTime()) ? date.getTime() : null;
+  }
+  private parseDateEnd(value: unknown) {
+    if (!this.isDateLike(value)) return null;
+    const date = new Date(
+      String(value).length === 10
+        ? String(value) + 'T23:59:59.999Z'
+        : String(value),
+    );
+    return Number.isFinite(date.getTime()) ? date.getTime() : null;
+  }
   private filled(value: unknown) {
     return value !== null && value !== undefined && value !== '';
   }
@@ -1128,6 +1309,7 @@ export class CustomIndicatorsService {
     tenantId: string,
     rows: Record<string, unknown>[],
     filters: Record<string, unknown>,
+    by: Map<string, Field>,
   ) {
     void tenantId;
     const scope: Record<string, unknown> = {
@@ -1151,15 +1333,47 @@ export class CustomIndicatorsService {
       );
     }
     next = this.applyDashboardFilters(next, filters);
-    return { rows: next, scope };
+    const applied = this.simpleRuntimeFilters(filters, by);
+    next = next.filter((row) =>
+      applied.every((item) =>
+        this.matchesFilter(row[item.field], item.operator, item.value),
+      ),
+    );
+    return {
+      rows: next,
+      scope,
+      filters_applied: Object.fromEntries(
+        applied.map((item) => [
+          item.field,
+          { operator: item.operator, value: item.value },
+        ]),
+      ),
+    };
   }
 
-  private applyDashboardFilters(rows: Record<string, unknown>[], filters: Record<string, unknown>) {
-    const list = Array.isArray(filters.global_filters) ? filters.global_filters : Array.isArray(filters.filters) ? filters.filters : [];
-    return rows.filter((row) => list.every((item) => {
-      const f = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-      return this.matchesFilter(row[String(f.field_key ?? f.field ?? '')], String(f.operator ?? ''), f.values ?? f.value, f.value_to);
-    }));
+  private applyDashboardFilters(
+    rows: Record<string, unknown>[],
+    filters: Record<string, unknown>,
+  ) {
+    const list = Array.isArray(filters.global_filters)
+      ? filters.global_filters
+      : Array.isArray(filters.filters)
+        ? filters.filters
+        : [];
+    return rows.filter((row) =>
+      list.every((item) => {
+        const f = (item && typeof item === 'object' ? item : {}) as Record<
+          string,
+          unknown
+        >;
+        return this.matchesFilter(
+          row[String(f.field_key ?? f.field ?? '')],
+          String(f.operator ?? ''),
+          f.values ?? f.value,
+          f.value_to,
+        );
+      }),
+    );
   }
 
   private scopeMessage(scope: Record<string, unknown>, ignored: number) {
@@ -1379,7 +1593,10 @@ export class CustomIndicatorsService {
     if (!includeArchived) filters.push('deleted_at=is.null');
     if (table === 'operation_records') {
       filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
-      if (!includeArchived) filters.push(await this.supabase.activeOperationalSourceFilter(tenantId));
+      if (!includeArchived)
+        filters.push(
+          await this.supabase.activeOperationalSourceFilter(tenantId),
+        );
     }
     return this.supabase.select<Record<string, unknown>[]>(
       table,
