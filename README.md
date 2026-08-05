@@ -1,128 +1,113 @@
 # Sistema Logístico Integrado
 
-Monorepo do **Sistema Logístico Integrado**, um SaaS modular multiempresa para transportadoras.
+Monorepo do **Sistema Logístico Integrado**, um SaaS modular multiempresa para transportadoras com camada inteligente sobre dados operacionais tratados.
 
-A Sprint 1 entrega somente a fundação SaaS multiempresa: Supabase Auth, tenants, perfis, roles, permissions, catálogo de módulos, vínculos de módulos por tenant, RLS básica, endpoints mínimos protegidos e telas mínimas de login/área autenticada.
+O princípio do produto é: **flexível no setup, rígido na operação**. O sistema aceita diferentes fontes legadas, APIs e planilhas contratadas na entrada, mas consolida a operação em contratos, validação, pareamento, modelo canônico, indicadores, dashboards, relatórios e agentes de IA controlados.
 
-## Estrutura
+## Stack
+
+- **Frontend:** Next.js, React, TypeScript, Tailwind CSS e shadcn.
+- **Backend:** NestJS, Node.js e TypeScript.
+- **Banco e plataforma de dados:** Supabase Postgres, Auth, Storage e migrations.
+- **IA:** OpenAI via AI Gateway/backend, com tools controladas e sem SQL livre.
+- **Monorepo:** pnpm workspaces.
+
+Python **não faz parte da stack do produto** e não deve ser usado em desenvolvimento, validação ou automações do MVP.
+
+## Arquitetura resumida
 
 ```text
-.
-├── apps
-│   ├── web       # Frontend Next.js, React, TypeScript e Tailwind CSS
-│   ├── api       # Backend NestJS com healthcheck e endpoints mínimos Sprint 1
-│   └── workers   # Estrutura inicial de workers sem funcionalidades operacionais
-├── packages      # Pacotes compartilhados do monorepo
-├── docs          # Documentação inicial do projeto
-├── supabase      # Migrations e seed do Supabase
-└── pnpm-workspace.yaml
+apps/web      → Frontend Next.js
+apps/api      → Backend NestJS, autenticação, permissões, regras e AI Gateway
+apps/workers  → Estrutura para rotinas internas do monorepo, sem microserviços no MVP
+packages/*    → Tipos, schemas, UI, config, utilitários, db e ferramentas compartilhadas
+supabase/*    → Migrations e artefatos de banco
 ```
 
-## Pré-requisitos
+A operação crítica passa pelo backend. O frontend não deve concentrar regra de negócio crítica, e o backend deve validar autenticação, tenant, módulos, permissões e acesso às tools antes de consultar dados tratados ou disparar ações.
 
-- Node.js 20.11 ou superior.
-- Corepack habilitado.
-- pnpm 10.14.0.
-- Projeto Supabase configurado localmente ou remoto.
+## Fluxo de dados
 
-## Instalação
+```text
+Legado/API/planilha contratada
+  → contrato
+  → staging
+  → validação
+  → pareamento
+  → modelo canônico
+  → indicadores/dashboards/relatórios/agentes
+```
+
+Indicadores nativos, indicadores customizados, dashboards, relatórios e agentes devem consultar somente a base nativa/canônica tratada. Eles não devem depender diretamente de integração, lote, upload, staging, `data_source` ou origem. Ausência de dado deve ser tratada como aguardando dados ou dados insuficientes, não como erro operacional.
+
+## Módulos implementados na versão v0.17-homologacao-ai-dados
+
+- Base multiempresa com `tenant_id` nas tabelas multiempresa.
+- Autenticação.
+- RBAC, roles e permissões.
+- Planos e módulos.
+- Setup.
+- Fontes de dados.
+- Contratos de dados.
+- Staging.
+- Validação contra contrato.
+- Pareamento.
+- Modelo canônico operacional.
+- `operation_records`.
+- Dashboards.
+- Indicadores nativos.
+- Indicadores customizados.
+- Relatórios.
+- Central de integrações/logs.
+- AI Gateway.
+- Chat Geral texto.
+- Voice/Reatime, com ressalvas de aliases de voz documentadas.
+- Tools controladas.
+- Logs de IA em `ai_runs` e `ai_tool_calls`.
+- Traces de decisão.
+- Indicadores customizados de transitime e R$/ton funcionando em homologação.
+
+## Módulos e frentes ainda pendentes
+
+- Tickets e ocorrências operacionais como workflow completo.
+- Canhotos, pendências, bloqueios e pré-faturamento MVP.
+- Inbox sem IA.
+- WhatsApp provider/webhook.
+- Suporte interno SaaS.
+- Transporte MVP completo.
+- Armazém MVP completo.
+- Equipes MVP completo.
+- Governança IA avançada.
+- Alertas e tarefas.
+- Hardening final.
+
+## Comandos principais
 
 ```bash
-corepack enable
-corepack prepare pnpm@10.14.0 --activate
 pnpm install
+pnpm -r typecheck
+pnpm -r build
+pnpm --filter @sli/api test:general-chat-tools
 ```
 
-## Primeiro acesso seguro
-
-1. Configure as variáveis Supabase no `.env` local usando `.env.example` como referência.
-   - Na Vercel, o frontend deve usar preferencialmente `NEXT_PUBLIC_AGENTLOG_SUPABASE_SUPABASE_URL` e `NEXT_PUBLIC_AGENTLOG_SUPABASE_SUPABASE_ANON_KEY`.
-   - O frontend mantém compatibilidade com `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` como fallback.
-2. Aplique a migration da Sprint 1 em `supabase/migrations/202607020001_sprint_1_core_multitenancy.sql`.
-3. Preencha localmente `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_ADMIN_FULL_NAME`, `BOOTSTRAP_TENANT_NAME` e `BOOTSTRAP_TENANT_SLUG`.
-4. Rode o bootstrap manual e idempotente:
-
-```bash
-pnpm bootstrap:admin
-```
-
-5. Acesse `/login` com o usuário criado.
-
-O script de bootstrap usa `SUPABASE_SERVICE_ROLE_KEY` somente no backend/script, não imprime senha, tokens ou service role, e não cria cadastro público.
-
-## Comandos de frontend
+## Comandos úteis por aplicação
 
 ```bash
 pnpm --filter @sli/web dev
 pnpm --filter @sli/web build
 pnpm --filter @sli/web lint
 pnpm --filter @sli/web typecheck
-```
-
-## Comandos de backend
-
-```bash
 pnpm --filter @sli/api dev
 pnpm --filter @sli/api build
 pnpm --filter @sli/api lint
 pnpm --filter @sli/api typecheck
-pnpm --filter @sli/api bootstrap:admin
+pnpm bootstrap:admin
 ```
 
-## Endpoints Sprint 1
+## Regras de IA controlada
 
-- `GET /health` permanece público para healthcheck.
-- `GET /users/me` retorna usuário autenticado e perfil.
-- `GET /tenants` retorna somente tenants do usuário autenticado.
-- `GET /tenants/:tenantId/modules` retorna módulos ativos do tenant somente se o usuário pertencer ao tenant.
-- `GET /modules` retorna catálogo global de módulos ativos para usuário autenticado.
+Agentes de IA não usam SQL livre, não acessam banco cru e não leem staging/`raw_payload` fora dos fluxos permitidos. A rota correta é passar pelo Backend NestJS, AI Gateway e tools controladas, consultando somente dados tratados no Supabase/Postgres e respeitando tenant, permissões e contratos.
 
-## Telas Sprint 1
+## Homologação v0.17
 
-- `/login`: login por e-mail e senha com Supabase Auth, sem cadastro público.
-- `/app`: área autenticada simples com estado do usuário e tenant ativo.
-- `/app/tenants`: lista tenants do usuário e permite seleção local do tenant ativo.
-
-## Banco Sprint 1
-
-Migration criada:
-
-- `supabase/migrations/202607020001_sprint_1_core_multitenancy.sql`
-
-Tabelas criadas:
-
-- `tenants`
-- `users_profile`
-- `roles`
-- `permissions`
-- `user_roles`
-- `modules`
-- `tenant_modules`
-
-Módulos semeados:
-
-- Core
-- Transporte
-- Atendimento
-- Armazém
-- Financeiro
-- Equipes
-
-## Comandos de qualidade
-
-```bash
-pnpm lint
-pnpm typecheck
-pnpm build
-pnpm format:check
-```
-
-## Limites da Sprint 1
-
-Não foram implementados dashboards reais, SaaS Admin, planos, cobrança, setup kanban, contratos de dados, staging, pareamento, tickets, módulos operacionais, WhatsApp, OpenAI ou agentes de IA.
-
-## IA Controlada
-
-A Sprint 17A disponibiliza configurações de agentes por tenant, catálogo de ferramentas controladas e logs de execução. Configure `OPENAI_API_KEY`, `OPENAI_DEFAULT_MODEL`, `AI_GATEWAY_ENABLED` e `AI_GATEWAY_DRY_RUN` somente no ambiente do backend. A chave nunca é enviada ao frontend nem persistida no banco.
-
-Por padrão, testes manuais são **dry-run**: criam uma execução auditável sem chamar provedores externos, ferramentas operacionais ou dados reais. A fundação não concede à IA acesso a banco cru, SQL livre ou consultas arbitrárias; as ferramentas são cadastradas e habilitadas explicitamente por agente. Integrações operacionais com dashboard, relatórios e chat ficam para próximas sprints.
+A versão **v0.17-homologacao-ai-dados** congela o estado técnico atual para homologação de dados, indicadores, relatórios e IA controlada. A documentação de homologação, implantação, release notes, limitações conhecidas e backlog pós-homologação está em `docs/`.
