@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { isCanonicalNameAmbiguous, isCanonicalNameMatch, resolveCanonicalCustomerName } from '../shared/canonical-customer-matching';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { Formula, Expr } from './calculated-fields.service';
 
@@ -635,6 +636,7 @@ export class CustomIndicatorsService {
           {
             config_diagnostics: diagnostics,
             filters_applied: scope.filters_applied,
+            ...(scope.data_quality_notes?.length ? { data_quality_notes: scope.data_quality_notes } : {}),
           },
         );
       }
@@ -643,7 +645,7 @@ export class CustomIndicatorsService {
       diagnostics.records_used =
         'used' in r ? r.used : Math.max(scope.rows.length - r.ignored, 0);
       failureStage = 'build_result';
-      const res = this.result(
+      const res = this.enforceRenderableResult(this.result(
         'success',
         r.value,
         r.series,
@@ -658,8 +660,9 @@ export class CustomIndicatorsService {
         {
           config_diagnostics: diagnostics,
           filters_applied: scope.filters_applied,
+            ...(scope.data_quality_notes?.length ? { data_quality_notes: scope.data_quality_notes } : {}),
         },
-      );
+      ));
       failureStage = 'log_result';
       try {
         await this.log(tenantId, indicatorId, userId, res);
@@ -1127,6 +1130,35 @@ export class CustomIndicatorsService {
     };
   }
 
+  private enforceRenderableResult(result: Record<string, any>) {
+    const hasValue = result.value !== null && result.value !== undefined;
+    const hasRows =
+      (Array.isArray(result.rows) && result.rows.length > 0) ||
+      (Array.isArray(result.table) && result.table.length > 0) ||
+      (Array.isArray(result.series) && result.series.length > 0) ||
+      (Array.isArray(result.result_rows) && result.result_rows.length > 0) ||
+      (Array.isArray(result.structured_rows) &&
+        result.structured_rows.length > 0);
+    if (
+      ['success', 'available'].includes(String(result.status)) &&
+      Number(result.records_used ?? 0) > 0 &&
+      !hasValue &&
+      !hasRows
+    ) {
+      const reason =
+        'Indicador calculou registros, mas não gerou saída renderizável.';
+      return {
+        ...result,
+        status: 'failed',
+        failure_stage: 'build_result',
+        failure_reason: reason,
+        failure_code: this.failureCode('build_result', reason),
+        data_quality_notes: [reason],
+      };
+    }
+    return result;
+  }
+
   private configDiagnostics(cfg: Config, filters: Record<string, unknown>) {
     return {
       operation_key: cfg.operation_key,
@@ -1348,19 +1380,32 @@ export class CustomIndicatorsService {
       );
     }
     next = this.applyDashboardFilters(next, filters);
+    const customerMatch =
+      typeof filters.customer_name === 'string'
+        ? resolveCanonicalCustomerName(filters.customer_name, next)
+        : null;
+    const data_quality_notes = isCanonicalNameAmbiguous(customerMatch)
+      ? ['O filtro de cliente ficou ambíguo; confirme o cliente desejado.']
+      : [];
     const applied = this.simpleRuntimeFilters(filters, by);
-    next = next.filter((row) =>
+    if (isCanonicalNameAmbiguous(customerMatch)) next = [];
+    else next = next.filter((row) =>
       applied.every((item) =>
-        this.matchesFilter(row[item.field], item.operator, item.value),
+        item.field === 'customer_name' && isCanonicalNameMatch(customerMatch)
+          ? row.customer_name === customerMatch.matched_value
+          : this.matchesFilter(row[item.field], item.operator, item.value),
       ),
     );
     return {
       rows: next,
       scope,
+      data_quality_notes,
       filters_applied: Object.fromEntries(
         applied.map((item) => [
           item.field,
-          { operator: item.operator, value: item.value },
+          item.field === 'customer_name' && isCanonicalNameMatch(customerMatch)
+            ? customerMatch
+            : { operator: item.operator, value: item.value },
         ]),
       ),
     };
