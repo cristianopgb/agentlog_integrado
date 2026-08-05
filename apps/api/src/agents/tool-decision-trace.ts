@@ -218,8 +218,16 @@ export class ToolDecisionTrace {
       Object.assign(this.data, {
         tool_rerouted: true,
         reroute_reason: reason || `resolver selected ${to} instead of ${from}`,
+        rejected_tool_key: from,
+        rejected_reason: reason || `resolver selected ${to} instead of ${from}`,
         resolved_tool_key: to,
       });
+  }
+  reject(key: string, reason?: string) {
+    Object.assign(this.data, {
+      rejected_tool_key: key,
+      rejected_reason: reason || 'resolver rejected model-selected tool',
+    });
   }
   invalid(output: unknown) {
     Object.assign(this.data, { invalid_arguments: true, _tool_output: output });
