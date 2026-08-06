@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Bell, Blocks, Building2, ChartNoAxesCombined, CircleUserRound, FileBarChart, Gauge, KeyRound, LayoutDashboard, PackageOpen, PanelTop, PlugZap, ScrollText, Settings2, Tags, UsersRound } from 'lucide-react';
+import { Bell, Blocks, Building2, ChartNoAxesCombined, CircleUserRound, FileBarChart, Gauge, KeyRound, LayoutDashboard, PackageOpen, PanelTop, PlugZap, ScrollText, Settings2, Siren, Tags, UsersRound } from 'lucide-react';
 import { createBrowserSupabaseClient } from '../lib/supabase';
 import { getCurrentUserPermissions, hasPermission, type UserPermission } from '../lib/rbac';
 import { GlobalAgentChat } from './agents/global-agent-chat';
@@ -18,6 +18,7 @@ const navigation = [
   { href: '/app/native-data', label: 'Dados tratados', icon: PackageOpen, permission: 'native_records.view' },
   { href: '/app/indicators', label: 'Indicadores', icon: ChartNoAxesCombined, permission: 'indicators.view' },
   { href: '/app/reports', label: 'Relatórios', icon: FileBarChart, permission: 'reports.view' },
+  { href: '/app/occurrences', label: 'Ocorrências', icon: Siren, permission: 'occurrences.view' },
   { href: '/app/agents', label: 'Agentes', icon: Blocks, badge: 'em breve' },
 ];
 
