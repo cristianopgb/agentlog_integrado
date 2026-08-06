@@ -1,5 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { AuthGuard } from '../auth/auth.guard';
+import { PermissionsGuard } from '../rbac/permissions.guard';
+import { RbacService } from '../rbac/rbac.service';
+import { SupabaseService } from '../supabase/supabase.service';
 import { OccurrencesController } from './occurrences.controller';
+import { OccurrencesModule } from './occurrences.module';
 import { OccurrencesService } from './occurrences.service';
 import { REQUIRE_PERMISSION_KEY, type PermissionRequirement } from '../rbac/require-permission.decorator';
 
@@ -14,6 +20,14 @@ class MemoryDb {
 function ok(value:unknown,message:string){if(!value)throw new Error(message);}
 async function rejects(run:()=>Promise<unknown>,message:string){try{await run();}catch(e){ok(e instanceof BadRequestException,message);return;}throw new Error(message);}
 async function main(){
+  process.env.SUPABASE_URL??='http://localhost:54321';
+  process.env.SUPABASE_SERVICE_ROLE_KEY??='local-bootstrap-test-key';
+  const app=await NestFactory.createApplicationContext(OccurrencesModule,{logger:false,abortOnError:false});
+  ok(app.get(SupabaseService) instanceof SupabaseService,'SupabaseService must be resolved by Nest');
+  ok(app.get(AuthGuard) instanceof AuthGuard,'AuthGuard must be resolved by Nest');
+  ok(app.get(PermissionsGuard) instanceof PermissionsGuard,'PermissionsGuard must be resolved by Nest');
+  ok(app.get(RbacService) instanceof RbacService,'RbacService must be resolved by Nest');
+  await app.close();
   const db=new MemoryDb();const service=new OccurrencesService(db as never);
   const without=await service.create('a','user',{title:'Sem operação'});ok((without.operation_links as unknown[]).length===0,'create without operation');
   const one=await service.create('a','user',{title:'Uma operação',operation_record_ids:['op-a'],primary_operation_record_id:'op-a'});ok((one.operation_links as unknown[]).length===1,'create with operation');
