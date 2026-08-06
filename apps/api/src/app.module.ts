@@ -22,9 +22,10 @@ import { UsersController } from './users/users.controller';
 import { ReportsModule } from './reports/reports.module';
 import { AgentsModule } from './agents/agents.module';
 import { ApiIntegrationsModule } from './api-integrations/api-integrations.module';
+import { OccurrencesModule } from './occurrences/occurrences.module';
 
 @Module({
-  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule, DashboardsModule, ReportsModule, AgentsModule, ApiIntegrationsModule],
+  imports: [SupabaseModule, AuthModule, RbacModule, PlansModule, SubscriptionsModule, UsageModule, SetupModule, DataContractsModule, StagingModule, CanonicalModule, NormalizationModule, NativeRecordsModule, NativeIndicatorsModule, CustomIndicatorsModule, DashboardsModule, ReportsModule, AgentsModule, ApiIntegrationsModule, OccurrencesModule],
   controllers: [HealthController, UsersController, TenantsController, ModulesController, RbacController],
 })
 export class AppModule {}
