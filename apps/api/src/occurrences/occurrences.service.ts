@@ -4,6 +4,8 @@ import { SupabaseService } from '../supabase/supabase.service';
 export const OCCURRENCE_STATUSES=['draft','open','triage','in_progress','waiting_driver','waiting_customer','waiting_carrier','waiting_approval','waiting_document','waiting_payment','waiting_redelivery','waiting_return','partially_resolved','resolved','closed','canceled','reopened'] as const;
 const priorities=new Set(['low','medium','high','critical']);
 const relationships=new Set(['primary','affected','source','related','return','complementary']);
+const stages=new Set(['opening','update','resolution','closing']);
+const guidedFields=['document_number','invoice_number','return_invoice_number','sku','quantity','amount','unit','evidence_required','driver_notes','customer_notes','authorized_by','payment_amount','payment_receipt_required','redelivery_date','responsible_team','attachment_required'] as const;
 const transitions:Record<string,Set<string>>={
   draft:new Set(['open','canceled']), open:new Set(['triage','in_progress','canceled']), triage:new Set(['in_progress','canceled']),
   in_progress:new Set(['waiting_driver','waiting_customer','waiting_carrier','waiting_approval','waiting_document','waiting_payment','waiting_redelivery','waiting_return','partially_resolved','resolved','canceled']),
@@ -15,6 +17,12 @@ type Row=Record<string,unknown>&{id:string;current_status?:string;current_owner_
 @Injectable()
 export class OccurrencesService {
   constructor(private readonly db:SupabaseService){}
+  listReasonCategories(tenantId:string){return this.db.select<Row[]>('occurrence_reason_categories',`select=*&tenant_id=eq.${tenantId}&is_active=eq.true&order=name.asc`);}
+  listReasons(tenantId:string){return this.db.select<Row[]>('occurrence_reasons',`select=*&tenant_id=eq.${tenantId}&is_active=eq.true&order=name.asc`);}
+  async reasonRequirements(tenantId:string,reasonId:string,stage:string){
+    const valid=this.stage(stage);await this.reason(tenantId,reasonId);
+    return this.db.select<Row[]>('occurrence_reason_requirements',`select=*&tenant_id=eq.${tenantId}&reason_id=eq.${reasonId}&stage=eq.${valid}&is_required=eq.true&order=field_key.asc`);
+  }
   async list(tenantId:string,q:Record<string,string>={}){
     const filters=[`select=*`,`tenant_id=eq.${tenantId}`,'deleted_at=is.null'];
     if(q.status){this.status(q.status);filters.push(`current_status=eq.${encodeURIComponent(q.status)}`);}
@@ -24,13 +32,14 @@ export class OccurrencesService {
     return this.db.select<Row[]>('occurrences',`${filters.join('&')}&order=opened_at.desc&limit=${Math.min(Number(q.limit)||50,100)}`);
   }
   async create(tenantId:string,userId:string,body:Record<string,unknown>){
-    this.only(body,['title','description','current_priority','source_channel','due_at','source_reference','metadata','operation_record_ids','primary_operation_record_id']);
+    this.only(body,['title','description','current_priority','source_channel','due_at','source_reference','metadata','operation_record_ids','primary_operation_record_id','reason_id','event_description','occurred_at',...guidedFields]);
     const title=this.required(body.title,'title'); const priority=this.priority(body.current_priority??'medium');
     const ids=this.stringArray(body.operation_record_ids); if(body.primary_operation_record_id) ids.push(this.required(body.primary_operation_record_id,'primary_operation_record_id'));
     const unique=[...new Set(ids)]; await Promise.all(unique.map(id=>this.operation(tenantId,id)));
+    const reasonId=this.required(body.reason_id,'reason_id');await this.validateRequirements(tenantId,reasonId,'opening',body,unique);
     const suffix=`${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
     const [created]=await this.db.insert<Row[]>('occurrences',{tenant_id:tenantId,occurrence_number:`OCO-${suffix}`,title,description:this.optional(body.description),current_status:'open',current_priority:priority,source_channel:this.optional(body.source_channel)??'manual',due_at:this.optional(body.due_at),source_reference:this.optional(body.source_reference),metadata:this.object(body.metadata),created_by:userId,updated_by:userId});
-    await this.event(tenantId,created.id,userId,{event_type:'created',event_title:'Ocorrência criada',new_status:'open'});
+    await this.event(tenantId,created.id,userId,{event_type:'created',event_title:'Ocorrência criada',event_description:this.optional(body.event_description),event_at:this.optional(body.occurred_at),reason_id:reasonId,new_status:'open',metadata:this.guidedMetadata(body)});
     for(const operationId of unique)await this.insertLink(tenantId,created.id,userId,operationId,operationId===body.primary_operation_record_id?'primary':'affected',operationId===body.primary_operation_record_id);
     return this.detail(tenantId,created.id);
   }
@@ -55,9 +64,9 @@ export class OccurrencesService {
     await this.event(tenantId,id,userId,{event_type:'assigned',event_title:owner?'Responsável atribuído':'Responsável removido',metadata:{owner_id:owner}});return updated;
   }
   async addEvent(tenantId:string,id:string,userId:string,body:Record<string,unknown>){
-    this.only(body,['reason_id','event_type','event_title','event_description','event_at','source_channel','source_reference','metadata']);await this.find(tenantId,id);
-    if(body.reason_id)await this.reason(tenantId,this.required(body.reason_id,'reason_id'));
-    return this.event(tenantId,id,userId,{event_type:this.required(body.event_type,'event_type'),reason_id:this.optional(body.reason_id),event_title:this.optional(body.event_title),event_description:this.optional(body.event_description),event_at:this.optional(body.event_at),source_channel:this.optional(body.source_channel),source_reference:this.optional(body.source_reference),metadata:this.object(body.metadata)});
+    this.only(body,['reason_id','stage','event_type','event_title','event_description','event_at','source_channel','source_reference','metadata',...guidedFields]);await this.find(tenantId,id);
+    const reasonId=this.required(body.reason_id,'reason_id');const stage=this.stage(body.stage);await this.validateRequirements(tenantId,reasonId,stage,body,[]);
+    return this.event(tenantId,id,userId,{event_type:this.required(body.event_type,'event_type'),reason_id:reasonId,event_title:this.optional(body.event_title),event_description:this.optional(body.event_description),event_at:this.optional(body.event_at),source_channel:this.optional(body.source_channel),source_reference:this.optional(body.source_reference),metadata:{...this.object(body.metadata),stage,...this.guidedMetadata(body)}});
   }
   async addOperationLink(tenantId:string,id:string,userId:string,body:Record<string,unknown>){
     this.only(body,['operation_record_id','relationship_type','is_primary']);await this.find(tenantId,id);const op=this.required(body.operation_record_id,'operation_record_id');await this.operation(tenantId,op);
@@ -73,6 +82,14 @@ export class OccurrencesService {
   private async find(tenantId:string,id:string){const rows=await this.db.select<Row[]>('occurrences',`select=*&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`);if(!rows.length)throw new NotFoundException('Occurrence not found.');return rows[0];}
   private async operation(tenantId:string,id:string){const rows=await this.db.select<Row[]>('operation_records',`select=id&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`);if(!rows.length)throw new BadRequestException('Operation does not belong to tenant.');}
   private async reason(tenantId:string,id:string){const rows=await this.db.select<Row[]>('occurrence_reasons',`select=id&tenant_id=eq.${tenantId}&id=eq.${id}&is_active=eq.true&limit=1`);if(!rows.length)throw new BadRequestException('Reason is inactive or does not belong to tenant.');}
+  private async validateRequirements(tenantId:string,reasonId:string,stage:string,body:Record<string,unknown>,operationIds:string[]){
+    await this.reason(tenantId,reasonId);const requirements=await this.db.select<Row[]>('occurrence_reason_requirements',`select=field_key&tenant_id=eq.${tenantId}&reason_id=eq.${reasonId}&stage=eq.${stage}&is_required=eq.true`);
+    const missing=requirements.map(r=>String(r.field_key)).filter(field=>field==='reason_id'?false:field==='operation_record_id'?!operationIds.length:field==='occurred_at'?!body.occurred_at&&!body.event_at:field==='event_description'?!this.present(body.event_description):!this.present(body[field]));
+    if(missing.length)throw new BadRequestException(`Required fields for ${stage}: ${missing.join(', ')}.`);
+  }
+  private present(v:unknown){return v!==undefined&&v!==null&&v!==''&&v!==false;}
+  private guidedMetadata(body:Record<string,unknown>){return Object.fromEntries(guidedFields.filter(k=>body[k]!==undefined).map(k=>[k,body[k]]));}
+  private stage(v:unknown){const value=String(v);if(!stages.has(value))throw new BadRequestException('Invalid requirement stage.');return value;}
   private only(body:Record<string,unknown>,allowed:string[]){const invalid=Object.keys(body).filter(k=>!allowed.includes(k));if(invalid.length)throw new BadRequestException(`Fields not allowed: ${invalid.join(', ')}`);}
   private required(v:unknown,name:string){if(typeof v!=='string'||!v.trim())throw new BadRequestException(`${name} is required.`);return v.trim();}
   private optional(v:unknown){return typeof v==='string'&&v.trim()?v.trim():null;}

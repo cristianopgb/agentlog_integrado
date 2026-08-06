@@ -9,6 +9,9 @@ import { OccurrencesService } from './occurrences.service';
 export class OccurrencesController {
   constructor(private readonly service: OccurrencesService) {}
   @Get() @RequirePermission('occurrences.view') list(@Param('tenantId') tenantId:string,@Query() query:Record<string,string>){return this.service.list(tenantId,query);}
+  @Get('reason-categories') @RequirePermission('occurrence_reasons.view') categories(@Param('tenantId') tenantId:string){return this.service.listReasonCategories(tenantId);}
+  @Get('reasons') @RequirePermission('occurrence_reasons.view') reasons(@Param('tenantId') tenantId:string){return this.service.listReasons(tenantId);}
+  @Get('reasons/:reasonId/requirements') @RequirePermission('occurrence_reasons.view') requirements(@Param('tenantId') tenantId:string,@Param('reasonId') reasonId:string,@Query('stage') stage:string){return this.service.reasonRequirements(tenantId,reasonId,stage);}
   @Post() @RequirePermission('occurrences.create') create(@Param('tenantId') tenantId:string,@Req() req:AuthenticatedRequest,@Body() body:Record<string,unknown>){return this.service.create(tenantId,req.user.id,body);}
   @Get('kanban') @RequirePermission('occurrences.kanban.view') kanban(@Param('tenantId') tenantId:string){return this.service.kanban(tenantId);}
   @Get(':id') @RequirePermission('occurrences.view') detail(@Param('tenantId') tenantId:string,@Param('id') id:string){return this.service.detail(tenantId,id);}
