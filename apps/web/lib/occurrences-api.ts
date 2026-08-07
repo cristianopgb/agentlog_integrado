@@ -261,7 +261,7 @@ export const addOccurrenceEvent = (
   });
 export const operationOptions = (tenant: string, search: string) =>
   api<OperationOption[]>(
-    `/tenants/${tenant}/occurrences/operation-options?search=${encodeURIComponent(search)}`,
+    `/tenants/${tenant}/occurrences/operation-options?search=${encodeURIComponent(search)}&limit=20`,
   );
 export const addOperationLink = (
   tenant: string,

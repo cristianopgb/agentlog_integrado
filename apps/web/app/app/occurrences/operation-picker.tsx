@@ -4,6 +4,7 @@ import {
   operationOptions,
   type OperationOption,
 } from '../../../lib/occurrences-api';
+import { shortId } from '../../../lib/occurrence-formatters';
 
 export function OperationPicker({
   tenant,
@@ -33,7 +34,28 @@ export function OperationPicker({
       setLoading(true);
       onLoadingChange?.(true);
       try {
-        setOptions(await operationOptions(tenant, search));
+        const results = await operationOptions(tenant, search);
+        const unique = [
+          ...new Map(results.map((option) => [option.id, option])).values(),
+        ];
+        const labelCounts = unique.reduce<Record<string, number>>(
+          (counts, option) => {
+            counts[option.label] = (counts[option.label] ?? 0) + 1;
+            return counts;
+          },
+          {},
+        );
+        setOptions(
+          unique.map((option) => ({
+            ...option,
+            subtitle:
+              labelCounts[option.label] > 1
+                ? [option.subtitle, `ID ${shortId(option.id)}`]
+                    .filter(Boolean)
+                    .join(' · ')
+                : option.subtitle,
+          })),
+        );
       } catch (e) {
         setError((e as Error).message);
         setOptions([]);
