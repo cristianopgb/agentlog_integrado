@@ -5,6 +5,8 @@ export const OCCURRENCE_STATUSES=['draft','open','triage','in_progress','waiting
 const priorities=new Set(['low','medium','high','critical']);
 const relationships=new Set(['primary','affected','source','related','return','complementary']);
 const stages=new Set(['opening','update','resolution','closing']);
+const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const invalidOperationMessage='Operação vinculada inválida. Selecione uma operação válida em vez de digitar número de NF.';
 const guidedFields=['document_number','invoice_number','return_invoice_number','sku','quantity','amount','unit','evidence_required','driver_notes','customer_notes','authorized_by','payment_amount','payment_receipt_required','redelivery_date','responsible_team','attachment_required'] as const;
 const transitions:Record<string,Set<string>>={
   draft:new Set(['open','canceled']), open:new Set(['triage','in_progress','canceled']), triage:new Set(['in_progress','canceled']),
@@ -34,7 +36,7 @@ export class OccurrencesService {
   async create(tenantId:string,userId:string,body:Record<string,unknown>){
     this.only(body,['title','description','current_priority','source_channel','due_at','source_reference','metadata','operation_record_ids','primary_operation_record_id','reason_id','event_description','occurred_at',...guidedFields]);
     const title=this.required(body.title,'title'); const priority=this.priority(body.current_priority??'medium');
-    const ids=this.stringArray(body.operation_record_ids); if(body.primary_operation_record_id) ids.push(this.required(body.primary_operation_record_id,'primary_operation_record_id'));
+    const ids=this.stringArray(body.operation_record_ids).map(id=>this.operationId(id)); if(body.primary_operation_record_id) ids.push(this.operationId(this.required(body.primary_operation_record_id,'primary_operation_record_id')));
     const unique=[...new Set(ids)]; await Promise.all(unique.map(id=>this.operation(tenantId,id)));
     const reasonId=this.required(body.reason_id,'reason_id');await this.validateRequirements(tenantId,reasonId,'opening',body,unique);
     const suffix=`${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
@@ -95,6 +97,7 @@ export class OccurrencesService {
   private optional(v:unknown){return typeof v==='string'&&v.trim()?v.trim():null;}
   private object(v:unknown){if(v===undefined)return {};if(!v||typeof v!=='object'||Array.isArray(v))throw new BadRequestException('metadata must be an object.');return v;}
   private stringArray(v:unknown){if(v===undefined)return [] as string[];if(!Array.isArray(v)||v.some(x=>typeof x!=='string'||!x))throw new BadRequestException('operation_record_ids must be a string array.');return [...v] as string[];}
+  private operationId(id:string){const value=id.trim();if(!uuidPattern.test(value))throw new BadRequestException(invalidOperationMessage);return value;}
   private status(v:unknown){const value=String(v);if(!(OCCURRENCE_STATUSES as readonly string[]).includes(value))throw new BadRequestException('Invalid occurrence status.');return value;}
   private priority(v:unknown){const value=String(v);if(!priorities.has(value))throw new BadRequestException('Invalid occurrence priority.');return value;}
 }
