@@ -34,6 +34,53 @@ const relationships = new Set([
   'complementary',
 ]);
 const stages = new Set(['opening', 'update', 'resolution', 'closing']);
+const itemTypes = new Set([
+  'missing',
+  'extra',
+  'damaged',
+  'returned',
+  'inverted',
+  'divergent',
+  'other',
+]);
+const entryTypes = new Set([
+  'unloading',
+  'daily',
+  'layover',
+  'helper',
+  'scheduling_fee',
+  'additional_fee',
+  'refund',
+  'return_cost',
+  'other',
+]);
+const entryStatuses = new Set([
+  'requested',
+  'approved',
+  'rejected',
+  'paid',
+  'canceled',
+]);
+const documentTypes = new Set([
+  'original_invoice',
+  'return_invoice',
+  'cte',
+  'mdfe',
+  'proof_of_delivery',
+  'unloading_receipt',
+  'fiscal_document',
+  'occurrence_report',
+  'other',
+]);
+const attachmentTypes = new Set([
+  'photo',
+  'audio',
+  'video',
+  'pdf',
+  'image',
+  'document',
+  'other',
+]);
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalidOperationMessage =
@@ -271,7 +318,14 @@ export class OccurrencesService {
   }
   async detail(tenantId: string, id: string) {
     const occurrence = await this.find(tenantId, id);
-    const [events, operation_links] = await Promise.all([
+    const [
+      events,
+      operation_links,
+      items,
+      financial_entries,
+      documents,
+      attachments,
+    ] = await Promise.all([
       this.db.select<Row[]>(
         'occurrence_events',
         `select=*&tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&order=event_at.asc,created_at.asc`,
@@ -280,8 +334,472 @@ export class OccurrencesService {
         'occurrence_operation_links',
         `select=*&tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&order=is_primary.desc,linked_at.asc`,
       ),
+      this.records('occurrence_items', tenantId, id),
+      this.records('occurrence_financial_entries', tenantId, id),
+      this.records('occurrence_documents', tenantId, id),
+      this.records('occurrence_attachments', tenantId, id),
     ]);
-    return { ...occurrence, events, operation_links };
+    return {
+      ...occurrence,
+      events,
+      operation_links,
+      items,
+      financial_entries,
+      documents,
+      attachments,
+    };
+  }
+  async listItems(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_items', t, o);
+  }
+  async createItem(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.createRecord(
+      'occurrence_items',
+      'item',
+      itemTypes,
+      t,
+      o,
+      u,
+      b,
+      [
+        'item_type',
+        'sku',
+        'product_name',
+        'quantity',
+        'unit',
+        'amount',
+        'currency',
+        'notes',
+        'event_id',
+        'operation_record_id',
+      ],
+      ['quantity', 'amount'],
+    );
+  }
+  async updateItem(
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.updateRecord(
+      'occurrence_items',
+      'item',
+      itemTypes,
+      t,
+      o,
+      u,
+      id,
+      b,
+      [
+        'item_type',
+        'sku',
+        'product_name',
+        'quantity',
+        'unit',
+        'amount',
+        'currency',
+        'notes',
+        'event_id',
+        'operation_record_id',
+      ],
+      ['quantity', 'amount'],
+    );
+  }
+  async deleteItem(t: string, o: string, u: string, id: string) {
+    return this.removeRecord('occurrence_items', 'item', t, o, u, id);
+  }
+  async listFinancialEntries(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_financial_entries', t, o);
+  }
+  async createFinancialEntry(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.createRecord(
+      'occurrence_financial_entries',
+      'financial_entry',
+      entryTypes,
+      t,
+      o,
+      u,
+      b,
+      [
+        'entry_type',
+        'status',
+        'amount',
+        'currency',
+        'description',
+        'requested_by',
+        'authorized_by',
+        'paid_at',
+        'due_at',
+        'receipt_document_id',
+        'notes',
+        'event_id',
+      ],
+      ['amount'],
+      entryStatuses,
+    );
+  }
+  async updateFinancialEntry(
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.updateRecord(
+      'occurrence_financial_entries',
+      'financial_entry',
+      entryTypes,
+      t,
+      o,
+      u,
+      id,
+      b,
+      [
+        'entry_type',
+        'status',
+        'amount',
+        'currency',
+        'description',
+        'requested_by',
+        'authorized_by',
+        'paid_at',
+        'due_at',
+        'receipt_document_id',
+        'notes',
+        'event_id',
+      ],
+      ['amount'],
+      entryStatuses,
+    );
+  }
+  async deleteFinancialEntry(t: string, o: string, u: string, id: string) {
+    return this.removeRecord(
+      'occurrence_financial_entries',
+      'financial_entry',
+      t,
+      o,
+      u,
+      id,
+    );
+  }
+  async listDocuments(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_documents', t, o);
+  }
+  async createDocument(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.createRecord(
+      'occurrence_documents',
+      'document',
+      documentTypes,
+      t,
+      o,
+      u,
+      b,
+      [
+        'document_type',
+        'document_number',
+        'document_key',
+        'amount',
+        'issued_at',
+        'storage_path',
+        'external_url',
+        'notes',
+        'event_id',
+      ],
+      ['amount'],
+    );
+  }
+  async updateDocument(
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.updateRecord(
+      'occurrence_documents',
+      'document',
+      documentTypes,
+      t,
+      o,
+      u,
+      id,
+      b,
+      [
+        'document_type',
+        'document_number',
+        'document_key',
+        'amount',
+        'issued_at',
+        'storage_path',
+        'external_url',
+        'notes',
+        'event_id',
+      ],
+      ['amount'],
+    );
+  }
+  async deleteDocument(t: string, o: string, u: string, id: string) {
+    return this.removeRecord('occurrence_documents', 'document', t, o, u, id);
+  }
+  async listAttachments(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_attachments', t, o);
+  }
+  async createAttachment(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    return this.createRecord(
+      'occurrence_attachments',
+      'attachment',
+      attachmentTypes,
+      t,
+      o,
+      u,
+      b,
+      [
+        'attachment_type',
+        'file_name',
+        'mime_type',
+        'size_bytes',
+        'storage_path',
+        'external_url',
+        'description',
+        'event_id',
+        'document_id',
+      ],
+      ['size_bytes'],
+    );
+  }
+  async deleteAttachment(t: string, o: string, u: string, id: string) {
+    return this.removeRecord(
+      'occurrence_attachments',
+      'attachment',
+      t,
+      o,
+      u,
+      id,
+    );
+  }
+
+  private records(table: string, t: string, o: string) {
+    return this.db.select<Row[]>(
+      table,
+      `select=*&tenant_id=eq.${t}&occurrence_id=eq.${o}&deleted_at=is.null&order=created_at.desc`,
+    );
+  }
+  private enumValue(value: unknown, values: Set<string>, field: string) {
+    const v = String(value);
+    if (!values.has(v)) throw new BadRequestException(`Invalid ${field}.`);
+    return v;
+  }
+  private numeric(value: unknown, field: string, required = false) {
+    if ((value === undefined || value === null || value === '') && !required)
+      return undefined;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0)
+      throw new BadRequestException(`${field} must be a non-negative number.`);
+    return n;
+  }
+  private recordPayload(
+    kind: string,
+    types: Set<string>,
+    body: Record<string, unknown>,
+    allowed: string[],
+    numbers: string[],
+    statuses?: Set<string>,
+    creating = false,
+  ) {
+    this.only(body, allowed);
+    const result: Record<string, unknown> = {};
+    for (const key of allowed) {
+      if (body[key] === undefined) continue;
+      if (numbers.includes(key))
+        result[key] = this.numeric(
+          body[key],
+          key,
+          creating && kind === 'financial_entry' && key === 'amount',
+        );
+      else if (key === `${kind === 'financial_entry' ? 'entry' : kind}_type`)
+        result[key] = this.enumValue(body[key], types, key);
+      else if (key === 'status' && statuses)
+        result[key] = this.enumValue(body[key], statuses, key);
+      else if (key.endsWith('_id')) result[key] = this.uuid(body[key], key);
+      else result[key] = this.optional(body[key]);
+    }
+    if (creating) {
+      const typeKey =
+        kind === 'financial_entry' ? 'entry_type' : `${kind}_type`;
+      result[typeKey] = this.enumValue(body[typeKey], types, typeKey);
+      if (kind === 'financial_entry') {
+        result.amount = this.numeric(body.amount, 'amount', true);
+        if (body.status !== undefined)
+          result.status = this.enumValue(body.status, statuses!, 'status');
+      }
+    }
+    return this.clean(result);
+  }
+  private async createRecord(
+    table: string,
+    kind: string,
+    types: Set<string>,
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+    allowed: string[],
+    numbers: string[],
+    statuses?: Set<string>,
+  ) {
+    await this.find(t, o);
+    const payload = this.recordPayload(
+      kind,
+      types,
+      b,
+      allowed,
+      numbers,
+      statuses,
+      true,
+    );
+    await this.validateStructuredLinks(table, t, o, payload);
+    const [row] = await this.db.insert<Row[]>(table, {
+      tenant_id: t,
+      occurrence_id: o,
+      created_by: u,
+      ...payload,
+    });
+    await this.event(t, o, u, {
+      event_type: `${kind}_added`,
+      event_title: `${kind} added`,
+      metadata: { record_id: row.id },
+    });
+    return row;
+  }
+  private async updateRecord(
+    table: string,
+    kind: string,
+    types: Set<string>,
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+    allowed: string[],
+    numbers: string[],
+    statuses?: Set<string>,
+  ) {
+    await this.find(t, o);
+    const payload = this.recordPayload(
+      kind,
+      types,
+      b,
+      allowed,
+      numbers,
+      statuses,
+    );
+    await this.validateStructuredLinks(table, t, o, payload);
+    const rows = await this.db.update<Row[]>(
+      table,
+      `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
+      {
+        ...payload,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!rows.length) throw new NotFoundException('Record not found.');
+    await this.event(t, o, u, {
+      event_type: `${kind}_updated`,
+      event_title: `${kind} updated`,
+      metadata: { record_id: id },
+    });
+    return rows[0];
+  }
+  private async removeRecord(
+    table: string,
+    kind: string,
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+  ) {
+    await this.find(t, o);
+    const rows = await this.db.update<Row[]>(
+      table,
+      `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
+      { deleted_at: new Date().toISOString() },
+    );
+    if (!rows.length) throw new NotFoundException('Record not found.');
+    await this.event(t, o, u, {
+      event_type: `${kind}_removed`,
+      event_title: `${kind} removed`,
+      metadata: { record_id: id },
+    });
+    return { deleted: true };
+  }
+  private async validateStructuredLinks(
+    table: string,
+    tenantId: string,
+    occurrenceId: string,
+    payload: Record<string, unknown>,
+  ) {
+    if (payload.event_id) {
+      const events = await this.db.select<Row[]>(
+        'occurrence_events',
+        `select=id&tenant_id=eq.${tenantId}&occurrence_id=eq.${occurrenceId}&id=eq.${payload.event_id}&limit=1`,
+      );
+      if (!events.length)
+        throw new BadRequestException(
+          'O evento informado não pertence a esta ocorrência e tenant.',
+        );
+    }
+    if (table === 'occurrence_items' && payload.operation_record_id) {
+      const operations = await this.db.select<Row[]>(
+        'operation_records',
+        `select=id&tenant_id=eq.${tenantId}&id=eq.${payload.operation_record_id}&deleted_at=is.null&limit=1`,
+      );
+      if (!operations.length)
+        throw new BadRequestException(
+          'A operação informada não pertence a este tenant ou não está disponível.',
+        );
+    }
+    const documentId =
+      table === 'occurrence_financial_entries'
+        ? payload.receipt_document_id
+        : table === 'occurrence_attachments'
+          ? payload.document_id
+          : undefined;
+    if (documentId) {
+      const documents = await this.db.select<Row[]>(
+        'occurrence_documents',
+        `select=id&tenant_id=eq.${tenantId}&occurrence_id=eq.${occurrenceId}&id=eq.${documentId}&deleted_at=is.null&limit=1`,
+      );
+      if (!documents.length)
+        throw new BadRequestException(
+          'O documento informado não pertence a esta ocorrência e tenant ou foi removido.',
+        );
+    }
   }
   async kanban(tenantId: string) {
     const rows = await this.list(tenantId, { limit: '100' });
@@ -613,6 +1131,12 @@ export class OccurrencesService {
     if (!uuidPattern.test(value))
       throw new BadRequestException(invalidOperationMessage);
     return value;
+  }
+  private uuid(value: unknown, field: string) {
+    if (value === null || value === undefined || value === '') return undefined;
+    if (typeof value !== 'string' || !uuidPattern.test(value.trim()))
+      throw new BadRequestException(`${field} must be a valid UUID.`);
+    return value.trim();
   }
   private status(v: unknown) {
     const value = String(v);

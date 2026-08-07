@@ -16,7 +16,11 @@ import { AppModule } from '../app.module';
 type Row = Record<string, unknown> & { id: string };
 const OP_A = '00000000-0000-4000-8000-00000000000a',
   OP_B = '00000000-0000-4000-8000-00000000000b',
-  OP_X = '00000000-0000-4000-8000-00000000000c';
+  OP_X = '00000000-0000-4000-8000-00000000000c',
+  EVENT_OTHER = '00000000-0000-4000-8000-00000000000d',
+  EVENT_FOREIGN = '00000000-0000-4000-8000-00000000000e',
+  DOCUMENT_OTHER = '00000000-0000-4000-8000-00000000000f',
+  DOCUMENT_FOREIGN = '00000000-0000-4000-8000-000000000010';
 class MemoryDb {
   inserts: Record<string, unknown>[] = [];
   selects: { table: string; query: string }[] = [];
@@ -24,6 +28,10 @@ class MemoryDb {
     occurrences: [],
     occurrence_events: [],
     occurrence_operation_links: [],
+    occurrence_items: [],
+    occurrence_financial_entries: [],
+    occurrence_documents: [],
+    occurrence_attachments: [],
     operation_records: [
       {
         id: OP_A,
@@ -437,6 +445,190 @@ async function main() {
       links.find((link) => link.operation_record_id === OP_B)?.is_primary ===
         true,
     'second primary operation must replace, not duplicate, the primary',
+  );
+  const item = await service.createItem('a', id, 'user', {
+    item_type: 'missing',
+    quantity: 2,
+    sku: 'SKU-10',
+  });
+  ok(item.item_type === 'missing', 'valid item must be created');
+  db.tables.occurrence_events.push(
+    { id: EVENT_OTHER, tenant_id: 'a', occurrence_id: 'another-occurrence' },
+    { id: EVENT_FOREIGN, tenant_id: 'b', occurrence_id: id },
+  );
+  db.tables.occurrence_documents.push(
+    {
+      id: DOCUMENT_OTHER,
+      tenant_id: 'a',
+      occurrence_id: 'another-occurrence',
+      deleted_at: null,
+    },
+    {
+      id: DOCUMENT_FOREIGN,
+      tenant_id: 'b',
+      occurrence_id: id,
+      deleted_at: null,
+    },
+  );
+  await rejects(
+    () =>
+      service.createItem('a', id, 'user', {
+        item_type: 'missing',
+        operation_record_id: OP_X,
+      }),
+    'item operation from another tenant must fail',
+  );
+  await rejects(
+    () =>
+      service.createItem('a', id, 'user', {
+        item_type: 'missing',
+        event_id: EVENT_OTHER,
+      }),
+    'item event from another occurrence must fail',
+  );
+  await rejects(
+    () =>
+      service.createItem('a', id, 'user', {
+        item_type: 'missing',
+        event_id: EVENT_FOREIGN,
+      }),
+    'item event from another tenant must fail',
+  );
+  await rejects(
+    () =>
+      service.createItem('a', id, 'user', {
+        item_type: 'missing',
+        quantity: -1,
+      }),
+    'negative quantity must fail',
+  );
+  const financial = await service.createFinancialEntry('a', id, 'user', {
+    entry_type: 'unloading',
+    amount: 120,
+  });
+  ok(financial.amount === 120, 'valid financial entry must be created');
+  await rejects(
+    () =>
+      service.createFinancialEntry('a', id, 'user', {
+        entry_type: 'refund',
+        amount: 1,
+        receipt_document_id: DOCUMENT_OTHER,
+      }),
+    'financial receipt from another occurrence must fail',
+  );
+  await rejects(
+    () =>
+      service.createFinancialEntry('a', id, 'user', {
+        entry_type: 'refund',
+        amount: 1,
+        receipt_document_id: DOCUMENT_FOREIGN,
+      }),
+    'financial receipt from another tenant must fail',
+  );
+  await rejects(
+    () =>
+      service.createFinancialEntry('a', id, 'user', {
+        entry_type: 'daily',
+        amount: -1,
+      }),
+    'negative financial amount must fail',
+  );
+  await service.createDocument('a', id, 'user', {
+    document_type: 'cte',
+    document_number: '1',
+  });
+  await rejects(
+    () =>
+      service.createDocument('a', id, 'user', {
+        document_type: 'cte',
+        event_id: EVENT_OTHER,
+      }),
+    'document event from another occurrence must fail',
+  );
+  await rejects(
+    () =>
+      service.createDocument('a', id, 'user', {
+        document_type: 'cte',
+        event_id: EVENT_FOREIGN,
+      }),
+    'document event from another tenant must fail',
+  );
+  await service.createAttachment('a', id, 'user', {
+    attachment_type: 'photo',
+    file_name: 'foto.jpg',
+  });
+  await rejects(
+    () =>
+      service.createAttachment('a', id, 'user', {
+        attachment_type: 'photo',
+        document_id: DOCUMENT_OTHER,
+      }),
+    'attachment document from another occurrence must fail',
+  );
+  await rejects(
+    () =>
+      service.createAttachment('a', id, 'user', {
+        attachment_type: 'photo',
+        document_id: DOCUMENT_FOREIGN,
+      }),
+    'attachment document from another tenant must fail',
+  );
+  await rejects(
+    () =>
+      service.createAttachment('a', id, 'user', {
+        attachment_type: 'photo',
+        event_id: EVENT_OTHER,
+      }),
+    'attachment event from another occurrence must fail',
+  );
+  await rejects(
+    () =>
+      service.createAttachment('a', id, 'user', {
+        attachment_type: 'photo',
+        event_id: EVENT_FOREIGN,
+      }),
+    'attachment event from another tenant must fail',
+  );
+  const detail = await service.detail('a', id);
+  ok(
+    Array.isArray(detail.items) &&
+      Array.isArray(detail.financial_entries) &&
+      Array.isArray(detail.documents) &&
+      Array.isArray(detail.attachments),
+    'detail must include all structured record collections',
+  );
+  ok(
+    db.tables.occurrence_events.some(
+      (event) => event.event_type === 'item_added',
+    ) &&
+      db.tables.occurrence_events.some(
+        (event) => event.event_type === 'financial_entry_added',
+      ) &&
+      db.tables.occurrence_events.some(
+        (event) => event.event_type === 'document_added',
+      ) &&
+      db.tables.occurrence_events.some(
+        (event) => event.event_type === 'attachment_added',
+      ),
+    'each record creation must append a timeline event',
+  );
+  db.tables.occurrence_items.push({
+    id: 'foreign-item',
+    tenant_id: 'b',
+    occurrence_id: id,
+    item_type: 'extra',
+    deleted_at: null,
+  });
+  await service.deleteItem('a', id, 'user', 'foreign-item').then(
+    () => {
+      throw new Error('cross-tenant delete must fail');
+    },
+    () => undefined,
+  );
+  ok(
+    db.tables.occurrence_items.find((record) => record.id === 'foreign-item')
+      ?.deleted_at === null,
+    'soft delete must not affect another tenant',
   );
   const permission = Reflect.getMetadata(
     REQUIRE_PERMISSION_KEY,

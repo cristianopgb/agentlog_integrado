@@ -70,6 +70,138 @@ export class OccurrencesController {
   ) {
     return this.service.detail(tenantId, id);
   }
+  @Get(':id/items') @RequirePermission('occurrence_items.view') listItems(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+  ) {
+    return this.service.listItems(t, o);
+  }
+  @Post(':id/items') @RequirePermission('occurrence_items.create') createItem(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createItem(t, o, r.user.id, b);
+  }
+  @Patch(':id/items/:itemId')
+  @RequirePermission('occurrence_items.update')
+  updateItem(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('itemId') x: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updateItem(t, o, r.user.id, x, b);
+  }
+  @Delete(':id/items/:itemId')
+  @RequirePermission('occurrence_items.delete')
+  deleteItem(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('itemId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deleteItem(t, o, r.user.id, x);
+  }
+  @Get(':id/financial-entries')
+  @RequirePermission('occurrence_financial_entries.view')
+  listFinancial(@Param('tenantId') t: string, @Param('id') o: string) {
+    return this.service.listFinancialEntries(t, o);
+  }
+  @Post(':id/financial-entries')
+  @RequirePermission('occurrence_financial_entries.create')
+  createFinancial(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createFinancialEntry(t, o, r.user.id, b);
+  }
+  @Patch(':id/financial-entries/:entryId')
+  @RequirePermission('occurrence_financial_entries.update')
+  updateFinancial(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('entryId') x: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updateFinancialEntry(t, o, r.user.id, x, b);
+  }
+  @Delete(':id/financial-entries/:entryId')
+  @RequirePermission('occurrence_financial_entries.delete')
+  deleteFinancial(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('entryId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deleteFinancialEntry(t, o, r.user.id, x);
+  }
+  @Get(':id/documents')
+  @RequirePermission('occurrence_documents.view')
+  listDocuments(@Param('tenantId') t: string, @Param('id') o: string) {
+    return this.service.listDocuments(t, o);
+  }
+  @Post(':id/documents')
+  @RequirePermission('occurrence_documents.create')
+  createDocument(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createDocument(t, o, r.user.id, b);
+  }
+  @Patch(':id/documents/:documentId')
+  @RequirePermission('occurrence_documents.update')
+  updateDocument(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('documentId') x: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updateDocument(t, o, r.user.id, x, b);
+  }
+  @Delete(':id/documents/:documentId')
+  @RequirePermission('occurrence_documents.delete')
+  deleteDocument(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('documentId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deleteDocument(t, o, r.user.id, x);
+  }
+  @Get(':id/attachments')
+  @RequirePermission('occurrence_attachments.view')
+  listAttachments(@Param('tenantId') t: string, @Param('id') o: string) {
+    return this.service.listAttachments(t, o);
+  }
+  @Post(':id/attachments')
+  @RequirePermission('occurrence_attachments.create')
+  createAttachment(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createAttachment(t, o, r.user.id, b);
+  }
+  @Delete(':id/attachments/:attachmentId')
+  @RequirePermission('occurrence_attachments.delete')
+  deleteAttachment(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('attachmentId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deleteAttachment(t, o, r.user.id, x);
+  }
   @Patch(':id/status')
   @RequirePermission(['occurrences.update', 'occurrences.kanban.move'])
   status(
