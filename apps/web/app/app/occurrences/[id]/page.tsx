@@ -32,6 +32,42 @@ import {
   occurrenceStatusLabel,
 } from '../../../../lib/occurrence-labels';
 import { OperationPicker } from '../operation-picker';
+import {
+  formatCurrencyBRL,
+  formatDateTimeBR,
+  safeLinkLabel,
+  shortId,
+} from '../../../../lib/occurrence-formatters';
+
+const relationshipLabels: Record<string, string> = {
+  primary: 'Principal',
+  affected: 'Afetada',
+  source: 'Origem',
+  related: 'Relacionada',
+  return: 'Retorno',
+  complementary: 'Complementar',
+};
+
+function operationLinkLabel(
+  link: NonNullable<Occurrence['operation_links']>[number],
+) {
+  const snapshot = link.snapshot ?? {};
+  const reference = [
+    snapshot.label,
+    snapshot.operation_label,
+    snapshot.document_number,
+    snapshot.invoice_number,
+    snapshot.external_code,
+  ].find((value) => typeof value === 'string' && value.trim());
+  const customer = [snapshot.customer_name, snapshot.client_name].find(
+    (value) => typeof value === 'string' && value.trim(),
+  );
+  if (reference)
+    return [String(reference), customer ? String(customer) : null]
+      .filter(Boolean)
+      .join(' · ');
+  return `Operação ${shortId(link.operation_record_id)}`;
+}
 export default function Detail() {
   const { id } = useParams<{ id: string }>();
   const [tenant, setTenant] = useState<string | null>(null),
@@ -236,8 +272,12 @@ export default function Detail() {
                 key={l.id}
               >
                 <span>
-                  {l.is_primary ? 'Principal · ' : ''}
-                  {l.operation_record_id} · {l.relationship_type}
+                  {operationLinkLabel(l)} ·{' '}
+                  {relationshipLabels[l.relationship_type] ??
+                    l.relationship_type}
+                  {l.is_primary && l.relationship_type !== 'primary'
+                    ? ' · Principal'
+                    : ''}
                 </span>
                 <button
                   className="text-sm text-red-700 underline"
@@ -374,6 +414,7 @@ export default function Detail() {
           ['notes', 'Observação', 'text'],
         ]}
         onChange={() => tenant && load(tenant)}
+        display="financial"
       />
       <StructuredRecords
         title="Documentos"
@@ -392,6 +433,7 @@ export default function Detail() {
           ['notes', 'Observação', 'text'],
         ]}
         onChange={() => tenant && load(tenant)}
+        display="document"
       />
       <StructuredRecords
         title="Evidências"
@@ -407,6 +449,7 @@ export default function Detail() {
           ['description', 'Descrição', 'text'],
         ]}
         onChange={() => tenant && load(tenant)}
+        display="evidence"
       />
       <Card>
         <h2 className="font-bold">Timeline</h2>
@@ -454,6 +497,7 @@ function StructuredRecords({
   labels,
   fields,
   onChange,
+  display = 'default',
 }: {
   title: string;
   tenant: string | null;
@@ -464,6 +508,7 @@ function StructuredRecords({
   labels: Record<string, string>;
   fields: Field[];
   onChange: () => void;
+  display?: 'default' | 'financial' | 'document' | 'evidence';
 }) {
   const first = Object.keys(labels)[0],
     [form, setForm] = useState<Record<string, string>>({ [typeKey]: first }),
@@ -556,16 +601,13 @@ function StructuredRecords({
               key={r.id}
               className="flex justify-between gap-3 rounded-lg border p-3"
             >
-              <span>
-                <strong>
-                  {labels[String(r[typeKey])] ?? String(r[typeKey])}
-                </strong>{' '}
-                ·{' '}
-                {fields
-                  .map(([k]) => r[k])
-                  .filter(Boolean)
-                  .join(' · ')}
-              </span>
+              <RecordSummary
+                row={r}
+                typeKey={typeKey}
+                labels={labels}
+                fields={fields}
+                display={display}
+              />
               <button
                 disabled={removing === r.id}
                 className="text-sm text-red-700 disabled:opacity-60"
@@ -592,5 +634,89 @@ function StructuredRecords({
         <p className="mt-3 text-sm text-slate-500">Nenhum registro.</p>
       )}
     </Card>
+  );
+}
+
+function RecordSummary({
+  row,
+  typeKey,
+  labels,
+  fields,
+  display,
+}: {
+  row: Record<string, unknown>;
+  typeKey: string;
+  labels: Record<string, string>;
+  fields: Field[];
+  display: 'default' | 'financial' | 'document' | 'evidence';
+}) {
+  const typeLabel = labels[String(row[typeKey])] ?? String(row[typeKey]);
+  const detail = (label: string, value: unknown) =>
+    value ? (
+      <p className="break-words text-sm text-slate-600">
+        <span className="font-medium text-slate-700">{label}:</span>{' '}
+        {String(value)}
+      </p>
+    ) : null;
+  const link =
+    typeof row.external_url === 'string' && row.external_url
+      ? row.external_url
+      : typeof row.storage_path === 'string' && row.storage_path
+        ? row.storage_path
+        : null;
+
+  if (display === 'financial')
+    return (
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-semibold text-slate-900">
+          {typeLabel} ·{' '}
+          {occurrenceFinancialStatusLabels[
+            String(row.status) as keyof typeof occurrenceFinancialStatusLabels
+          ] ?? String(row.status)}{' '}
+          · {formatCurrencyBRL(row.amount)}
+        </p>
+        {detail('Descrição', row.description)}
+        {row.due_at ? detail('Vencimento', formatDateTimeBR(row.due_at)) : null}
+        {detail('Observação', row.notes)}
+      </div>
+    );
+
+  if (display === 'document' || display === 'evidence')
+    return (
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-semibold text-slate-900">{typeLabel}</p>
+        {display === 'document' && detail('Número', row.document_number)}
+        {display === 'document' && detail('Chave', row.document_key)}
+        {display === 'document' && row.amount != null
+          ? detail('Valor', formatCurrencyBRL(row.amount))
+          : null}
+        {display === 'document' && row.issued_at
+          ? detail('Emissão', formatDateTimeBR(row.issued_at))
+          : null}
+        {display === 'evidence' && detail('Arquivo', row.file_name)}
+        {display === 'evidence' && detail('Descrição', row.description)}
+        {display === 'document' && detail('Observação', row.notes)}
+        {link && (
+          <a
+            className="inline-block text-sm font-medium text-blue-700 underline"
+            href={link}
+            {...(row.external_url
+              ? { target: '_blank', rel: 'noreferrer' }
+              : {})}
+          >
+            {safeLinkLabel(display)}
+          </a>
+        )}
+      </div>
+    );
+
+  return (
+    <span className="min-w-0 break-words">
+      <strong>{typeLabel}</strong> ·{' '}
+      {fields
+        .map(([key]) => row[key])
+        .filter(Boolean)
+        .join(' · ')}
+    </span>
   );
 }
