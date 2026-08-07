@@ -202,6 +202,102 @@ export class OccurrencesController {
   ) {
     return this.service.deleteAttachment(t, o, r.user.id, x);
   }
+  @Get(':id/treatments')
+  @RequirePermission('occurrence_treatments.view')
+  treatments(@Param('tenantId') t: string, @Param('id') o: string) {
+    return this.service.listTreatments(t, o);
+  }
+  @Post(':id/treatments')
+  @RequirePermission('occurrence_treatments.create')
+  createTreatment(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createTreatment(t, o, r.user.id, b);
+  }
+  @Patch(':id/treatments/:treatmentId')
+  @RequirePermission('occurrence_treatments.update')
+  updateTreatment(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('treatmentId') x: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updateTreatment(t, o, r.user.id, x, b);
+  }
+  @Delete(':id/treatments/:treatmentId')
+  @RequirePermission('occurrence_treatments.delete')
+  deleteTreatment(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('treatmentId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deleteTreatment(t, o, r.user.id, x);
+  }
+  @Get(':id/pending-actions')
+  @RequirePermission('occurrence_pending_actions.view')
+  pendingActions(@Param('tenantId') t: string, @Param('id') o: string) {
+    return this.service.listPendingActions(t, o);
+  }
+  @Post(':id/pending-actions')
+  @RequirePermission('occurrence_pending_actions.create')
+  createPendingAction(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.createPendingAction(t, o, r.user.id, b);
+  }
+  @Patch(':id/pending-actions/:actionId')
+  @RequirePermission('occurrence_pending_actions.update')
+  updatePendingAction(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('actionId') x: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updatePendingAction(t, o, r.user.id, x, b);
+  }
+  @Delete(':id/pending-actions/:actionId')
+  @RequirePermission('occurrence_pending_actions.delete')
+  deletePendingAction(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Param('actionId') x: string,
+    @Req() r: AuthenticatedRequest,
+  ) {
+    return this.service.deletePendingAction(t, o, r.user.id, x);
+  }
+  @Patch(':id/sla') @RequirePermission('occurrences.sla.update') sla(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.updateSla(t, o, r.user.id, b);
+  }
+  @Patch(':id/resolve') @RequirePermission('occurrences.resolve') resolve(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.resolve(t, o, r.user.id, b);
+  }
+  @Patch(':id/close') @RequirePermission('occurrences.close') close(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.close(t, o, r.user.id, b);
+  }
   @Patch(':id/status')
   @RequirePermission(['occurrences.update', 'occurrences.kanban.move'])
   status(
