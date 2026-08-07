@@ -6,7 +6,6 @@ import { getSessionContext } from '../../../../lib/setup-api';
 import {
   addOccurrenceEvent,
   addOperationLink,
-  assignOccurrence,
   changeOccurrenceStatus,
   listOccurrenceReasons,
   occurrenceDetail,
@@ -25,7 +24,6 @@ import {
   occurrenceFinancialStatusLabels,
   occurrenceDocumentLabels,
   occurrenceAttachmentLabels,
-  occurrenceEventLabels,
   occurrenceTreatmentsApi,
   occurrencePendingActionsApi,
   occurrenceTreatmentTypeLabels,
@@ -47,6 +45,8 @@ import {
   safeLinkLabel,
   shortId,
 } from '../../../../lib/occurrence-formatters';
+import { OccurrenceActionModal } from './OccurrenceActionModal';
+import { OccurrenceTimelineDrawer } from './OccurrenceTimelineDrawer';
 
 const relationshipLabels: Record<string, string> = {
   primary: 'Principal',
@@ -56,6 +56,32 @@ const relationshipLabels: Record<string, string> = {
   return: 'Retorno',
   complementary: 'Complementar',
 };
+const availableStatuses = [
+  'open',
+  'triage',
+  'in_progress',
+  'waiting_driver',
+  'waiting_customer',
+  'waiting_carrier',
+  'waiting_approval',
+  'waiting_document',
+  'waiting_payment',
+  'waiting_redelivery',
+  'waiting_return',
+  'partially_resolved',
+  'canceled',
+  'reopened',
+];
+type ModalName =
+  | 'operation'
+  | 'status'
+  | 'treatments'
+  | 'pending'
+  | 'items'
+  | 'financial'
+  | 'documents'
+  | 'event'
+  | null;
 
 function operationLinkLabel(
   link: NonNullable<Occurrence['operation_links']>[number],
@@ -68,44 +94,61 @@ function operationLinkLabel(
     snapshot.invoice_number,
     snapshot.external_code,
   ].find((value) => typeof value === 'string' && value.trim());
-  if (reference) return String(reference);
-  return `Operação ${shortId(link.operation_record_id)}`;
+  return reference
+    ? String(reference)
+    : `Operação ${shortId(link.operation_record_id)}`;
 }
+function friendlyStatusError(
+  message: string,
+  action: 'status' | 'resolve' = 'status',
+) {
+  if (message.includes('Invalid status transition')) {
+    return action === 'resolve'
+      ? 'Esta ocorrência ainda não pode ser resolvida neste status. Coloque em andamento antes de resolver.'
+      : 'Não foi possível alterar para esse status. Para resolver a ocorrência, use o botão Resolver ocorrência. Para fechar, use o botão Fechar ocorrência.';
+  }
+  return message;
+}
+
 export default function Detail() {
   const { id } = useParams<{ id: string }>();
   const [tenant, setTenant] = useState<string | null>(null),
     [row, setRow] = useState<Occurrence | null>(null),
     [reasons, setReasons] = useState<OccurrenceReason[]>([]),
-    [requirements, setRequirements] = useState<ReasonRequirement[]>([]),
-    [event, setEvent] = useState<Record<string, string>>({
-      stage: 'update',
-      event_type: 'note',
-      reason_id: '',
-      event_description: '',
-    }),
-    [owner, setOwner] = useState(''),
-    [selectedOperation, setSelectedOperation] =
+    [requirements, setRequirements] = useState<ReasonRequirement[]>([]);
+  const [event, setEvent] = useState<Record<string, string>>({
+    stage: 'update',
+    event_type: 'note',
+    reason_id: '',
+    event_description: '',
+  });
+  const [selectedOperation, setSelectedOperation] =
       useState<OperationOption | null>(null),
     [relationship, setRelationship] = useState('affected'),
-    [isPrimary, setIsPrimary] = useState(false),
-    [linkError, setLinkError] = useState(''),
+    [isPrimary, setIsPrimary] = useState(false);
+  const [linkError, setLinkError] = useState(''),
     [isLoadingOperations, setIsLoadingOperations] = useState(false),
-    [isLinking, setIsLinking] = useState(false),
-    [error, setError] = useState(''),
+    [isLinking, setIsLinking] = useState(false);
+  const [error, setError] = useState(''),
     [eventError, setEventError] = useState(''),
-    [isSavingEvent, setIsSavingEvent] = useState(false);
+    [isSavingEvent, setIsSavingEvent] = useState(false),
+    [modal, setModal] = useState<ModalName>(null),
+    [timelineOpen, setTimelineOpen] = useState(false);
+  const [nextStatus, setNextStatus] = useState(''),
+    [statusSaving, setStatusSaving] = useState(false),
+    [statusError, setStatusError] = useState('');
   const load = (t: string) =>
     occurrenceDetail(t, id)
       .then(setRow)
       .catch((e: Error) => setError(e.message));
-  const set = (key: string, value: string) =>
-    setEvent((v) => ({ ...v, [key]: value }));
+  const setEventValue = (key: string, value: string) =>
+    setEvent((current) => ({ ...current, [key]: value }));
   useEffect(() => {
-    getSessionContext().then((c) => {
-      setTenant(c.tenantId);
-      if (c.tenantId) {
-        load(c.tenantId);
-        listOccurrenceReasons(c.tenantId).then(setReasons);
+    getSessionContext().then((context) => {
+      setTenant(context.tenantId);
+      if (context.tenantId) {
+        load(context.tenantId);
+        listOccurrenceReasons(context.tenantId).then(setReasons);
       }
     });
   }, [id]);
@@ -115,12 +158,23 @@ export default function Detail() {
         setRequirements,
       );
   }, [tenant, event.reason_id, event.stage]);
+  useEffect(() => {
+    if (row) setNextStatus(row.current_status);
+  }, [row]);
   if (!row)
     return (
       <div className="app-page">
         <Card>{error || 'Carregando ocorrência...'}</Card>
       </div>
     );
+  const primaryOperation = row.operation_links?.find(
+    (link) => link.is_primary || link.relationship_type === 'primary',
+  );
+  const openPending = (row.pending_actions ?? []).filter((item) =>
+    ['open', 'in_progress'].includes(item.status),
+  ).length;
+  const actionButton =
+    'rounded-xl border border-slate-200 bg-white p-4 text-left font-semibold shadow-sm transition hover:border-blue-300 hover:bg-blue-50';
   return (
     <div className="page-stack app-page">
       <SectionHeader
@@ -128,77 +182,106 @@ export default function Detail() {
         title={row.title}
         description={row.description ?? 'Sem descrição.'}
       />
-      {error && <Card>{error}</Card>}
-      <div className="grid gap-4 md:grid-cols-3">
+      {error && (
         <Card>
-          <p>Status</p>
+          <p className="text-red-700" role="alert">
+            {error}
+          </p>
+        </Card>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <p className="text-sm text-slate-500">Status</p>
           <StatusBadge>{occurrenceStatusLabel(row.current_status)}</StatusBadge>
-          <select
-            className="mt-3 w-full rounded-lg border p-2"
-            value={row.current_status}
-            onChange={async (e) => {
-              if (tenant) {
-                await changeOccurrenceStatus(tenant, id, e.target.value);
-                load(tenant);
-              }
-            }}
-          >
-            {[
-              'open',
-              'triage',
-              'in_progress',
-              'waiting_driver',
-              'waiting_customer',
-              'waiting_carrier',
-              'waiting_approval',
-              'waiting_document',
-              'waiting_payment',
-              'waiting_redelivery',
-              'waiting_return',
-              'partially_resolved',
-              'canceled',
-              'reopened',
-            ].map((s) => (
-              <option key={s} value={s}>
-                {occurrenceStatusLabel(s)}
-              </option>
-            ))}
-          </select>
         </Card>
         <Card>
-          <p>Prioridade</p>
+          <p className="text-sm text-slate-500">Prioridade</p>
           <strong>{occurrencePriorityLabel(row.current_priority)}</strong>
         </Card>
         <Card>
-          <p>Responsável</p>
+          <p className="text-sm text-slate-500">Responsável</p>
           <strong>{row.current_owner_id ?? 'Não atribuído'}</strong>
-          <div className="mt-3 flex">
-            <input
-              className="min-w-0 flex-1 rounded-l-lg border p-2"
-              placeholder="UUID do usuário"
-              value={owner}
-              onChange={(e) => setOwner(e.target.value)}
-            />
-            <button
-              className="rounded-r-lg bg-blue-600 px-3 text-white"
-              onClick={async () => {
-                if (tenant) {
-                  await assignOccurrence(tenant, id, owner || null);
-                  setOwner('');
-                  load(tenant);
-                }
-              }}
-            >
-              Atribuir
-            </button>
-          </div>
+        </Card>
+        <Card>
+          <p className="text-sm text-slate-500">SLA</p>
+          <strong>
+            {occurrenceSlaLabels[row.sla_status ?? 'not_started']}
+          </strong>
+          <p className="text-sm text-slate-600">
+            {row.due_at ? formatDateTimeBR(row.due_at) : 'Prazo não definido'}
+          </p>
         </Card>
       </div>
       <Card>
-        <h2 className="font-bold">Operações tratadas vinculadas</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Busque uma operação já tratada pelo sistema por NF, manifesto, pedido,
-          entrega, cliente ou código operacional.
+        <h2 className="font-bold">Operação principal vinculada</h2>
+        <p className="mt-2 text-slate-700">
+          {primaryOperation
+            ? `${operationLinkLabel(primaryOperation)} · Principal`
+            : 'Nenhuma operação vinculada.'}
+        </p>
+      </Card>
+      <section>
+        <h2 className="mb-3 text-lg font-bold">Ações rápidas</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <button
+            className={actionButton}
+            onClick={() => setModal('operation')}
+          >
+            Vincular operação
+          </button>
+          <button className={actionButton} onClick={() => setModal('status')}>
+            Alterar status
+          </button>
+          <button
+            className={actionButton}
+            onClick={() => setModal('treatments')}
+          >
+            Tratativas
+          </button>
+          <button className={actionButton} onClick={() => setModal('pending')}>
+            Pendências {openPending ? `(${openPending})` : ''}
+          </button>
+          <button className={actionButton} onClick={() => setModal('items')}>
+            Itens envolvidos
+          </button>
+          <button
+            className={actionButton}
+            onClick={() => setModal('financial')}
+          >
+            Valores/despesas
+          </button>
+          <button
+            className={actionButton}
+            onClick={() => setModal('documents')}
+          >
+            Documentos e evidências
+          </button>
+          <button className={actionButton} onClick={() => setModal('event')}>
+            Evento manual
+          </button>
+        </div>
+      </section>
+      <SlaClosure
+        tenant={tenant}
+        occurrence={id}
+        row={row}
+        onChange={() => tenant && load(tenant)}
+      />
+      <button
+        className="w-fit rounded-lg border border-blue-600 px-4 py-2 font-semibold text-blue-700"
+        onClick={() => setTimelineOpen(true)}
+      >
+        Ver timeline
+      </button>
+
+      <OccurrenceActionModal
+        title="Operação vinculada"
+        open={modal === 'operation'}
+        onClose={() => setModal(null)}
+      >
+        <p className="text-sm text-slate-600">
+          Busque uma operação tratada por NF, manifesto, pedido, entrega,
+          cliente ou código operacional.
         </p>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           <OperationPicker
@@ -212,12 +295,11 @@ export default function Detail() {
             value={relationship}
             onChange={(e) => setRelationship(e.target.value)}
           >
-            <option value="primary">Principal</option>
-            <option value="affected">Afetada</option>
-            <option value="source">Origem</option>
-            <option value="related">Relacionada</option>
-            <option value="return">Retorno</option>
-            <option value="complementary">Complementar</option>
+            {Object.entries(relationshipLabels).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
           </select>
           <label className="flex items-center gap-2">
             <input
@@ -229,7 +311,7 @@ export default function Detail() {
           </label>
         </div>
         {linkError && (
-          <p className="mt-3 text-sm font-medium text-red-700" role="alert">
+          <p className="mt-3 text-sm text-red-700" role="alert">
             {linkError}
           </p>
         )}
@@ -237,13 +319,7 @@ export default function Detail() {
           className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
           disabled={!selectedOperation?.id || isLoadingOperations || isLinking}
           onClick={async () => {
-            if (
-              !tenant ||
-              !selectedOperation?.id ||
-              isLoadingOperations ||
-              isLinking
-            )
-              return;
+            if (!tenant || !selectedOperation?.id || isLinking) return;
             setLinkError('');
             setIsLinking(true);
             try {
@@ -267,16 +343,16 @@ export default function Detail() {
         </button>
         {row.operation_links?.length ? (
           <ul className="mt-4 space-y-2">
-            {row.operation_links.map((l) => (
+            {row.operation_links.map((link) => (
               <li
                 className="flex items-center justify-between gap-3 rounded-lg border p-2"
-                key={l.id}
+                key={link.id}
               >
                 <span>
-                  {operationLinkLabel(l)} ·{' '}
-                  {relationshipLabels[l.relationship_type] ??
-                    l.relationship_type}
-                  {l.is_primary && l.relationship_type !== 'primary'
+                  {operationLinkLabel(link)} ·{' '}
+                  {relationshipLabels[link.relationship_type] ??
+                    link.relationship_type}
+                  {link.is_primary && link.relationship_type !== 'primary'
                     ? ' · Principal'
                     : ''}
                 </span>
@@ -286,7 +362,7 @@ export default function Detail() {
                     if (!tenant) return;
                     setLinkError('');
                     try {
-                      await removeOperationLink(tenant, id, l.id);
+                      await removeOperationLink(tenant, id, link.id);
                       await load(tenant);
                     } catch (e) {
                       setLinkError((e as Error).message);
@@ -299,47 +375,200 @@ export default function Detail() {
             ))}
           </ul>
         ) : (
-          <p className="mt-2 text-slate-500">Nenhuma operação vinculada.</p>
+          <p className="mt-3 text-slate-500">Nenhuma operação vinculada.</p>
         )}
-      </Card>
-      <OperationalRecords
+      </OccurrenceActionModal>
+
+      <OccurrenceActionModal
+        title="Alterar status"
+        open={modal === 'status'}
+        onClose={() => setModal(null)}
+      >
+        <p className="text-sm">
+          Status atual:{' '}
+          <strong>{occurrenceStatusLabel(row.current_status)}</strong>
+        </p>
+        <label className="mt-4 block text-sm font-medium">Próximo status</label>
+        <select
+          className="mt-1 w-full rounded-lg border p-2"
+          value={nextStatus}
+          onChange={(e) => setNextStatus(e.target.value)}
+        >
+          {availableStatuses.map((status) => (
+            <option key={status} value={status}>
+              {occurrenceStatusLabel(status)}
+            </option>
+          ))}
+        </select>
+        <p className="mt-2 text-sm text-slate-600">
+          Para resolver a ocorrência, use o botão Resolver ocorrência. Para
+          fechar, use o botão Fechar ocorrência.
+        </p>
+        {statusError && (
+          <p className="mt-2 text-sm text-red-700" role="alert">
+            {statusError}
+          </p>
+        )}
+        <button
+          disabled={statusSaving || nextStatus === row.current_status}
+          className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
+          onClick={async () => {
+            if (!tenant) return;
+            setStatusSaving(true);
+            setStatusError('');
+            try {
+              await changeOccurrenceStatus(tenant, id, nextStatus);
+              await load(tenant);
+              setModal(null);
+            } catch (e) {
+              setStatusError(friendlyStatusError((e as Error).message));
+            } finally {
+              setStatusSaving(false);
+            }
+          }}
+        >
+          {statusSaving ? 'Alterando...' : 'Confirmar'}
+        </button>
+      </OccurrenceActionModal>
+
+      <OccurrenceActionModal
         title="Tratativas"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.treatments ?? []}
-        api={occurrenceTreatmentsApi}
-        labels={occurrenceTreatmentTypeLabels}
-        statusLabels={occurrenceTreatmentStatusLabels}
-        typeKey="treatment_type"
-        mainKey="description"
-        onChange={() => tenant && load(tenant)}
-      />
-      <OperationalRecords
+        open={modal === 'treatments'}
+        onClose={() => setModal(null)}
+      >
+        <OperationalRecords
+          title="Tratativas"
+          tenant={tenant}
+          occurrence={id}
+          rows={row.treatments ?? []}
+          api={occurrenceTreatmentsApi}
+          labels={occurrenceTreatmentTypeLabels}
+          statusLabels={occurrenceTreatmentStatusLabels}
+          typeKey="treatment_type"
+          mainKey="description"
+          onChange={() => tenant && load(tenant)}
+        />
+      </OccurrenceActionModal>
+      <OccurrenceActionModal
         title="Pendências"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.pending_actions ?? []}
-        api={occurrencePendingActionsApi}
-        labels={{ pending: 'Pendência' }}
-        statusLabels={occurrencePendingStatusLabels}
-        typeKey="kind"
-        mainKey="title"
-        pending
-        onChange={() => tenant && load(tenant)}
-      />
-      <SlaClosure
-        tenant={tenant}
-        occurrence={id}
-        row={row}
-        onChange={() => tenant && load(tenant)}
-      />
-      <Card>
-        <h2 className="font-bold">Adicionar evento guiado</h2>
-        <div className="mt-3 grid gap-2 md:grid-cols-3">
+        open={modal === 'pending'}
+        onClose={() => setModal(null)}
+      >
+        <OperationalRecords
+          title="Pendências"
+          tenant={tenant}
+          occurrence={id}
+          rows={row.pending_actions ?? []}
+          api={occurrencePendingActionsApi}
+          labels={{ pending: 'Pendência' }}
+          statusLabels={occurrencePendingStatusLabels}
+          typeKey="kind"
+          mainKey="title"
+          pending
+          onChange={() => tenant && load(tenant)}
+        />
+      </OccurrenceActionModal>
+      <OccurrenceActionModal
+        title="Itens envolvidos"
+        open={modal === 'items'}
+        onClose={() => setModal(null)}
+      >
+        <StructuredRecords
+          title="Itens envolvidos"
+          tenant={tenant}
+          occurrence={id}
+          rows={row.items ?? []}
+          api={occurrenceItemsApi}
+          typeKey="item_type"
+          labels={occurrenceItemLabels}
+          fields={[
+            ['sku', 'SKU', 'text'],
+            ['product_name', 'Produto', 'text'],
+            ['quantity', 'Quantidade', 'number'],
+            ['unit', 'Unidade', 'text'],
+            ['amount', 'Valor', 'number'],
+            ['notes', 'Observação', 'text'],
+          ]}
+          onChange={() => tenant && load(tenant)}
+        />
+      </OccurrenceActionModal>
+      <OccurrenceActionModal
+        title="Valores e despesas"
+        open={modal === 'financial'}
+        onClose={() => setModal(null)}
+      >
+        <StructuredRecords
+          title="Valores e despesas"
+          tenant={tenant}
+          occurrence={id}
+          rows={row.financial_entries ?? []}
+          api={occurrenceFinancialEntriesApi}
+          typeKey="entry_type"
+          labels={occurrenceFinancialTypeLabels}
+          fields={[
+            ['status', 'Status', 'select', occurrenceFinancialStatusLabels],
+            ['amount', 'Valor', 'number'],
+            ['description', 'Descrição', 'text'],
+            ['due_at', 'Vencimento', 'datetime-local'],
+            ['notes', 'Observação', 'text'],
+          ]}
+          onChange={() => tenant && load(tenant)}
+          display="financial"
+        />
+      </OccurrenceActionModal>
+      <OccurrenceActionModal
+        title="Documentos e evidências"
+        open={modal === 'documents'}
+        onClose={() => setModal(null)}
+      >
+        <div className="space-y-6">
+          <StructuredRecords
+            title="Documentos"
+            tenant={tenant}
+            occurrence={id}
+            rows={row.documents ?? []}
+            api={occurrenceDocumentsApi}
+            typeKey="document_type"
+            labels={occurrenceDocumentLabels}
+            fields={[
+              ['document_number', 'Número', 'text'],
+              ['document_key', 'Chave', 'text'],
+              ['amount', 'Valor', 'number'],
+              ['issued_at', 'Emissão', 'datetime-local'],
+              ['external_url', 'URL/path opcional', 'text'],
+              ['notes', 'Observação', 'text'],
+            ]}
+            onChange={() => tenant && load(tenant)}
+            display="document"
+          />
+          <StructuredRecords
+            title="Evidências"
+            tenant={tenant}
+            occurrence={id}
+            rows={row.attachments ?? []}
+            api={occurrenceAttachmentsApi}
+            typeKey="attachment_type"
+            labels={occurrenceAttachmentLabels}
+            fields={[
+              ['file_name', 'Nome do arquivo', 'text'],
+              ['external_url', 'URL/path opcional', 'text'],
+              ['description', 'Descrição', 'text'],
+            ]}
+            onChange={() => tenant && load(tenant)}
+            display="evidence"
+          />
+        </div>
+      </OccurrenceActionModal>
+      <OccurrenceActionModal
+        title="Registrar evento"
+        open={modal === 'event'}
+        onClose={() => setModal(null)}
+      >
+        <div className="grid gap-2 md:grid-cols-3">
           <select
             className="rounded-lg border p-2"
             value={event.stage}
-            onChange={(e) => set('stage', e.target.value)}
+            onChange={(e) => setEventValue('stage', e.target.value)}
           >
             <option value="update">Atualização</option>
             <option value="resolution">Resolução</option>
@@ -348,45 +577,50 @@ export default function Detail() {
           <select
             className="rounded-lg border p-2"
             value={event.reason_id}
-            onChange={(e) => set('reason_id', e.target.value)}
+            onChange={(e) => setEventValue('reason_id', e.target.value)}
           >
             <option value="">Selecione o motivo</option>
-            {reasons.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
+            {reasons.map((reason) => (
+              <option key={reason.id} value={reason.id}>
+                {reason.name}
               </option>
             ))}
           </select>
           <input
             className="rounded-lg border p-2"
             value={event.event_description}
-            onChange={(e) => set('event_description', e.target.value)}
+            onChange={(e) => setEventValue('event_description', e.target.value)}
             placeholder="Descrição do evento"
           />
           {requirements
-            .filter((r) => r.field_key !== 'event_description')
-            .map((r) => (
+            .filter(
+              (requirement) => requirement.field_key !== 'event_description',
+            )
+            .map((requirement) => (
               <input
-                key={r.field_key}
+                key={requirement.field_key}
                 className="rounded-lg border p-2"
                 type={
-                  r.field_key.includes('date') || r.field_key === 'occurred_at'
+                  requirement.field_key.includes('date') ||
+                  requirement.field_key === 'occurred_at'
                     ? 'datetime-local'
                     : 'text'
                 }
-                placeholder={`${r.field_key} *`}
-                value={event[r.field_key] ?? ''}
-                onChange={(e) => set(r.field_key, e.target.value)}
+                placeholder={`${requirement.field_key} *`}
+                value={event[requirement.field_key] ?? ''}
+                onChange={(e) =>
+                  setEventValue(requirement.field_key, e.target.value)
+                }
               />
             ))}
         </div>
         {eventError && (
-          <p className="mt-3 text-sm font-medium text-red-700" role="alert">
+          <p className="mt-3 text-sm text-red-700" role="alert">
             {eventError}
           </p>
         )}
         <button
-          className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
           disabled={isSavingEvent}
           onClick={async () => {
             if (!tenant || isSavingEvent) return;
@@ -411,101 +645,12 @@ export default function Detail() {
         >
           {isSavingEvent ? 'Registrando...' : 'Registrar'}
         </button>
-      </Card>
-      <StructuredRecords
-        title="Itens envolvidos"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.items ?? []}
-        api={occurrenceItemsApi}
-        typeKey="item_type"
-        labels={occurrenceItemLabels}
-        fields={[
-          ['sku', 'SKU', 'text'],
-          ['product_name', 'Produto', 'text'],
-          ['quantity', 'Quantidade', 'number'],
-          ['unit', 'Unidade', 'text'],
-          ['amount', 'Valor', 'number'],
-          ['notes', 'Observação', 'text'],
-        ]}
-        onChange={() => tenant && load(tenant)}
+      </OccurrenceActionModal>
+      <OccurrenceTimelineDrawer
+        open={timelineOpen}
+        onClose={() => setTimelineOpen(false)}
+        events={row.events ?? []}
       />
-      <StructuredRecords
-        title="Valores e despesas"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.financial_entries ?? []}
-        api={occurrenceFinancialEntriesApi}
-        typeKey="entry_type"
-        labels={occurrenceFinancialTypeLabels}
-        fields={[
-          ['status', 'Status', 'select', occurrenceFinancialStatusLabels],
-          ['amount', 'Valor', 'number'],
-          ['description', 'Descrição', 'text'],
-          ['due_at', 'Vencimento', 'datetime-local'],
-          ['notes', 'Observação', 'text'],
-        ]}
-        onChange={() => tenant && load(tenant)}
-        display="financial"
-      />
-      <StructuredRecords
-        title="Documentos"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.documents ?? []}
-        api={occurrenceDocumentsApi}
-        typeKey="document_type"
-        labels={occurrenceDocumentLabels}
-        fields={[
-          ['document_number', 'Número', 'text'],
-          ['document_key', 'Chave', 'text'],
-          ['amount', 'Valor', 'number'],
-          ['issued_at', 'Emissão', 'datetime-local'],
-          ['external_url', 'URL/path opcional', 'text'],
-          ['notes', 'Observação', 'text'],
-        ]}
-        onChange={() => tenant && load(tenant)}
-        display="document"
-      />
-      <StructuredRecords
-        title="Evidências"
-        tenant={tenant}
-        occurrence={id}
-        rows={row.attachments ?? []}
-        api={occurrenceAttachmentsApi}
-        typeKey="attachment_type"
-        labels={occurrenceAttachmentLabels}
-        fields={[
-          ['file_name', 'Nome do arquivo', 'text'],
-          ['external_url', 'URL/path opcional', 'text'],
-          ['description', 'Descrição', 'text'],
-        ]}
-        onChange={() => tenant && load(tenant)}
-        display="evidence"
-      />
-      <Card>
-        <h2 className="font-bold">Timeline</h2>
-        <ol className="mt-4 border-l-2 border-blue-200 pl-5">
-          {row.events?.map((e) => (
-            <li className="mb-5" key={e.id}>
-              <p className="font-semibold">
-                {occurrenceEventLabels[e.event_type] ??
-                  e.event_title ??
-                  e.event_type}
-              </p>
-              <p className="text-sm text-slate-600">
-                {e.event_description ??
-                  (e.old_status && e.new_status
-                    ? `${occurrenceStatusLabel(e.old_status)} → ${occurrenceStatusLabel(e.new_status)}`
-                    : 'Sem descrição')}
-              </p>
-              <time className="text-xs text-slate-400">
-                {new Date(e.event_at).toLocaleString('pt-BR')}
-              </time>
-            </li>
-          ))}
-        </ol>
-      </Card>
     </div>
   );
 }
@@ -694,7 +839,8 @@ function SlaClosure({
     [reason, setReason] = useState(''),
     [notes, setNotes] = useState(''),
     [force, setForce] = useState(false),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [saving, setSaving] = useState<'sla' | 'resolve' | 'close' | null>(null);
   useEffect(() => {
     setDue(row.due_at?.slice(0, 16) ?? '');
     setSla(row.sla_status ?? 'not_started');
@@ -711,13 +857,30 @@ function SlaClosure({
   const open = (row.pending_actions ?? []).some((x) =>
     ['open', 'in_progress'].includes(x.status),
   );
-  const run = async (fn: () => Promise<unknown>) => {
+  const canResolve = ![
+    'open',
+    'triage',
+    'resolved',
+    'closed',
+    'canceled',
+  ].includes(row.current_status);
+  const run = async (
+    action: 'sla' | 'resolve' | 'close',
+    fn: () => Promise<unknown>,
+  ) => {
     setError('');
+    setSaving(action);
     try {
       await fn();
       onChange();
     } catch (e) {
-      setError((e as Error).message);
+      setError(
+        action === 'resolve'
+          ? friendlyStatusError((e as Error).message, 'resolve')
+          : friendlyStatusError((e as Error).message),
+      );
+    } finally {
+      setSaving(null);
     }
   };
   return (
@@ -747,10 +910,11 @@ function SlaClosure({
           ))}
         </select>
         <button
-          className="rounded-lg bg-blue-600 p-2 text-white"
+          disabled={saving !== null}
+          className="rounded-lg bg-blue-600 p-2 text-white disabled:opacity-60"
           onClick={() =>
             tenant &&
-            run(() =>
+            run('sla', () =>
               updateOccurrenceSla(tenant, occurrence, {
                 due_at: due || null,
                 sla_status: sla,
@@ -758,7 +922,7 @@ function SlaClosure({
             )
           }
         >
-          Atualizar SLA
+          {saving === 'sla' ? 'Atualizando...' : 'Atualizar SLA'}
         </button>
         <input
           className="rounded-lg border p-2"
@@ -767,13 +931,20 @@ function SlaClosure({
           onChange={(e) => setSummary(e.target.value)}
         />
         <button
-          className="rounded-lg bg-emerald-600 p-2 text-white"
+          disabled={!canResolve || saving !== null}
+          className="rounded-lg bg-emerald-600 p-2 text-white disabled:opacity-60"
           onClick={() =>
-            tenant && run(() => resolveOccurrence(tenant, occurrence, summary))
+            tenant &&
+            run('resolve', () => resolveOccurrence(tenant, occurrence, summary))
           }
         >
-          Resolver ocorrência
+          {saving === 'resolve' ? 'Resolvendo...' : 'Resolver ocorrência'}
         </button>
+        {!canResolve && (
+          <p className="text-sm text-amber-700 md:col-span-3">
+            Coloque a ocorrência em andamento antes de resolver.
+          </p>
+        )}
         <input
           className="rounded-lg border p-2"
           placeholder="Motivo de fechamento"
@@ -787,20 +958,22 @@ function SlaClosure({
           onChange={(e) => setNotes(e.target.value)}
         />
         {open && (
-          <label className="flex items-center gap-2 text-sm text-amber-700">
+          <label className="flex items-center gap-2 text-sm text-amber-700 md:col-span-3">
             <input
               type="checkbox"
               checked={force}
               onChange={(e) => setForce(e.target.checked)}
             />
-            Há pendências abertas; confirmar fechamento forçado
+            Existem pendências abertas. Conclua as pendências ou marque
+            fechamento forçado.
           </label>
         )}
         <button
-          className="rounded-lg bg-slate-800 p-2 text-white"
+          disabled={saving !== null || (open && !force)}
+          className="rounded-lg bg-slate-800 p-2 text-white disabled:opacity-60"
           onClick={() =>
             tenant &&
-            run(() =>
+            run('close', () =>
               closeOccurrence(tenant, occurrence, {
                 closed_reason: reason,
                 closed_notes: notes,
@@ -809,7 +982,7 @@ function SlaClosure({
             )
           }
         >
-          Fechar ocorrência
+          {saving === 'close' ? 'Fechando...' : 'Fechar ocorrência'}
         </button>
       </div>
       <div className="mt-3 text-sm">
