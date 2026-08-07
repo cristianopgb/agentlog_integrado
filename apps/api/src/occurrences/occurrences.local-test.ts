@@ -32,6 +32,8 @@ class MemoryDb {
     occurrence_financial_entries: [],
     occurrence_documents: [],
     occurrence_attachments: [],
+    occurrence_treatments: [],
+    occurrence_pending_actions: [],
     operation_records: [
       {
         id: OP_A,
@@ -596,6 +598,97 @@ async function main() {
       Array.isArray(detail.documents) &&
       Array.isArray(detail.attachments),
     'detail must include all structured record collections',
+  );
+  ok(
+    Array.isArray(detail.treatments) && Array.isArray(detail.pending_actions),
+    'detail must include treatments and pending actions',
+  );
+  const treatment = await service.createTreatment('a', id, 'user', {
+    treatment_type: 'contact_driver',
+    description: 'Contato realizado',
+    responsible_team: 'Operação',
+  });
+  await rejects(
+    () =>
+      service.createTreatment('a', id, 'user', {
+        treatment_type: 'invalid',
+        description: 'x',
+      }),
+    'invalid treatment type must fail',
+  );
+  await service.updateTreatment('a', id, 'user', treatment.id, {
+    status: 'done',
+  });
+  ok(
+    db.tables.occurrence_events.some(
+      (e) => e.event_type === 'treatment_completed',
+    ),
+    'completing treatment must append treatment_completed',
+  );
+  const pending = await service.createPendingAction('a', id, 'user', {
+    title: 'Enviar documento',
+    due_at: new Date().toISOString(),
+  });
+  await service.updatePendingAction('a', id, 'user', pending.id, {
+    status: 'done',
+  });
+  ok(
+    db.tables.occurrence_events.some(
+      (e) => e.event_type === 'pending_action_completed',
+    ),
+    'completing pending action must append pending_action_completed',
+  );
+  await service.updateSla('a', id, 'user', {
+    due_at: new Date(Date.now() + 60000).toISOString(),
+    sla_status: 'on_track',
+  });
+  ok(
+    db.tables.occurrence_events.some((e) => e.event_type === 'sla_updated'),
+    'SLA update must append event',
+  );
+  await service.changeStatus('a', id, 'user', { status: 'in_progress' });
+  await rejects(
+    () => service.changeStatus('a', id, 'user', { status: 'resolved' }),
+    'generic status must reject resolved',
+  );
+  await service.resolve('a', id, 'user', {
+    resolution_summary: 'Operação regularizada',
+  });
+  ok(
+    db.tables.occurrence_events.some(
+      (e) => e.event_type === 'occurrence_resolved',
+    ),
+    'resolve must append event',
+  );
+  const openPending = await service.createPendingAction('a', id, 'user', {
+    title: 'Ainda aberta',
+  });
+  await rejects(
+    () => service.close('a', id, 'user', { closed_reason: 'Concluída' }),
+    'close with pending must fail without force',
+  );
+  await rejects(
+    () => service.close('a', id, 'user', { force_close_with_pending: true }),
+    'close reason is required',
+  );
+  await service.close('a', id, 'user', {
+    closed_reason: 'Concluída',
+    force_close_with_pending: true,
+  });
+  ok(
+    Boolean(openPending) &&
+      db.tables.occurrence_events.some(
+        (e) => e.event_type === 'occurrence_closed',
+      ),
+    'forced close must append event',
+  );
+  const snapshot = links.find((link) => link.operation_record_id === OP_A)
+    ?.snapshot as Record<string, unknown>;
+  ok(
+    Boolean(snapshot?.label && snapshot?.reference) &&
+      'customer_name' in snapshot &&
+      'record_type' in snapshot,
+    'operation link must save safe friendly snapshot',
   );
   ok(
     db.tables.occurrence_events.some(

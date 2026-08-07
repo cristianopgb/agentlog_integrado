@@ -81,6 +81,37 @@ const attachmentTypes = new Set([
   'document',
   'other',
 ]);
+const treatmentTypes = new Set([
+  'contact_driver',
+  'contact_customer',
+  'contact_shipper',
+  'contact_recipient',
+  'internal_analysis',
+  'request_document',
+  'request_authorization',
+  'schedule_redelivery',
+  'confirm_return',
+  'financial_validation',
+  'operational_action',
+  'other',
+]);
+const treatmentStatuses = new Set([
+  'open',
+  'in_progress',
+  'waiting',
+  'done',
+  'canceled',
+]);
+const pendingStatuses = new Set(['open', 'in_progress', 'done', 'canceled']);
+const slaStatuses = new Set([
+  'not_started',
+  'on_track',
+  'at_risk',
+  'overdue',
+  'met',
+  'breached',
+  'not_applicable',
+]);
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalidOperationMessage =
@@ -325,6 +356,8 @@ export class OccurrencesService {
       financial_entries,
       documents,
       attachments,
+      treatments,
+      pending_actions,
     ] = await Promise.all([
       this.db.select<Row[]>(
         'occurrence_events',
@@ -338,6 +371,8 @@ export class OccurrencesService {
       this.records('occurrence_financial_entries', tenantId, id),
       this.records('occurrence_documents', tenantId, id),
       this.records('occurrence_attachments', tenantId, id),
+      this.records('occurrence_treatments', tenantId, id),
+      this.records('occurrence_pending_actions', tenantId, id),
     ]);
     return {
       ...occurrence,
@@ -347,7 +382,359 @@ export class OccurrencesService {
       financial_entries,
       documents,
       attachments,
+      treatments,
+      pending_actions,
     };
+  }
+  async listTreatments(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_treatments', t, o);
+  }
+  async createTreatment(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    this.only(b, [
+      'treatment_type',
+      'description',
+      'responsible_user_id',
+      'responsible_team',
+      'status',
+      'started_at',
+      'event_id',
+    ]);
+    await this.find(t, o);
+    const payload = this.clean({
+      treatment_type: this.enumValue(
+        b.treatment_type,
+        treatmentTypes,
+        'treatment_type',
+      ),
+      description: this.required(b.description, 'description'),
+      responsible_user_id: this.uuid(
+        b.responsible_user_id,
+        'responsible_user_id',
+      ),
+      responsible_team: this.optionalString(
+        b.responsible_team,
+        'responsible_team',
+      ),
+      status:
+        b.status === undefined
+          ? undefined
+          : this.enumValue(b.status, treatmentStatuses, 'status'),
+      started_at: this.date(b.started_at, 'started_at'),
+      event_id: this.uuid(b.event_id, 'event_id'),
+    });
+    await this.validateStructuredLinks('occurrence_treatments', t, o, payload);
+    const [row] = await this.db.insert<Row[]>('occurrence_treatments', {
+      tenant_id: t,
+      occurrence_id: o,
+      created_by: u,
+      ...payload,
+    });
+    await this.event(t, o, u, {
+      event_type: 'treatment_added',
+      event_title: 'Tratativa adicionada',
+      metadata: { treatment_id: row.id },
+    });
+    return row;
+  }
+  async updateTreatment(
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+  ) {
+    this.only(b, [
+      'treatment_type',
+      'description',
+      'responsible_user_id',
+      'responsible_team',
+      'status',
+      'started_at',
+      'event_id',
+    ]);
+    await this.find(t, o);
+    const payload = this.clean({
+      treatment_type:
+        b.treatment_type === undefined
+          ? undefined
+          : this.enumValue(b.treatment_type, treatmentTypes, 'treatment_type'),
+      description:
+        b.description === undefined
+          ? undefined
+          : this.required(b.description, 'description'),
+      responsible_user_id: this.uuid(
+        b.responsible_user_id,
+        'responsible_user_id',
+      ),
+      responsible_team:
+        b.responsible_team === undefined
+          ? undefined
+          : this.optionalString(b.responsible_team, 'responsible_team'),
+      status:
+        b.status === undefined
+          ? undefined
+          : this.enumValue(b.status, treatmentStatuses, 'status'),
+      started_at: this.date(b.started_at, 'started_at'),
+      event_id: this.uuid(b.event_id, 'event_id'),
+      ...(b.status === 'done'
+        ? { completed_at: new Date().toISOString() }
+        : {}),
+    });
+    await this.validateStructuredLinks('occurrence_treatments', t, o, payload);
+    const rows = await this.db.update<Row[]>(
+      'occurrence_treatments',
+      `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
+      { ...payload, updated_at: new Date().toISOString() },
+    );
+    if (!rows.length) throw new NotFoundException('Treatment not found.');
+    const completed = b.status === 'done';
+    await this.event(t, o, u, {
+      event_type: completed ? 'treatment_completed' : 'treatment_updated',
+      event_title: completed ? 'Tratativa concluída' : 'Tratativa atualizada',
+      metadata: { treatment_id: id },
+    });
+    return rows[0];
+  }
+  deleteTreatment(t: string, o: string, u: string, id: string) {
+    return this.removeRecord('occurrence_treatments', 'treatment', t, o, u, id);
+  }
+  async listPendingActions(t: string, o: string) {
+    await this.find(t, o);
+    return this.records('occurrence_pending_actions', t, o);
+  }
+  async createPendingAction(
+    t: string,
+    o: string,
+    u: string,
+    b: Record<string, unknown>,
+  ) {
+    this.only(b, [
+      'title',
+      'description',
+      'responsible_user_id',
+      'responsible_team',
+      'due_at',
+      'status',
+      'event_id',
+    ]);
+    await this.find(t, o);
+    const payload = this.clean({
+      title: this.required(b.title, 'title'),
+      description: this.optional(b.description),
+      responsible_user_id: this.uuid(
+        b.responsible_user_id,
+        'responsible_user_id',
+      ),
+      responsible_team: this.optionalString(
+        b.responsible_team,
+        'responsible_team',
+      ),
+      due_at: this.date(b.due_at, 'due_at'),
+      status:
+        b.status === undefined
+          ? undefined
+          : this.enumValue(b.status, pendingStatuses, 'status'),
+      event_id: this.uuid(b.event_id, 'event_id'),
+    });
+    await this.validateStructuredLinks(
+      'occurrence_pending_actions',
+      t,
+      o,
+      payload,
+    );
+    const [row] = await this.db.insert<Row[]>('occurrence_pending_actions', {
+      tenant_id: t,
+      occurrence_id: o,
+      created_by: u,
+      ...payload,
+    });
+    await this.event(t, o, u, {
+      event_type: 'pending_action_added',
+      event_title: 'Pendência adicionada',
+      metadata: { pending_action_id: row.id },
+    });
+    return row;
+  }
+  async updatePendingAction(
+    t: string,
+    o: string,
+    u: string,
+    id: string,
+    b: Record<string, unknown>,
+  ) {
+    this.only(b, [
+      'title',
+      'description',
+      'responsible_user_id',
+      'responsible_team',
+      'due_at',
+      'status',
+      'event_id',
+    ]);
+    await this.find(t, o);
+    const payload = this.clean({
+      title:
+        b.title === undefined ? undefined : this.required(b.title, 'title'),
+      description:
+        b.description === undefined ? undefined : this.optional(b.description),
+      responsible_user_id: this.uuid(
+        b.responsible_user_id,
+        'responsible_user_id',
+      ),
+      responsible_team:
+        b.responsible_team === undefined
+          ? undefined
+          : this.optionalString(b.responsible_team, 'responsible_team'),
+      due_at: this.date(b.due_at, 'due_at'),
+      status:
+        b.status === undefined
+          ? undefined
+          : this.enumValue(b.status, pendingStatuses, 'status'),
+      event_id: this.uuid(b.event_id, 'event_id'),
+      ...(b.status === 'done'
+        ? { completed_at: new Date().toISOString() }
+        : {}),
+    });
+    await this.validateStructuredLinks(
+      'occurrence_pending_actions',
+      t,
+      o,
+      payload,
+    );
+    const rows = await this.db.update<Row[]>(
+      'occurrence_pending_actions',
+      `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
+      { ...payload, updated_at: new Date().toISOString() },
+    );
+    if (!rows.length) throw new NotFoundException('Pending action not found.');
+    const completed = b.status === 'done';
+    await this.event(t, o, u, {
+      event_type: completed
+        ? 'pending_action_completed'
+        : 'pending_action_updated',
+      event_title: completed ? 'Pendência concluída' : 'Pendência atualizada',
+      metadata: { pending_action_id: id },
+    });
+    return rows[0];
+  }
+  deletePendingAction(t: string, o: string, u: string, id: string) {
+    return this.removeRecord(
+      'occurrence_pending_actions',
+      'pending_action',
+      t,
+      o,
+      u,
+      id,
+    );
+  }
+  async updateSla(t: string, o: string, u: string, b: Record<string, unknown>) {
+    this.only(b, ['due_at', 'sla_status']);
+    await this.find(t, o);
+    const payload = {
+      due_at: b.due_at === null ? null : this.date(b.due_at, 'due_at'),
+      sla_status: this.enumValue(b.sla_status, slaStatuses, 'sla_status'),
+      updated_by: u,
+      updated_at: new Date().toISOString(),
+    };
+    const [row] = await this.db.update<Row[]>(
+      'occurrences',
+      `tenant_id=eq.${t}&id=eq.${o}&deleted_at=is.null`,
+      payload,
+    );
+    await this.event(t, o, u, {
+      event_type: 'sla_updated',
+      event_title: 'SLA atualizado',
+      metadata: { due_at: payload.due_at, sla_status: payload.sla_status },
+    });
+    return row;
+  }
+  async resolve(t: string, o: string, u: string, b: Record<string, unknown>) {
+    this.only(b, ['resolution_summary']);
+    const summary = this.required(b.resolution_summary, 'resolution_summary');
+    const current = await this.find(t, o);
+    const old = String(current.current_status);
+    if (!transitions[old]?.has('resolved'))
+      throw new BadRequestException(
+        `Invalid status transition: ${old} -> resolved`,
+      );
+    const now = new Date();
+    const sla = current.due_at
+      ? now <= new Date(String(current.due_at))
+        ? 'met'
+        : 'breached'
+      : current.sla_status;
+    const [row] = await this.db.update<Row[]>(
+      'occurrences',
+      `tenant_id=eq.${t}&id=eq.${o}&deleted_at=is.null`,
+      {
+        current_status: 'resolved',
+        resolved_at: now.toISOString(),
+        resolution_summary: summary,
+        sla_status: sla,
+        updated_by: u,
+        updated_at: now.toISOString(),
+      },
+    );
+    await this.event(t, o, u, {
+      event_type: 'occurrence_resolved',
+      event_title: 'Ocorrência resolvida',
+      old_status: old,
+      new_status: 'resolved',
+    });
+    return row;
+  }
+  async close(t: string, o: string, u: string, b: Record<string, unknown>) {
+    this.only(b, ['closed_reason', 'closed_notes', 'force_close_with_pending']);
+    const reason = this.required(b.closed_reason, 'closed_reason');
+    const current = await this.find(t, o);
+    if (
+      !['resolved', 'partially_resolved'].includes(
+        String(current.current_status),
+      )
+    )
+      throw new BadRequestException(
+        'A ocorrência deve estar resolvida ou parcialmente resolvida antes do fechamento.',
+      );
+    const pending = await this.db.select<Row[]>(
+      'occurrence_pending_actions',
+      `select=id&tenant_id=eq.${t}&occurrence_id=eq.${o}&deleted_at=is.null&status=in.(open,in_progress)&limit=1`,
+    );
+    const force = b.force_close_with_pending === true;
+    if (pending.length && !force)
+      throw new BadRequestException(
+        'Existem pendências abertas. Conclua-as ou confirme o fechamento forçado.',
+      );
+    const now = new Date().toISOString();
+    const [row] = await this.db.update<Row[]>(
+      'occurrences',
+      `tenant_id=eq.${t}&id=eq.${o}&deleted_at=is.null`,
+      {
+        current_status: 'closed',
+        closed_at: now,
+        closed_by: u,
+        closed_reason: reason,
+        closed_notes: this.optional(b.closed_notes),
+        updated_by: u,
+        updated_at: now,
+      },
+    );
+    await this.event(t, o, u, {
+      event_type: 'occurrence_closed',
+      event_title: 'Ocorrência encerrada',
+      old_status: current.current_status,
+      new_status: 'closed',
+      metadata: {
+        force_close_with_pending: force,
+        pending_count: pending.length,
+      },
+    });
+    return row;
   }
   async listItems(t: string, o: string) {
     await this.find(t, o);
@@ -816,6 +1203,14 @@ export class OccurrencesService {
   ) {
     this.only(body, ['status']);
     const next = this.status(body.status);
+    if (next === 'resolved')
+      throw new BadRequestException(
+        'Use o endpoint /resolve para resolver a ocorrência.',
+      );
+    if (next === 'closed')
+      throw new BadRequestException(
+        'Use o endpoint /close para fechar a ocorrência.',
+      );
     const current = await this.find(tenantId, id);
     const old = String(current.current_status);
     if (old === next || !transitions[old]?.has(next))
@@ -917,7 +1312,7 @@ export class OccurrencesService {
     const op = this.operationId(
       this.required(body.operation_record_id, 'operation_record_id'),
     );
-    await this.operation(tenantId, op);
+    const operation = await this.operation(tenantId, op);
     const relationship = String(body.relationship_type ?? 'affected');
     if (!relationships.has(relationship))
       throw new BadRequestException('Invalid relationship_type.');
@@ -928,6 +1323,7 @@ export class OccurrencesService {
       op,
       relationship,
       body.is_primary === true,
+      operation,
     );
   }
   async removeOperationLink(tenantId: string, id: string, linkId: string) {
@@ -946,6 +1342,7 @@ export class OccurrencesService {
     operationId: string,
     relationship: string,
     isPrimary: boolean,
+    operationRow?: Row,
   ) {
     if (isPrimary)
       await this.db.update(
@@ -953,6 +1350,35 @@ export class OccurrencesService {
         `tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&is_primary=eq.true`,
         { is_primary: false },
       );
+    const operation =
+      operationRow ?? (await this.operation(tenantId, operationId));
+    const reference = [
+      'document_number',
+      'invoice_number',
+      'manifest_number',
+      'external_code',
+      'order_number',
+      'delivery_number',
+    ]
+      .map((key) => operation[key])
+      .find((value) => typeof value === 'string' && value.trim()) as
+      string | undefined;
+    const fallback = operationId.slice(0, 8);
+    const customer =
+      typeof operation.customer_name === 'string' &&
+      operation.customer_name.trim()
+        ? operation.customer_name.trim()
+        : undefined;
+    const safeReference = reference ?? fallback;
+    const snapshot = {
+      label: customer ? `${safeReference} · ${customer}` : safeReference,
+      reference: safeReference,
+      customer_name: customer ?? null,
+      record_type:
+        typeof operation.record_type === 'string'
+          ? operation.record_type
+          : null,
+    };
     return this.db.insert<Row[]>('occurrence_operation_links', {
       tenant_id: tenantId,
       occurrence_id: id,
@@ -960,6 +1386,7 @@ export class OccurrencesService {
       relationship_type: relationship,
       is_primary: isPrimary,
       linked_by: userId,
+      snapshot,
     });
   }
   private event(
@@ -989,10 +1416,11 @@ export class OccurrencesService {
   private async operation(tenantId: string, id: string) {
     const rows = await this.db.select<Row[]>(
       'operation_records',
-      `select=id&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`,
+      `select=id,document_number,invoice_number,manifest_number,external_code,order_number,delivery_number,customer_name,record_type&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`,
     );
     if (!rows.length)
       throw new BadRequestException('Operation does not belong to tenant.');
+    return rows[0];
   }
   private operationOption(row: Row) {
     const first = (keys: string[]) =>
@@ -1111,6 +1539,18 @@ export class OccurrencesService {
   }
   private optional(v: unknown) {
     return typeof v === 'string' && v.trim() ? v.trim() : null;
+  }
+  private optionalString(v: unknown, field: string) {
+    if (v === undefined || v === null || v === '') return undefined;
+    if (typeof v !== 'string')
+      throw new BadRequestException(`${field} must be a string.`);
+    return v.trim() || undefined;
+  }
+  private date(v: unknown, field: string) {
+    if (v === undefined || v === null || v === '') return undefined;
+    if (typeof v !== 'string' || Number.isNaN(Date.parse(v)))
+      throw new BadRequestException(`${field} must be a valid date.`);
+    return new Date(v).toISOString();
   }
   private object(v: unknown) {
     if (v === undefined) return {};

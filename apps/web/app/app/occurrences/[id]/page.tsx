@@ -26,6 +26,15 @@ import {
   occurrenceDocumentLabels,
   occurrenceAttachmentLabels,
   occurrenceEventLabels,
+  occurrenceTreatmentsApi,
+  occurrencePendingActionsApi,
+  occurrenceTreatmentTypeLabels,
+  occurrenceTreatmentStatusLabels,
+  occurrencePendingStatusLabels,
+  occurrenceSlaLabels,
+  updateOccurrenceSla,
+  resolveOccurrence,
+  closeOccurrence,
 } from '../../../../lib/occurrences-api';
 import {
   occurrencePriorityLabel,
@@ -59,13 +68,7 @@ function operationLinkLabel(
     snapshot.invoice_number,
     snapshot.external_code,
   ].find((value) => typeof value === 'string' && value.trim());
-  const customer = [snapshot.customer_name, snapshot.client_name].find(
-    (value) => typeof value === 'string' && value.trim(),
-  );
-  if (reference)
-    return [String(reference), customer ? String(customer) : null]
-      .filter(Boolean)
-      .join(' · ');
+  if (reference) return String(reference);
   return `Operação ${shortId(link.operation_record_id)}`;
 }
 export default function Detail() {
@@ -153,8 +156,6 @@ export default function Detail() {
               'waiting_redelivery',
               'waiting_return',
               'partially_resolved',
-              'resolved',
-              'closed',
               'canceled',
               'reopened',
             ].map((s) => (
@@ -301,6 +302,37 @@ export default function Detail() {
           <p className="mt-2 text-slate-500">Nenhuma operação vinculada.</p>
         )}
       </Card>
+      <OperationalRecords
+        title="Tratativas"
+        tenant={tenant}
+        occurrence={id}
+        rows={row.treatments ?? []}
+        api={occurrenceTreatmentsApi}
+        labels={occurrenceTreatmentTypeLabels}
+        statusLabels={occurrenceTreatmentStatusLabels}
+        typeKey="treatment_type"
+        mainKey="description"
+        onChange={() => tenant && load(tenant)}
+      />
+      <OperationalRecords
+        title="Pendências"
+        tenant={tenant}
+        occurrence={id}
+        rows={row.pending_actions ?? []}
+        api={occurrencePendingActionsApi}
+        labels={{ pending: 'Pendência' }}
+        statusLabels={occurrencePendingStatusLabels}
+        typeKey="kind"
+        mainKey="title"
+        pending
+        onChange={() => tenant && load(tenant)}
+      />
+      <SlaClosure
+        tenant={tenant}
+        occurrence={id}
+        row={row}
+        onChange={() => tenant && load(tenant)}
+      />
       <Card>
         <h2 className="font-bold">Adicionar evento guiado</h2>
         <div className="mt-3 grid gap-2 md:grid-cols-3">
@@ -475,6 +507,320 @@ export default function Detail() {
         </ol>
       </Card>
     </div>
+  );
+}
+
+function OperationalRecords({
+  title,
+  tenant,
+  occurrence,
+  rows,
+  api,
+  labels,
+  statusLabels,
+  typeKey,
+  mainKey,
+  pending = false,
+  onChange,
+}: {
+  title: string;
+  tenant: string | null;
+  occurrence: string;
+  rows: Array<Record<string, unknown> & { id: string }>;
+  api: RecordsApi & {
+    update: (
+      t: string,
+      o: string,
+      id: string,
+      p: Record<string, unknown>,
+    ) => Promise<unknown>;
+  };
+  labels: Record<string, string>;
+  statusLabels: Record<string, string>;
+  typeKey: string;
+  mainKey: string;
+  pending?: boolean;
+  onChange: () => void;
+}) {
+  const [form, setForm] = useState<Record<string, string>>({
+      [typeKey]: Object.keys(labels)[0],
+      [mainKey]: '',
+      description: '',
+      responsible_team: '',
+      due_at: '',
+    }),
+    [error, setError] = useState('');
+  const run = async (fn: () => Promise<unknown>) => {
+    setError('');
+    try {
+      await fn();
+      onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Card>
+      <h2 className="font-bold">{title}</h2>
+      <div className="mt-3 grid gap-2 md:grid-cols-4">
+        {!pending && (
+          <select
+            className="rounded-lg border p-2"
+            value={form[typeKey]}
+            onChange={(e) => setForm({ ...form, [typeKey]: e.target.value })}
+          >
+            {Object.entries(labels).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        )}
+        <input
+          className="rounded-lg border p-2"
+          placeholder={pending ? 'Título' : 'Descrição'}
+          value={form[mainKey]}
+          onChange={(e) => setForm({ ...form, [mainKey]: e.target.value })}
+        />
+        {pending && (
+          <input
+            className="rounded-lg border p-2"
+            placeholder="Descrição"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+        )}
+        <input
+          className="rounded-lg border p-2"
+          placeholder="Equipe responsável"
+          value={form.responsible_team}
+          onChange={(e) =>
+            setForm({ ...form, responsible_team: e.target.value })
+          }
+        />
+        {pending && (
+          <input
+            className="rounded-lg border p-2"
+            type="datetime-local"
+            value={form.due_at}
+            onChange={(e) => setForm({ ...form, due_at: e.target.value })}
+          />
+        )}
+      </div>
+      <button
+        className="mt-2 rounded-lg bg-blue-600 px-3 py-2 text-white"
+        onClick={() =>
+          tenant &&
+          run(() =>
+            api.create(
+              tenant,
+              occurrence,
+              pending
+                ? {
+                    title: form.title,
+                    description: form.description,
+                    responsible_team: form.responsible_team,
+                    due_at: form.due_at || undefined,
+                  }
+                : {
+                    treatment_type: form.treatment_type,
+                    description: form.description,
+                    responsible_team: form.responsible_team,
+                  },
+            ),
+          )
+        }
+      >
+        Adicionar
+      </button>
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+      <ul className="mt-3 space-y-2">
+        {rows.map((r) => (
+          <li
+            key={r.id}
+            className="flex items-center justify-between rounded-lg border p-2"
+          >
+            <span>
+              <strong>{String(r[mainKey])}</strong> ·{' '}
+              {String(r.responsible_team || 'Sem equipe')} ·{' '}
+              {statusLabels[String(r.status)] ?? String(r.status)}
+              {pending && r.due_at
+                ? ` · ${formatDateTimeBR(String(r.due_at))}`
+                : ''}
+            </span>
+            <span className="flex gap-2">
+              {r.status !== 'done' && (
+                <button
+                  className="text-blue-700 underline"
+                  onClick={() =>
+                    tenant &&
+                    run(() =>
+                      api.update(tenant, occurrence, r.id, { status: 'done' }),
+                    )
+                  }
+                >
+                  Concluir
+                </button>
+              )}
+              <button
+                className="text-red-700 underline"
+                onClick={() =>
+                  tenant && run(() => api.remove(tenant, occurrence, r.id))
+                }
+              >
+                Remover
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+function SlaClosure({
+  tenant,
+  occurrence,
+  row,
+  onChange,
+}: {
+  tenant: string | null;
+  occurrence: string;
+  row: Occurrence;
+  onChange: () => void;
+}) {
+  const [due, setDue] = useState(row.due_at?.slice(0, 16) ?? ''),
+    [sla, setSla] = useState(row.sla_status ?? 'not_started'),
+    [summary, setSummary] = useState(''),
+    [reason, setReason] = useState(''),
+    [notes, setNotes] = useState(''),
+    [force, setForce] = useState(false),
+    [error, setError] = useState('');
+  useEffect(() => {
+    setDue(row.due_at?.slice(0, 16) ?? '');
+    setSla(row.sla_status ?? 'not_started');
+    setSummary(row.resolution_summary ?? '');
+    setReason(row.closed_reason ?? '');
+    setNotes(row.closed_notes ?? '');
+  }, [
+    row.due_at,
+    row.sla_status,
+    row.resolution_summary,
+    row.closed_reason,
+    row.closed_notes,
+  ]);
+  const open = (row.pending_actions ?? []).some((x) =>
+    ['open', 'in_progress'].includes(x.status),
+  );
+  const run = async (fn: () => Promise<unknown>) => {
+    setError('');
+    try {
+      await fn();
+      onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Card>
+      <h2 className="font-bold">SLA e fechamento</h2>
+      <p className="mt-2 text-sm">
+        Prazo atual:{' '}
+        {row.due_at ? formatDateTimeBR(row.due_at) : 'Não definido'} · SLA:{' '}
+        {occurrenceSlaLabels[row.sla_status ?? 'not_started']}
+      </p>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <input
+          className="rounded-lg border p-2"
+          type="datetime-local"
+          value={due}
+          onChange={(e) => setDue(e.target.value)}
+        />
+        <select
+          className="rounded-lg border p-2"
+          value={sla}
+          onChange={(e) => setSla(e.target.value)}
+        >
+          {Object.entries(occurrenceSlaLabels).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <button
+          className="rounded-lg bg-blue-600 p-2 text-white"
+          onClick={() =>
+            tenant &&
+            run(() =>
+              updateOccurrenceSla(tenant, occurrence, {
+                due_at: due || null,
+                sla_status: sla,
+              }),
+            )
+          }
+        >
+          Atualizar SLA
+        </button>
+        <input
+          className="rounded-lg border p-2"
+          placeholder="Resumo de resolução"
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+        />
+        <button
+          className="rounded-lg bg-emerald-600 p-2 text-white"
+          onClick={() =>
+            tenant && run(() => resolveOccurrence(tenant, occurrence, summary))
+          }
+        >
+          Resolver ocorrência
+        </button>
+        <input
+          className="rounded-lg border p-2"
+          placeholder="Motivo de fechamento"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <input
+          className="rounded-lg border p-2"
+          placeholder="Observação de fechamento"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+        {open && (
+          <label className="flex items-center gap-2 text-sm text-amber-700">
+            <input
+              type="checkbox"
+              checked={force}
+              onChange={(e) => setForce(e.target.checked)}
+            />
+            Há pendências abertas; confirmar fechamento forçado
+          </label>
+        )}
+        <button
+          className="rounded-lg bg-slate-800 p-2 text-white"
+          onClick={() =>
+            tenant &&
+            run(() =>
+              closeOccurrence(tenant, occurrence, {
+                closed_reason: reason,
+                closed_notes: notes,
+                force_close_with_pending: force,
+              }),
+            )
+          }
+        >
+          Fechar ocorrência
+        </button>
+      </div>
+      <div className="mt-3 text-sm">
+        <p>Resumo: {row.resolution_summary ?? '—'}</p>
+        <p>
+          Motivo: {row.closed_reason ?? '—'} · Observação:{' '}
+          {row.closed_notes ?? '—'}
+        </p>
+      </div>
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+    </Card>
   );
 }
 

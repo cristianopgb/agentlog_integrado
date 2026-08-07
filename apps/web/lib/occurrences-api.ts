@@ -81,6 +81,21 @@ export type OccurrenceAttachment = OccurrenceRecord & {
   external_url?: string | null;
   description?: string | null;
 };
+export type OccurrenceTreatment = OccurrenceRecord & {
+  treatment_type: string;
+  description: string;
+  responsible_team?: string | null;
+  status: string;
+  completed_at?: string | null;
+};
+export type OccurrencePendingAction = OccurrenceRecord & {
+  title: string;
+  description?: string | null;
+  responsible_team?: string | null;
+  due_at?: string | null;
+  status: string;
+  completed_at?: string | null;
+};
 export type OccurrenceReason = {
   id: string;
   category_id: string;
@@ -110,6 +125,49 @@ export type Occurrence = {
   financial_entries?: OccurrenceFinancialEntry[];
   documents?: OccurrenceDocument[];
   attachments?: OccurrenceAttachment[];
+  treatments?: OccurrenceTreatment[];
+  pending_actions?: OccurrencePendingAction[];
+  due_at?: string | null;
+  sla_status?: string;
+  resolution_summary?: string | null;
+  closed_reason?: string | null;
+  closed_notes?: string | null;
+};
+export const occurrenceTreatmentTypeLabels: Record<string, string> = {
+  contact_driver: 'Contato com motorista',
+  contact_customer: 'Contato com cliente',
+  contact_shipper: 'Contato com embarcador',
+  contact_recipient: 'Contato com destinatário',
+  internal_analysis: 'Análise interna',
+  request_document: 'Solicitação de documento',
+  request_authorization: 'Solicitação de autorização',
+  schedule_redelivery: 'Agendar reentrega',
+  confirm_return: 'Confirmar devolução',
+  financial_validation: 'Validação financeira',
+  operational_action: 'Ação operacional',
+  other: 'Outro',
+};
+export const occurrenceTreatmentStatusLabels: Record<string, string> = {
+  open: 'Aberta',
+  in_progress: 'Em andamento',
+  waiting: 'Aguardando',
+  done: 'Concluída',
+  canceled: 'Cancelada',
+};
+export const occurrencePendingStatusLabels: Record<string, string> = {
+  open: 'Aberta',
+  in_progress: 'Em andamento',
+  done: 'Concluída',
+  canceled: 'Cancelada',
+};
+export const occurrenceSlaLabels: Record<string, string> = {
+  not_started: 'Não iniciado',
+  on_track: 'No prazo',
+  at_risk: 'Em risco',
+  overdue: 'Vencido',
+  met: 'Cumprido',
+  breached: 'Estourado',
+  not_applicable: 'Não aplicável',
 };
 export const occurrenceItemLabels = {
   missing: 'Falta',
@@ -177,6 +235,17 @@ export const occurrenceEventLabels: Record<string, string> = {
   document_removed: 'Documento removido',
   attachment_added: 'Evidência adicionada',
   attachment_removed: 'Evidência removida',
+  treatment_added: 'Tratativa adicionada',
+  treatment_updated: 'Tratativa atualizada',
+  treatment_completed: 'Tratativa concluída',
+  treatment_removed: 'Tratativa removida',
+  pending_action_added: 'Pendência adicionada',
+  pending_action_updated: 'Pendência atualizada',
+  pending_action_completed: 'Pendência concluída',
+  pending_action_removed: 'Pendência removida',
+  sla_updated: 'SLA atualizado',
+  occurrence_resolved: 'Ocorrência resolvida',
+  occurrence_closed: 'Ocorrência encerrada',
 };
 const resourceApi = <T>(resource: string) => ({
   list: (t: string, o: string) =>
@@ -204,6 +273,41 @@ export const occurrenceDocumentsApi =
   resourceApi<OccurrenceDocument>('documents');
 export const occurrenceAttachmentsApi =
   resourceApi<OccurrenceAttachment>('attachments');
+export const occurrenceTreatmentsApi =
+  resourceApi<OccurrenceTreatment>('treatments');
+export const occurrencePendingActionsApi =
+  resourceApi<OccurrencePendingAction>('pending-actions');
+export const updateOccurrenceSla = (
+  t: string,
+  o: string,
+  p: { due_at: string | null; sla_status: string },
+) =>
+  api<Occurrence>(`/tenants/${t}/occurrences/${o}/sla`, {
+    method: 'PATCH',
+    body: JSON.stringify(p),
+  });
+export const resolveOccurrence = (
+  t: string,
+  o: string,
+  resolution_summary: string,
+) =>
+  api<Occurrence>(`/tenants/${t}/occurrences/${o}/resolve`, {
+    method: 'PATCH',
+    body: JSON.stringify({ resolution_summary }),
+  });
+export const closeOccurrence = (
+  t: string,
+  o: string,
+  p: {
+    closed_reason: string;
+    closed_notes?: string;
+    force_close_with_pending?: boolean;
+  },
+) =>
+  api<Occurrence>(`/tenants/${t}/occurrences/${o}/close`, {
+    method: 'PATCH',
+    body: JSON.stringify(p),
+  });
 export const listOccurrences = (
   tenant: string,
   params = new URLSearchParams(),
