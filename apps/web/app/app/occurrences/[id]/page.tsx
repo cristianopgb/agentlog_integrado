@@ -40,6 +40,7 @@ export default function Detail() {
     [relationship, setRelationship] = useState('affected'),
     [isPrimary, setIsPrimary] = useState(false),
     [linkError, setLinkError] = useState(''),
+    [isLoadingOperations, setIsLoadingOperations] = useState(false),
     [isLinking, setIsLinking] = useState(false),
     [error, setError] = useState(''),
     [eventError, setEventError] = useState(''),
@@ -147,12 +148,17 @@ export default function Detail() {
         </Card>
       </div>
       <Card>
-        <h2 className="font-bold">Operações vinculadas</h2>
+        <h2 className="font-bold">Operações tratadas vinculadas</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Busque uma operação já tratada pelo sistema por NF, manifesto, pedido,
+          entrega, cliente ou código operacional.
+        </p>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           <OperationPicker
             tenant={tenant}
             selected={selectedOperation}
             onSelect={setSelectedOperation}
+            onLoadingChange={setIsLoadingOperations}
           />
           <select
             className="rounded-lg border p-2"
@@ -182,9 +188,15 @@ export default function Detail() {
         )}
         <button
           className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
-          disabled={!selectedOperation || isLinking}
+          disabled={!selectedOperation?.id || isLoadingOperations || isLinking}
           onClick={async () => {
-            if (!tenant || !selectedOperation || isLinking) return;
+            if (
+              !tenant ||
+              !selectedOperation?.id ||
+              isLoadingOperations ||
+              isLinking
+            )
+              return;
             setLinkError('');
             setIsLinking(true);
             try {
