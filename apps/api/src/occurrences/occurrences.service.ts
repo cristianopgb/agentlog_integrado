@@ -40,7 +40,7 @@ export class OccurrencesService {
     const unique=[...new Set(ids)]; await Promise.all(unique.map(id=>this.operation(tenantId,id)));
     const reasonId=this.required(body.reason_id,'reason_id');await this.validateRequirements(tenantId,reasonId,'opening',body,unique);
     const suffix=`${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
-    const [created]=await this.db.insert<Row[]>('occurrences',{tenant_id:tenantId,occurrence_number:`OCO-${suffix}`,title,description:this.optional(body.description),current_status:'open',current_priority:priority,source_channel:this.optional(body.source_channel)??'manual',due_at:this.optional(body.due_at),source_reference:this.optional(body.source_reference),metadata:this.object(body.metadata),created_by:userId,updated_by:userId});
+    const [created]=await this.db.insert<Row[]>('occurrences',this.clean({tenant_id:tenantId,occurrence_number:`OCO-${suffix}`,title,description:this.optional(body.description),current_status:'open',current_priority:priority,source_channel:this.optional(body.source_channel)??'manual',due_at:this.optional(body.due_at),source_reference:this.optional(body.source_reference),metadata:this.object(body.metadata),created_by:userId,updated_by:userId}));
     await this.event(tenantId,created.id,userId,{event_type:'created',event_title:'Ocorrência criada',event_description:this.optional(body.event_description),event_at:this.optional(body.occurred_at),reason_id:reasonId,new_status:'open',metadata:this.guidedMetadata(body)});
     for(const operationId of unique)await this.insertLink(tenantId,created.id,userId,operationId,operationId===body.primary_operation_record_id?'primary':'affected',operationId===body.primary_operation_record_id);
     return this.detail(tenantId,created.id);
@@ -80,7 +80,7 @@ export class OccurrencesService {
     if(isPrimary)await this.db.update('occurrence_operation_links',`tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&is_primary=eq.true`,{is_primary:false});
     return this.db.insert<Row[]>('occurrence_operation_links',{tenant_id:tenantId,occurrence_id:id,operation_record_id:operationId,relationship_type:relationship,is_primary:isPrimary,linked_by:userId});
   }
-  private event(tenantId:string,id:string,userId:string,payload:Record<string,unknown>){return this.db.insert<Row[]>('occurrence_events',{tenant_id:tenantId,occurrence_id:id,created_by:userId,created_by_type:'user',source_channel:'manual',metadata:{},...payload});}
+  private event(tenantId:string,id:string,userId:string,payload:Record<string,unknown>){return this.db.insert<Row[]>('occurrence_events',{tenant_id:tenantId,occurrence_id:id,created_by:userId,created_by_type:'user',source_channel:'manual',metadata:{},...this.clean(payload)});}
   private async find(tenantId:string,id:string){const rows=await this.db.select<Row[]>('occurrences',`select=*&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`);if(!rows.length)throw new NotFoundException('Occurrence not found.');return rows[0];}
   private async operation(tenantId:string,id:string){const rows=await this.db.select<Row[]>('operation_records',`select=id&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`);if(!rows.length)throw new BadRequestException('Operation does not belong to tenant.');}
   private async reason(tenantId:string,id:string){const rows=await this.db.select<Row[]>('occurrence_reasons',`select=id&tenant_id=eq.${tenantId}&id=eq.${id}&is_active=eq.true&limit=1`);if(!rows.length)throw new BadRequestException('Reason is inactive or does not belong to tenant.');}
@@ -90,6 +90,7 @@ export class OccurrencesService {
     if(missing.length)throw new BadRequestException(`Required fields for ${stage}: ${missing.join(', ')}.`);
   }
   private present(v:unknown){return v!==undefined&&v!==null&&v!==''&&v!==false;}
+  private clean<T extends Record<string,unknown>>(payload:T){return Object.fromEntries(Object.entries(payload).filter(([,value])=>value!==null&&value!==undefined));}
   private guidedMetadata(body:Record<string,unknown>){return Object.fromEntries(guidedFields.filter(k=>body[k]!==undefined).map(k=>[k,body[k]]));}
   private stage(v:unknown){const value=String(v);if(!stages.has(value))throw new BadRequestException('Invalid requirement stage.');return value;}
   private only(body:Record<string,unknown>,allowed:string[]){const invalid=Object.keys(body).filter(k=>!allowed.includes(k));if(invalid.length)throw new BadRequestException(`Fields not allowed: ${invalid.join(', ')}`);}
