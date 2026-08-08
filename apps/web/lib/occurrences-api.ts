@@ -161,12 +161,11 @@ export const occurrencePendingStatusLabels: Record<string, string> = {
   canceled: 'Cancelada',
 };
 export const occurrenceSlaLabels: Record<string, string> = {
-  not_started: 'Não iniciado',
+  not_started: 'Não definido',
   on_track: 'No prazo',
-  at_risk: 'Em risco',
-  overdue: 'Vencido',
+  overdue: 'Em atraso',
   met: 'Cumprido',
-  breached: 'Estourado',
+  breached: 'Vencido',
   not_applicable: 'Não aplicável',
 };
 export const occurrenceItemLabels = {
@@ -246,6 +245,7 @@ export const occurrenceEventLabels: Record<string, string> = {
   sla_updated: 'SLA atualizado',
   occurrence_resolved: 'Ocorrência resolvida',
   occurrence_closed: 'Ocorrência encerrada',
+  occurrence_finalized: 'Ocorrência finalizada',
 };
 const resourceApi = <T>(resource: string) => ({
   list: (t: string, o: string) =>
@@ -280,7 +280,7 @@ export const occurrencePendingActionsApi =
 export const updateOccurrenceSla = (
   t: string,
   o: string,
-  p: { due_at: string | null; sla_status: string },
+  p: { due_at: string | null },
 ) =>
   api<Occurrence>(`/tenants/${t}/occurrences/${o}/sla`, {
     method: 'PATCH',
@@ -305,6 +305,34 @@ export const closeOccurrence = (
   },
 ) =>
   api<Occurrence>(`/tenants/${t}/occurrences/${o}/close`, {
+    method: 'PATCH',
+    body: JSON.stringify(p),
+  });
+export type OccurrenceCode = {
+  id: string;
+  code: string;
+  description: string;
+  kind: 'reason' | 'closure';
+};
+export const listOccurrenceCodes = (
+  t: string,
+  kind: 'reason' | 'closure',
+  search = '',
+) =>
+  api<OccurrenceCode[]>(
+    `/tenants/${t}/occurrences/codes?kind=${kind}&search=${encodeURIComponent(search)}`,
+  );
+export const finalizeOccurrence = (
+  t: string,
+  o: string,
+  p: {
+    closure_code_id?: string;
+    closure_code?: string;
+    closed_notes?: string;
+    force_close_with_pending?: boolean;
+  },
+) =>
+  api<Occurrence>(`/tenants/${t}/occurrences/${o}/finalize`, {
     method: 'PATCH',
     body: JSON.stringify(p),
   });

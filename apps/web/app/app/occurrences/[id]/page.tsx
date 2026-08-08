@@ -31,8 +31,9 @@ import {
   occurrencePendingStatusLabels,
   occurrenceSlaLabels,
   updateOccurrenceSla,
-  resolveOccurrence,
-  closeOccurrence,
+  finalizeOccurrence,
+  listOccurrenceCodes,
+  type OccurrenceCode,
 } from '../../../../lib/occurrences-api';
 import {
   occurrencePriorityLabel,
@@ -75,6 +76,7 @@ const availableStatuses = [
 type ModalName =
   | 'operation'
   | 'status'
+  | 'sla'
   | 'treatments'
   | 'pending'
   | 'items'
@@ -232,6 +234,9 @@ export default function Detail() {
           <button className={actionButton} onClick={() => setModal('status')}>
             Alterar status
           </button>
+          <button className={actionButton} onClick={() => setModal('sla')}>
+            Editar prazo SLA
+          </button>
           <button
             className={actionButton}
             onClick={() => setModal('treatments')}
@@ -274,6 +279,18 @@ export default function Detail() {
         Ver timeline
       </button>
 
+      <OccurrenceActionModal
+        title="Editar prazo SLA"
+        open={modal === 'sla'}
+        onClose={() => setModal(null)}
+      >
+        <SlaEditor
+          tenant={tenant}
+          occurrence={id}
+          row={row}
+          onChange={() => tenant && load(tenant)}
+        />
+      </OccurrenceActionModal>
       <OccurrenceActionModal
         title="Operação vinculada"
         open={modal === 'operation'}
@@ -401,8 +418,7 @@ export default function Detail() {
           ))}
         </select>
         <p className="mt-2 text-sm text-slate-600">
-          Para resolver a ocorrência, use o botão Resolver ocorrência. Para
-          fechar, use o botão Fechar ocorrência.
+          A finalização operacional é feita no bloco Finalizar ocorrência.
         </p>
         {statusError && (
           <p className="mt-2 text-sm text-red-700" role="alert">
@@ -833,127 +849,72 @@ function SlaClosure({
   row: Occurrence;
   onChange: () => void;
 }) {
-  const [due, setDue] = useState(row.due_at?.slice(0, 16) ?? ''),
-    [sla, setSla] = useState(row.sla_status ?? 'not_started'),
-    [summary, setSummary] = useState(''),
-    [reason, setReason] = useState(''),
+  const [codes, setCodes] = useState<OccurrenceCode[]>([]),
+    [selectedCode, setSelectedCode] = useState(''),
+    [search, setSearch] = useState(''),
     [notes, setNotes] = useState(''),
     [force, setForce] = useState(false),
     [error, setError] = useState(''),
-    [saving, setSaving] = useState<'sla' | 'resolve' | 'close' | null>(null);
+    [saving, setSaving] = useState(false);
   useEffect(() => {
-    setDue(row.due_at?.slice(0, 16) ?? '');
-    setSla(row.sla_status ?? 'not_started');
-    setSummary(row.resolution_summary ?? '');
-    setReason(row.closed_reason ?? '');
     setNotes(row.closed_notes ?? '');
-  }, [
-    row.due_at,
-    row.sla_status,
-    row.resolution_summary,
-    row.closed_reason,
-    row.closed_notes,
-  ]);
+  }, [row.closed_notes]);
+  useEffect(() => {
+    if (!tenant) return;
+    const timer = setTimeout(
+      () =>
+        listOccurrenceCodes(tenant, 'closure', search)
+          .then(setCodes)
+          .catch((e: Error) => setError(e.message)),
+      200,
+    );
+    return () => clearTimeout(timer);
+  }, [tenant, search]);
   const open = (row.pending_actions ?? []).some((x) =>
     ['open', 'in_progress'].includes(x.status),
   );
-  const canResolve = ![
-    'open',
-    'triage',
-    'resolved',
-    'closed',
-    'canceled',
-  ].includes(row.current_status);
-  const run = async (
-    action: 'sla' | 'resolve' | 'close',
-    fn: () => Promise<unknown>,
-  ) => {
+  const run = async () => {
+    if (!tenant) return;
     setError('');
-    setSaving(action);
+    setSaving(true);
     try {
-      await fn();
+      await finalizeOccurrence(tenant, occurrence, {
+        closure_code_id: selectedCode,
+        closed_notes: notes,
+        force_close_with_pending: force,
+      });
       onChange();
     } catch (e) {
-      setError(
-        action === 'resolve'
-          ? friendlyStatusError((e as Error).message, 'resolve')
-          : friendlyStatusError((e as Error).message),
-      );
+      setError((e as Error).message);
     } finally {
-      setSaving(null);
+      setSaving(false);
     }
   };
   return (
     <Card>
-      <h2 className="font-bold">SLA e fechamento</h2>
-      <p className="mt-2 text-sm">
-        Prazo atual:{' '}
-        {row.due_at ? formatDateTimeBR(row.due_at) : 'Não definido'} · SLA:{' '}
-        {occurrenceSlaLabels[row.sla_status ?? 'not_started']}
-      </p>
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <h2 className="font-bold">Finalizar ocorrência</h2>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
         <input
           className="rounded-lg border p-2"
-          type="datetime-local"
-          value={due}
-          onChange={(e) => setDue(e.target.value)}
+          placeholder="Digite o código ou a descrição"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
         />
         <select
           className="rounded-lg border p-2"
-          value={sla}
-          onChange={(e) => setSla(e.target.value)}
+          value={selectedCode}
+          onChange={(e) => setSelectedCode(e.target.value)}
         >
-          {Object.entries(occurrenceSlaLabels).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
+          <option value="">Motivo de finalização</option>
+          {codes.map((code) => (
+            <option key={code.id} value={code.id}>
+              {code.code} - {code.description}
             </option>
           ))}
         </select>
-        <button
-          disabled={saving !== null}
-          className="rounded-lg bg-blue-600 p-2 text-white disabled:opacity-60"
-          onClick={() =>
-            tenant &&
-            run('sla', () =>
-              updateOccurrenceSla(tenant, occurrence, {
-                due_at: due || null,
-                sla_status: sla,
-              }),
-            )
-          }
-        >
-          {saving === 'sla' ? 'Atualizando...' : 'Atualizar SLA'}
-        </button>
         <input
           className="rounded-lg border p-2"
-          placeholder="Resumo de resolução"
-          value={summary}
-          onChange={(e) => setSummary(e.target.value)}
-        />
-        <button
-          disabled={!canResolve || saving !== null}
-          className="rounded-lg bg-emerald-600 p-2 text-white disabled:opacity-60"
-          onClick={() =>
-            tenant &&
-            run('resolve', () => resolveOccurrence(tenant, occurrence, summary))
-          }
-        >
-          {saving === 'resolve' ? 'Resolvendo...' : 'Resolver ocorrência'}
-        </button>
-        {!canResolve && (
-          <p className="text-sm text-amber-700 md:col-span-3">
-            Coloque a ocorrência em andamento antes de resolver.
-          </p>
-        )}
-        <input
-          className="rounded-lg border p-2"
-          placeholder="Motivo de fechamento"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-        />
-        <input
-          className="rounded-lg border p-2"
-          placeholder="Observação de fechamento"
+          placeholder="Observação de finalização"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
@@ -965,28 +926,18 @@ function SlaClosure({
               onChange={(e) => setForce(e.target.checked)}
             />
             Existem pendências abertas. Conclua as pendências ou marque
-            fechamento forçado.
+            finalização forçada.
           </label>
         )}
         <button
-          disabled={saving !== null || (open && !force)}
+          disabled={saving || !selectedCode || (open && !force)}
           className="rounded-lg bg-slate-800 p-2 text-white disabled:opacity-60"
-          onClick={() =>
-            tenant &&
-            run('close', () =>
-              closeOccurrence(tenant, occurrence, {
-                closed_reason: reason,
-                closed_notes: notes,
-                force_close_with_pending: force,
-              }),
-            )
-          }
+          onClick={run}
         >
-          {saving === 'close' ? 'Fechando...' : 'Fechar ocorrência'}
+          {saving ? 'Finalizando...' : 'Finalizar ocorrência'}
         </button>
       </div>
       <div className="mt-3 text-sm">
-        <p>Resumo: {row.resolution_summary ?? '—'}</p>
         <p>
           Motivo: {row.closed_reason ?? '—'} · Observação:{' '}
           {row.closed_notes ?? '—'}
@@ -994,6 +945,57 @@ function SlaClosure({
       </div>
       {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>
+  );
+}
+
+function SlaEditor({
+  tenant,
+  occurrence,
+  row,
+  onChange,
+}: {
+  tenant: string | null;
+  occurrence: string;
+  row: Occurrence;
+  onChange: () => void;
+}) {
+  const [due, setDue] = useState(row.due_at?.slice(0, 16) ?? ''),
+    [error, setError] = useState(''),
+    [saving, setSaving] = useState(false);
+  return (
+    <div>
+      <label className="block text-sm font-medium">
+        Prazo previsto para fechamento
+        <input
+          className="mt-1 w-full rounded-lg border p-2"
+          type="datetime-local"
+          value={due}
+          onChange={(e) => setDue(e.target.value)}
+        />
+      </label>
+      <button
+        disabled={saving}
+        className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
+        onClick={async () => {
+          if (!tenant) return;
+          setSaving(true);
+          setError('');
+          try {
+            await updateOccurrenceSla(tenant, occurrence, {
+              due_at: due || null,
+            });
+            onChange();
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        {saving ? 'Salvando...' : 'Salvar'}
+      </button>
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+    </div>
   );
 }
 

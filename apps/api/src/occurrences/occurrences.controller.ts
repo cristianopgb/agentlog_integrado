@@ -64,6 +64,13 @@ export class OccurrencesController {
   ) {
     return this.service.kanban(tenantId);
   }
+  @Get('codes') @RequirePermission('occurrences.view') codes(
+    @Param('tenantId') tenantId: string,
+    @Query('kind') kind: string,
+    @Query('search') search: string,
+  ) {
+    return this.service.listCodes(tenantId, kind, search);
+  }
   @Get(':id') @RequirePermission('occurrences.view') detail(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
@@ -297,6 +304,14 @@ export class OccurrencesController {
     @Body() b: Record<string, unknown>,
   ) {
     return this.service.close(t, o, r.user.id, b);
+  }
+  @Patch(':id/finalize') @RequirePermission('occurrences.close') finalize(
+    @Param('tenantId') t: string,
+    @Param('id') o: string,
+    @Req() r: AuthenticatedRequest,
+    @Body() b: Record<string, unknown>,
+  ) {
+    return this.service.finalize(t, o, r.user.id, b);
   }
   @Patch(':id/status')
   @RequirePermission(['occurrences.update', 'occurrences.kanban.move'])
