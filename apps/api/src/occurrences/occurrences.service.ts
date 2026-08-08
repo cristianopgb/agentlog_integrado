@@ -198,7 +198,7 @@ export class OccurrencesService {
   }
   async list(tenantId: string, q: Record<string, string> = {}) {
     const filters = [
-      `select=*`,
+      `select=id,occurrence_number,title,description,current_status,current_priority,source_channel,current_owner_id,opened_at,due_at,closed_reason,closed_notes`,
       `tenant_id=eq.${tenantId}`,
       'deleted_at=is.null',
     ];
@@ -219,7 +219,16 @@ export class OccurrencesService {
       'occurrences',
       `${filters.join('&')}&order=opened_at.desc&limit=${Math.min(Number(q.limit) || 50, 100)}`,
     );
-    return rows.map((row) => this.withAutomaticSla(row));
+    if (!rows.length) return [];
+    const occurrenceIds = rows.map((row) => row.id).join(',');
+    const links = await this.db.select<Row[]>(
+      'occurrence_operation_links',
+      `select=id,occurrence_id,operation_record_id,is_primary,relationship_type,snapshot&tenant_id=eq.${tenantId}&occurrence_id=in.(${occurrenceIds})&order=is_primary.desc,linked_at.asc`,
+    );
+    return rows.map((row) => ({
+      ...this.withAutomaticSla(row),
+      operation_links: links.filter((link) => link.occurrence_id === row.id),
+    }));
   }
   async operationOptions(tenantId: string, search = '') {
     const term = search
@@ -362,7 +371,7 @@ export class OccurrencesService {
       ),
       this.db.select<Row[]>(
         'occurrence_operation_links',
-        `select=*&tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&order=is_primary.desc,linked_at.asc`,
+        `select=id,occurrence_id,operation_record_id,is_primary,relationship_type,snapshot,linked_at&tenant_id=eq.${tenantId}&occurrence_id=eq.${id}&order=is_primary.desc,linked_at.asc`,
       ),
       this.records('occurrence_items', tenantId, id),
       this.records('occurrence_financial_entries', tenantId, id),
@@ -693,7 +702,7 @@ export class OccurrencesService {
       'force_close_with_pending',
     ]);
     if (!b.closure_code_id && !b.closure_code)
-      throw new BadRequestException('Informe o motivo de finalização.');
+      throw new BadRequestException('Selecione o motivo de finalização.');
     const filter = b.closure_code_id
       ? `id=eq.${this.required(b.closure_code_id, 'closure_code_id')}`
       : `code=eq.${encodeURIComponent(this.required(b.closure_code, 'closure_code'))}`;
@@ -715,7 +724,7 @@ export class OccurrencesService {
     const force = b.force_close_with_pending === true;
     if (pending.length && !force)
       throw new BadRequestException(
-        'Existem pendências abertas. Conclua-as ou confirme a finalização forçada.',
+        'Existem pendências abertas. Conclua as pendências ou confirme a finalização forçada.',
       );
     const code = codes[0];
     const status =

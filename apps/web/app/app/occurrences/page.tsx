@@ -23,11 +23,30 @@ import {
   occurrenceStatusLabel,
 } from '../../../lib/occurrence-labels';
 import { OperationPicker } from './operation-picker';
+import { shortId } from '../../../lib/occurrence-formatters';
 const date = (v: string) =>
   new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(new Date(v));
+const operationLabel = (occurrence: Occurrence) => {
+  const links = occurrence.operation_links ?? [];
+  const link =
+    links.find(
+      (item) => item.is_primary || item.relationship_type === 'primary',
+    ) ?? links[0];
+  if (!link) return 'Sem operação principal';
+  const snapshot = link.snapshot ?? {};
+  const label = snapshot.label;
+  if (typeof label === 'string' && label.trim()) return label;
+  const reference = snapshot.reference;
+  const customer = snapshot.customer_name;
+  if (typeof reference === 'string' && reference.trim())
+    return typeof customer === 'string' && customer.trim()
+      ? `${reference} · ${customer}`
+      : reference;
+  return `Operação ${shortId(link.operation_record_id)}`;
+};
 export default function OccurrencesPage() {
   const [tenant, setTenant] = useState<string | null>(null),
     [rows, setRows] = useState<Occurrence[]>([]),
@@ -249,10 +268,7 @@ export default function OccurrencesPage() {
                     <td>{r.source_channel}</td>
                     <td>{r.current_owner_id ?? 'Não atribuído'}</td>
                     <td>{date(r.opened_at)}</td>
-                    <td>
-                      {r.operation_links?.find((l) => l.is_primary)
-                        ?.operation_record_id ?? 'Sem operação principal'}
-                    </td>
+                    <td>{operationLabel(r)}</td>
                   </tr>
                 ))}
               </tbody>
