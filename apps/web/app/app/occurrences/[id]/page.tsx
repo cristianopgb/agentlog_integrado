@@ -169,9 +169,10 @@ export default function Detail() {
         <Card>{error || 'Carregando ocorrência...'}</Card>
       </div>
     );
-  const primaryOperation = row.operation_links?.find(
-    (link) => link.is_primary || link.relationship_type === 'primary',
-  );
+  const primaryOperation =
+    row.operation_links?.find(
+      (link) => link.is_primary || link.relationship_type === 'primary',
+    ) ?? row.operation_links?.[0];
   const openPending = (row.pending_actions ?? []).filter((item) =>
     ['open', 'in_progress'].includes(item.status),
   ).length;
@@ -218,7 +219,7 @@ export default function Detail() {
         <h2 className="font-bold">Operação principal vinculada</h2>
         <p className="mt-2 text-slate-700">
           {primaryOperation
-            ? `${operationLinkLabel(primaryOperation)} · Principal`
+            ? operationLinkLabel(primaryOperation)
             : 'Nenhuma operação vinculada.'}
         </p>
       </Card>
@@ -708,7 +709,6 @@ function OperationalRecords({
       [mainKey]: '',
       description: '',
       responsible_team: '',
-      due_at: '',
     }),
     [error, setError] = useState('');
   const run = async (fn: () => Promise<unknown>) => {
@@ -759,14 +759,6 @@ function OperationalRecords({
             setForm({ ...form, responsible_team: e.target.value })
           }
         />
-        {pending && (
-          <input
-            className="rounded-lg border p-2"
-            type="datetime-local"
-            value={form.due_at}
-            onChange={(e) => setForm({ ...form, due_at: e.target.value })}
-          />
-        )}
       </div>
       <button
         className="mt-2 rounded-lg bg-blue-600 px-3 py-2 text-white"
@@ -781,7 +773,6 @@ function OperationalRecords({
                     title: form.title,
                     description: form.description,
                     responsible_team: form.responsible_team,
-                    due_at: form.due_at || undefined,
                   }
                 : {
                     treatment_type: form.treatment_type,
@@ -805,9 +796,6 @@ function OperationalRecords({
               <strong>{String(r[mainKey])}</strong> ·{' '}
               {String(r.responsible_team || 'Sem equipe')} ·{' '}
               {statusLabels[String(r.status)] ?? String(r.status)}
-              {pending && r.due_at
-                ? ` · ${formatDateTimeBR(String(r.due_at))}`
-                : ''}
             </span>
             <span className="flex gap-2">
               {r.status !== 'done' && (
@@ -852,6 +840,7 @@ function SlaClosure({
   const [codes, setCodes] = useState<OccurrenceCode[]>([]),
     [selectedCode, setSelectedCode] = useState(''),
     [search, setSearch] = useState(''),
+    [optionsOpen, setOptionsOpen] = useState(false),
     [notes, setNotes] = useState(''),
     [force, setForce] = useState(false),
     [error, setError] = useState(''),
@@ -876,6 +865,10 @@ function SlaClosure({
   const run = async () => {
     if (!tenant) return;
     setError('');
+    if (!selectedCode) {
+      setError('Selecione o motivo de finalização.');
+      return;
+    }
     setSaving(true);
     try {
       await finalizeOccurrence(tenant, occurrence, {
@@ -894,24 +887,51 @@ function SlaClosure({
     <Card>
       <h2 className="font-bold">Finalizar ocorrência</h2>
       <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <input
-          className="rounded-lg border p-2"
-          placeholder="Digite o código ou a descrição"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <select
-          className="rounded-lg border p-2"
-          value={selectedCode}
-          onChange={(e) => setSelectedCode(e.target.value)}
-        >
-          <option value="">Motivo de finalização</option>
-          {codes.map((code) => (
-            <option key={code.id} value={code.id}>
-              {code.code} - {code.description}
-            </option>
-          ))}
-        </select>
+        <div className="relative">
+          <input
+            className="w-full rounded-lg border p-2"
+            placeholder="Motivo de finalização"
+            role="combobox"
+            aria-expanded={optionsOpen}
+            aria-controls="closure-code-options"
+            value={search}
+            onFocus={() => setOptionsOpen(true)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setSelectedCode('');
+              setOptionsOpen(true);
+            }}
+          />
+          {optionsOpen && (
+            <ul
+              id="closure-code-options"
+              className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-white p-1 shadow-lg"
+              role="listbox"
+            >
+              {codes.map((code) => (
+                <li key={code.id}>
+                  <button
+                    className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-blue-50"
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setSelectedCode(code.id);
+                      setSearch(`${code.code} - ${code.description}`);
+                      setOptionsOpen(false);
+                    }}
+                  >
+                    {code.code} - {code.description}
+                  </button>
+                </li>
+              ))}
+              {!codes.length && (
+                <li className="px-3 py-2 text-sm text-slate-500">
+                  Nenhum motivo encontrado.
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
         <input
           className="rounded-lg border p-2"
           placeholder="Observação de finalização"
