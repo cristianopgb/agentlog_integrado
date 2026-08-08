@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
 import { NestFactory } from '@nestjs/core';
 import { AuthGuard } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
@@ -34,6 +35,26 @@ class MemoryDb {
     occurrence_attachments: [],
     occurrence_treatments: [],
     occurrence_pending_actions: [],
+    occurrence_code_catalog: [
+      {
+        id: 'closure-00-a',
+        tenant_id: 'a',
+        code: '00',
+        description: 'Entregue com sucesso',
+        kind: 'closure',
+        is_active: true,
+        deleted_at: null,
+      },
+      {
+        id: 'closure-00-b',
+        tenant_id: 'b',
+        code: '00',
+        description: 'Entregue com sucesso',
+        kind: 'closure',
+        is_active: true,
+        deleted_at: null,
+      },
+    ],
     operation_records: [
       {
         id: OP_A,
@@ -108,6 +129,13 @@ class MemoryDb {
       },
     ],
   };
+  counters: Record<string, number> = {};
+  async rpc<T>(_name: string, payload: Record<string, unknown>) {
+    const tenant = String(payload.p_tenant_id);
+    const number = this.counters[tenant] ?? 1;
+    this.counters[tenant] = number + 1;
+    return `OC${String(number).padStart(7, '0')}` as T;
+  }
   async insert<T>(
     table: string,
     payload: Record<string, unknown> | Record<string, unknown>[],
@@ -269,7 +297,13 @@ async function main() {
     reason_id: 'reason-a',
     quantity: 1,
     sku: 'SKU-1',
+    due_at: new Date(Date.now() + 60_000).toISOString(),
   });
+  ok(
+    (without as Row).occurrence_number === 'OC0000001',
+    'first tenant occurrence must use OC0000001',
+  );
+  ok(without.sla_status === 'on_track', 'future SLA must be on track');
   ok(
     (without.operation_links as unknown[]).length === 0,
     'guided create without operation id or occurred_at must pass',
@@ -303,6 +337,49 @@ async function main() {
     quantity: 1,
     sku: 'SKU-2',
   });
+  ok(
+    (withOptionalTime as Row).occurrence_number === 'OC0000002',
+    'second tenant occurrence must use OC0000002',
+  );
+  const otherTenant = await service.create('b', 'user', {
+    title: 'Primeira ocorrência de outro tenant',
+    reason_id: 'reason-x',
+  });
+  ok(
+    (otherTenant as Row).occurrence_number === 'OC0000001',
+    'first occurrence in another tenant must use OC0000001',
+  );
+  await rejects(
+    () =>
+      service.create('a', 'user', {
+        title: 'Prazo inválido',
+        reason_id: 'reason-a',
+        quantity: 1,
+        sku: 'SKU-1',
+        due_at: 'inválido',
+      }),
+    'invalid due_at must fail',
+  );
+
+  const hardeningMigration = readFileSync(
+    'supabase/migrations/202608080002_sprint_10r_f_function_and_numbering_hardening.sql',
+    'utf8',
+  );
+  for (const signature of [
+    'seed_occurrence_codes(uuid)',
+    'seed_occurrence_codes_for_new_tenant()',
+  ])
+    ok(
+      hardeningMigration.includes(
+        `revoke all on function public.${signature} from public, anon, authenticated;`,
+      ),
+      `${signature} must not be executable by public, anon or authenticated`,
+    );
+  ok(
+    hardeningMigration.includes('unique (tenant_id, occurrence_number)') &&
+      hardeningMigration.includes('having count(*) > 1'),
+    'migration must enforce tenant occurrence number uniqueness and fail on historical duplicates',
+  );
   ok(
     Boolean(withOptionalTime.id),
     'reason not requiring occurred_at must pass without occurred_at',
@@ -640,8 +717,15 @@ async function main() {
   );
   await service.updateSla('a', id, 'user', {
     due_at: new Date(Date.now() + 60000).toISOString(),
-    sla_status: 'on_track',
   });
+  await rejects(
+    () =>
+      service.updateSla('a', id, 'user', {
+        due_at: null,
+        sla_status: 'on_track',
+      }),
+    'manual SLA status must be rejected',
+  );
   ok(
     db.tables.occurrence_events.some((e) => e.event_type === 'sla_updated'),
     'SLA update must append event',

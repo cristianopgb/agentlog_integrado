@@ -103,15 +103,7 @@ const treatmentStatuses = new Set([
   'canceled',
 ]);
 const pendingStatuses = new Set(['open', 'in_progress', 'done', 'canceled']);
-const slaStatuses = new Set([
-  'not_started',
-  'on_track',
-  'at_risk',
-  'overdue',
-  'met',
-  'breached',
-  'not_applicable',
-]);
+const finishedStatuses = new Set(['resolved', 'closed', 'canceled']);
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalidOperationMessage =
@@ -223,10 +215,11 @@ export class OccurrencesService {
       filters.push(
         `or=(occurrence_number.ilike.*${encodeURIComponent(q.search)}*,title.ilike.*${encodeURIComponent(q.search)}*)`,
       );
-    return this.db.select<Row[]>(
+    const rows = await this.db.select<Row[]>(
       'occurrences',
       `${filters.join('&')}&order=opened_at.desc&limit=${Math.min(Number(q.limit) || 50, 100)}`,
     );
+    return rows.map((row) => this.withAutomaticSla(row));
   }
   async operationOptions(tenantId: string, search = '') {
     const term = search
@@ -307,18 +300,22 @@ export class OccurrencesService {
       body,
       unique,
     );
-    const suffix = `${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const dueAt = this.futureDate(body.due_at, 'due_at');
+    const occurrenceNumber = await this.db.rpc<string>(
+      'next_tenant_occurrence_number',
+      { p_tenant_id: tenantId },
+    );
     const [created] = await this.db.insert<Row[]>(
       'occurrences',
       this.clean({
         tenant_id: tenantId,
-        occurrence_number: `OCO-${suffix}`,
+        occurrence_number: occurrenceNumber,
         title,
         description: this.optional(body.description),
         current_status: 'open',
         current_priority: priority,
         source_channel: this.optional(body.source_channel) ?? 'manual',
-        due_at: this.optional(body.due_at),
+        due_at: dueAt,
         source_reference: this.optional(body.source_reference),
         metadata: this.object(body.metadata),
         created_by: userId,
@@ -328,7 +325,7 @@ export class OccurrencesService {
     await this.event(tenantId, created.id, userId, {
       event_type: 'created',
       event_title: 'Ocorrência criada',
-      event_description: this.optional(body.event_description),
+      event_description: this.optional(body.event_description) ?? title,
       event_at: this.optional(body.occurred_at),
       reason_id: reasonId,
       new_status: 'open',
@@ -375,7 +372,7 @@ export class OccurrencesService {
       this.records('occurrence_pending_actions', tenantId, id),
     ]);
     return {
-      ...occurrence,
+      ...this.withAutomaticSla(occurrence),
       events,
       operation_links,
       items,
@@ -438,6 +435,7 @@ export class OccurrencesService {
     await this.event(t, o, u, {
       event_type: 'treatment_added',
       event_title: 'Tratativa adicionada',
+      event_description: String(row.description),
       metadata: { treatment_id: row.id },
     });
     return row;
@@ -492,11 +490,14 @@ export class OccurrencesService {
       `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
       { ...payload, updated_at: new Date().toISOString() },
     );
-    if (!rows.length) throw new NotFoundException('Treatment not found.');
+    if (!rows.length) throw new NotFoundException('Tratativa não encontrada.');
     const completed = b.status === 'done';
     await this.event(t, o, u, {
       event_type: completed ? 'treatment_completed' : 'treatment_updated',
       event_title: completed ? 'Tratativa concluída' : 'Tratativa atualizada',
+      event_description: completed
+        ? `Tratativa concluída: ${String(rows[0].description)}`
+        : String(rows[0].description),
       metadata: { treatment_id: id },
     });
     return rows[0];
@@ -557,7 +558,7 @@ export class OccurrencesService {
     await this.event(t, o, u, {
       event_type: 'pending_action_added',
       event_title: 'Pendência adicionada',
-      metadata: { pending_action_id: row.id },
+      event_description: String(row.title),
     });
     return row;
   }
@@ -612,13 +613,16 @@ export class OccurrencesService {
       `tenant_id=eq.${t}&occurrence_id=eq.${o}&id=eq.${id}&deleted_at=is.null`,
       { ...payload, updated_at: new Date().toISOString() },
     );
-    if (!rows.length) throw new NotFoundException('Pending action not found.');
+    if (!rows.length) throw new NotFoundException('Pendência não encontrada.');
     const completed = b.status === 'done';
     await this.event(t, o, u, {
       event_type: completed
         ? 'pending_action_completed'
         : 'pending_action_updated',
       event_title: completed ? 'Pendência concluída' : 'Pendência atualizada',
+      event_description: completed
+        ? `Pendência concluída: ${String(rows[0].title)}`
+        : String(rows[0].title),
       metadata: { pending_action_id: id },
     });
     return rows[0];
@@ -634,11 +638,10 @@ export class OccurrencesService {
     );
   }
   async updateSla(t: string, o: string, u: string, b: Record<string, unknown>) {
-    this.only(b, ['due_at', 'sla_status']);
+    this.only(b, ['due_at']);
     await this.find(t, o);
     const payload = {
       due_at: b.due_at === null ? null : this.date(b.due_at, 'due_at'),
-      sla_status: this.enumValue(b.sla_status, slaStatuses, 'sla_status'),
       updated_by: u,
       updated_at: new Date().toISOString(),
     };
@@ -650,9 +653,105 @@ export class OccurrencesService {
     await this.event(t, o, u, {
       event_type: 'sla_updated',
       event_title: 'SLA atualizado',
-      metadata: { due_at: payload.due_at, sla_status: payload.sla_status },
+      event_description: payload.due_at
+        ? `Prazo previsto alterado para ${this.dateTimePt(payload.due_at)}.`
+        : 'Prazo previsto removido.',
+      metadata: { due_at: payload.due_at },
     });
-    return row;
+    return this.withAutomaticSla(row);
+  }
+
+  async listCodes(t: string, kind = 'closure', search = '') {
+    if (!['reason', 'closure'].includes(kind))
+      throw new BadRequestException('Tipo de código inválido.');
+    const safe = search
+      .trim()
+      .slice(0, 80)
+      .replace(/[(),.*]/g, ' ');
+    const query = [
+      'select=id,code,description,kind',
+      `tenant_id=eq.${t}`,
+      `kind=eq.${kind}`,
+      'is_active=eq.true',
+      'deleted_at=is.null',
+      ...(safe
+        ? [
+            `or=(code.ilike.*${encodeURIComponent(safe)}*,description.ilike.*${encodeURIComponent(safe)}*)`,
+          ]
+        : []),
+      'order=code.asc',
+      'limit=20',
+    ].join('&');
+    return this.db.select<Row[]>('occurrence_code_catalog', query);
+  }
+
+  async finalize(t: string, o: string, u: string, b: Record<string, unknown>) {
+    this.only(b, [
+      'closure_code_id',
+      'closure_code',
+      'closed_notes',
+      'force_close_with_pending',
+    ]);
+    if (!b.closure_code_id && !b.closure_code)
+      throw new BadRequestException('Informe o motivo de finalização.');
+    const filter = b.closure_code_id
+      ? `id=eq.${this.required(b.closure_code_id, 'closure_code_id')}`
+      : `code=eq.${encodeURIComponent(this.required(b.closure_code, 'closure_code'))}`;
+    const codes = await this.db.select<Row[]>(
+      'occurrence_code_catalog',
+      `select=id,code,description,kind&tenant_id=eq.${t}&kind=eq.closure&${filter}&is_active=eq.true&deleted_at=is.null&limit=1`,
+    );
+    if (!codes.length)
+      throw new BadRequestException(
+        'Motivo de finalização inválido ou inativo.',
+      );
+    const current = await this.find(t, o);
+    if (finishedStatuses.has(String(current.current_status)))
+      throw new BadRequestException('A ocorrência já está finalizada.');
+    const pending = await this.db.select<Row[]>(
+      'occurrence_pending_actions',
+      `select=id&tenant_id=eq.${t}&occurrence_id=eq.${o}&deleted_at=is.null&status=in.(open,in_progress)`,
+    );
+    const force = b.force_close_with_pending === true;
+    if (pending.length && !force)
+      throw new BadRequestException(
+        'Existem pendências abertas. Conclua-as ou confirme a finalização forçada.',
+      );
+    const code = codes[0];
+    const status =
+      String(code.code) === '05'
+        ? 'canceled'
+        : String(code.code) === '03'
+          ? 'partially_resolved'
+          : 'closed';
+    const now = new Date().toISOString();
+    const [row] = await this.db.update<Row[]>(
+      'occurrences',
+      `tenant_id=eq.${t}&id=eq.${o}&deleted_at=is.null`,
+      {
+        current_status: status,
+        closed_at: now,
+        closed_by: u,
+        closed_reason: String(code.description),
+        closed_notes: this.optional(b.closed_notes),
+        updated_by: u,
+        updated_at: now,
+      },
+    );
+    await this.event(t, o, u, {
+      event_type: 'occurrence_finalized',
+      event_title: 'Ocorrência finalizada',
+      event_description: `Ocorrência finalizada: ${String(code.code)} - ${String(code.description)}.`,
+      old_status: current.current_status,
+      new_status: status,
+      metadata: {
+        closure_code_id: code.id,
+        closure_code: code.code,
+        force_close_with_pending: force,
+        pending_count: pending.length,
+      },
+    });
+    return this.withAutomaticSla(row);
   }
   async resolve(t: string, o: string, u: string, b: Record<string, unknown>) {
     this.only(b, ['resolution_summary']);
@@ -661,7 +760,7 @@ export class OccurrencesService {
     const old = String(current.current_status);
     if (!transitions[old]?.has('resolved'))
       throw new BadRequestException(
-        `Invalid status transition: ${old} -> resolved`,
+        'Esta mudança de status não é permitida para a ocorrência atual.',
       );
     const now = new Date();
     const sla = current.due_at
@@ -1079,7 +1178,8 @@ export class OccurrencesService {
     });
     await this.event(t, o, u, {
       event_type: `${kind}_added`,
-      event_title: `${kind} added`,
+      event_title: this.recordEventTitle(kind, 'adicionado'),
+      event_description: this.recordEventDescription(kind, payload),
       metadata: { record_id: row.id },
     });
     return row;
@@ -1215,7 +1315,7 @@ export class OccurrencesService {
     const old = String(current.current_status);
     if (old === next || !transitions[old]?.has(next))
       throw new BadRequestException(
-        `Invalid status transition: ${old} -> ${next}`,
+        'Esta mudança de status não é permitida para a ocorrência atual.',
       );
     const dates: Record<string, unknown> = {};
     if (next === 'resolved') dates.resolved_at = new Date().toISOString();
@@ -1405,6 +1505,67 @@ export class OccurrencesService {
       ...this.clean(payload),
     });
   }
+  private withAutomaticSla<T extends Row>(row: T): T & { sla_status: string } {
+    const due = row.due_at ? new Date(String(row.due_at)) : null;
+    if (!due || Number.isNaN(due.getTime()))
+      return { ...row, sla_status: 'not_started' };
+    const finishedAt = row.closed_at ?? row.resolved_at;
+    if (finishedStatuses.has(String(row.current_status)) || finishedAt) {
+      const at = finishedAt ? new Date(String(finishedAt)) : new Date();
+      return { ...row, sla_status: at <= due ? 'met' : 'breached' };
+    }
+    return { ...row, sla_status: new Date() <= due ? 'on_track' : 'overdue' };
+  }
+  private recordEventTitle(kind: string, action: string) {
+    const labels: Record<string, string> = {
+      item: 'Item',
+      financial_entry: 'Valor/despesa',
+      document: 'Documento',
+      attachment: 'Evidência',
+    };
+    return `${labels[kind] ?? 'Registro'} ${action}`;
+  }
+  private recordEventDescription(
+    kind: string,
+    payload: Record<string, unknown>,
+  ) {
+    if (kind === 'financial_entry') {
+      const type =
+        payload.entry_type === 'layover'
+          ? 'Estadia'
+          : String(payload.description ?? 'Valor/despesa');
+      const amount = new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: String(payload.currency ?? 'BRL'),
+      }).format(Number(payload.amount));
+      return `${type} solicitado no valor de ${amount}.`;
+    }
+    if (kind === 'document')
+      return (
+        [payload.document_type, payload.document_number]
+          .filter(Boolean)
+          .join(' - ') || 'Documento adicionado.'
+      );
+    if (kind === 'attachment')
+      return (
+        [payload.attachment_type, payload.file_name ?? payload.description]
+          .filter(Boolean)
+          .join(' - ') || 'Evidência adicionada.'
+      );
+    return String(
+      payload.product_name ??
+        payload.sku ??
+        payload.notes ??
+        'Item adicionado.',
+    );
+  }
+  private dateTimePt(value: string) {
+    return new Intl.DateTimeFormat('pt-BR', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+      timeZone: 'UTC',
+    }).format(new Date(value));
+  }
   private async find(tenantId: string, id: string) {
     const rows = await this.db.select<Row[]>(
       'occurrences',
@@ -1534,7 +1695,13 @@ export class OccurrencesService {
   }
   private required(v: unknown, name: string) {
     if (typeof v !== 'string' || !v.trim())
-      throw new BadRequestException(`${name} is required.`);
+      throw new BadRequestException(
+        name === 'closed_reason'
+          ? 'Informe o motivo de fechamento.'
+          : name === 'resolution_summary'
+            ? 'Informe o resumo da resolução.'
+            : `${name} é obrigatório.`,
+      );
     return v.trim();
   }
   private optional(v: unknown) {
@@ -1551,6 +1718,14 @@ export class OccurrencesService {
     if (typeof v !== 'string' || Number.isNaN(Date.parse(v)))
       throw new BadRequestException(`${field} must be a valid date.`);
     return new Date(v).toISOString();
+  }
+  private futureDate(v: unknown, field: string) {
+    const value = this.date(v, field);
+    if (value && new Date(value) <= new Date())
+      throw new BadRequestException(
+        'O prazo previsto deve ser uma data futura.',
+      );
+    return value;
   }
   private object(v: unknown) {
     if (v === undefined) return {};

@@ -141,6 +141,15 @@ export default function OccurrencesPage() {
             selected={selectedOperation}
             onSelect={setSelectedOperation}
           />
+          <label className="text-sm font-medium text-slate-700">
+            Prazo previsto para fechamento
+            <input
+              className="mt-1 w-full rounded-lg border p-2"
+              type="datetime-local"
+              value={form.due_at ?? ''}
+              onChange={(e) => set('due_at', e.target.value)}
+            />
+          </label>
           <textarea
             className="rounded-lg border p-2 md:col-span-2"
             placeholder="Observação"
