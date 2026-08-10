@@ -13,7 +13,9 @@
     "test:widget-snapshot": "pnpm build && node dist/shared/widget-result-snapshot.local-test.js",
     "test:general-chat-tools": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/agents/general-chat-tools.local-test.js",
     "test:occurrences": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/occurrences/occurrences.local-test.js",
-    "test:inbox": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/inbox/inbox.local-test.js"
+    "test:inbox": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/inbox/inbox.local-test.js",
+    "test:attendance-agent": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/agents/attendance-agent.local-test.js",
+    "test:public-chat": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/public-chat/public-chat.local-test.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

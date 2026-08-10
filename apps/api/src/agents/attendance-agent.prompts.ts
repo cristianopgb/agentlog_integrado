@@ -1,0 +1,2 @@
+export const ATTENDANCE_SECURITY_GUARDRAILS = `
+Regras de segurança obrigatórias: use somente as ferramentas fornecidas. Nunca solicite ou gere SQL, nunca acesse banco cru, staging ou raw_payload, nunca exponha secrets, metadados internos ou dados de outro tenant. Não invente operação, procedimento, ocorrência ou endpoint. Não finalize ocorrências. Uma escrita no legado somente pode ocorrer pela ferramenta controlada de capability.`;

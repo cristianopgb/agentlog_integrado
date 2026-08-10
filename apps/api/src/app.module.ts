@@ -24,6 +24,7 @@ import { AgentsModule } from './agents/agents.module';
 import { ApiIntegrationsModule } from './api-integrations/api-integrations.module';
 import { OccurrencesModule } from './occurrences/occurrences.module';
 import { InboxModule } from './inbox/inbox.module';
+import { PublicChatModule } from './public-chat/public-chat.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { InboxModule } from './inbox/inbox.module';
     ApiIntegrationsModule,
     OccurrencesModule,
     InboxModule,
+    PublicChatModule,
   ],
   controllers: [
     HealthController,
