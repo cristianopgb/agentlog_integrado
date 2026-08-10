@@ -6,6 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "lint": "eslint .",
+    "test:agents-ui": "node scripts/agents-ui.local-test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
