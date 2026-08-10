@@ -8,7 +8,7 @@ import {getAgent,listAgentRuns,listAgentToolsCatalog,testRunAgent,updateAgent,up
 const typeLabels:any={dashboard_analyst:'Agente de Dashboard',report_writer:'Agente de Relatório',general_chat:'Chat Geral',attendance_inbox:'Atendimento / Inbox',financial:'Financeiro',transport:'Transporte',warehouse:'Armazém',teams:'Equipes',saas_admin:'SaaSAdmin',setup_dev:'SetupDev'};
 const statusLabels:any={draft:'Rascunho',active:'Ativo',inactive:'Inativo',archived:'Arquivado',pending:'Pendente',processing:'Processando',completed:'Concluído',failed:'Falhou'};
 const generalChatToolKeys=new Set(['analytics.map.get','analytics.result.get','analytics.context.analyze','operational.record.find','knowledge.guidance.search']);
-const modules=[['core','Core'],['transport','Transporte'],['finance','Financeiro'],['attendance','Atendimento'],['warehouse','Armazém'],['team','Equipes']];
+const modules=[['core','Core'],['transport','Transporte'],['finance','Financeiro'],['atendimento','Atendimento'],['warehouse','Armazém'],['team','Equipes']];
 type SaveState='idle'|'saving'|'success'|'error';
 
 export default function Edit(){
