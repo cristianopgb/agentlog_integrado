@@ -9,8 +9,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 
 type Row = Record<string, unknown> & { id: string; tenant_id?: string };
-const channels = new Set(['manual', 'api', 'whatsapp', 'email', 'system']);
-const externalChannels = new Set(['manual', 'api', 'whatsapp', 'email']);
+const channels = new Set(['manual', 'api', 'whatsapp', 'email', 'system', 'public_chat']);
+const externalChannels = new Set(['manual', 'api', 'whatsapp', 'email', 'public_chat']);
 const statuses = new Set([
   'open',
   'waiting_contact',

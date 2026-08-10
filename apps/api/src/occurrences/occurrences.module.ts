@@ -4,5 +4,5 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { OccurrencesController } from './occurrences.controller';
 import { OccurrencesService } from './occurrences.service';
 
-@Module({ imports: [SupabaseModule, RbacModule], controllers: [OccurrencesController], providers: [OccurrencesService] })
+@Module({ imports: [SupabaseModule, RbacModule], controllers: [OccurrencesController], providers: [OccurrencesService], exports:[OccurrencesService] })
 export class OccurrencesModule {}

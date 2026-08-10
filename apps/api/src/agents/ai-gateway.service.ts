@@ -14,6 +14,16 @@ export class AiGatewayService {
   private readonly logger = new Logger(AiGatewayService.name);
   constructor(private readonly prompts: AgentPromptBuilderService, private readonly guard:LlmInputGuardService) {}
 
+  async attendanceTurn(input:{agent:Record<string,unknown>;instructions:string;messages:Array<{role:string;content:string}>;tools:any[];previousResponseId?:string;toolOutputs?:any[]}){
+    if(process.env.AI_GATEWAY_ENABLED!=='true'||process.env.AI_GATEWAY_DRY_RUN==='true'||!process.env.OPENAI_API_KEY)throw new Error('attendance_gateway_not_configured');
+    const prompt=this.prompts.build({agent:input.agent,runType:'attendance_inbox',allowedTools:input.tools.map(x=>x.name),context:'chat'});
+    const body:any={model:prompt.model.name,temperature:prompt.model.temperature,max_output_tokens:prompt.model.maxOutputTokens,instructions:`${prompt.systemPrompt}\n${input.instructions}`,tools:input.tools,tool_choice:'auto'};
+    if(input.previousResponseId){body.previous_response_id=input.previousResponseId;body.input=input.toolOutputs??[];}else body.input=input.messages;
+    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!response.ok)throw new Error(`attendance_gateway_http_${response.status}`);const data:any=await response.json(),usage=data.usage??{};
+    return{responseId:data.id as string,calls:(data.output??[]).filter((x:any)=>x.type==='function_call').map((x:any)=>({id:x.call_id??x.id,name:x.name,args:this.json(x.arguments)})),answer:this.responseText(data),usage:{input_tokens:usage.input_tokens??0,output_tokens:usage.output_tokens??0,total_tokens:usage.total_tokens??0},modelName:prompt.model.name};
+  }
+
   /** OpenAI selects controlled capabilities; it never receives database access. */
   async generalChatToolCall(input:{agent:Record<string,unknown>;message:string;history:Array<{role:string;content:string}>}){
     const prompt=this.prompts.build({agent:input.agent,runType:'general_chat',allowedTools:GENERAL_CHAT_FUNCTION_NAMES,context:'chat'}), dry=process.env.AI_GATEWAY_ENABLED!=='true'||process.env.AI_GATEWAY_DRY_RUN==='true';
