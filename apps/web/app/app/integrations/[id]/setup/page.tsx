@@ -23,8 +23,7 @@ import {
 } from '../../../../../lib/data-contracts-api';
 import {
   getLatestStagingRecordForSourceContract,
-  listCanonicalEntities,
-  listCanonicalFields,
+  listCanonicalMappingTargets,
   listFieldMappings,
   upsertFieldMapping,
   updateFieldMapping,
@@ -75,10 +74,10 @@ const mappingTypeLabels: Record<string, string> = {
   ignored: 'Ignorado',
 };
 const canonicalEntityLabels: Record<string, string> = {
-  operation_records: 'Núcleo operacional comum',
+  operation_records: 'Operações',
   transport_records: 'Transporte',
   attendance_records: 'Atendimento',
-  finance_records: 'Financeiro',
+  finance_records: 'Financeiro operacional',
   warehouse_records: 'Armazém',
   team_records: 'Equipes',
   deliveries: 'Entregas legado',
@@ -317,11 +316,38 @@ export default function IntegrationSetupPage() {
     setSource(s);
     const c = await getPrimaryContractForSource(t, params.id);
     setContract(c);
-    const [es, batches, reusable] = await Promise.all([
-      listCanonicalEntities(t),
+    const [targets, batches, reusable] = await Promise.all([
+      listCanonicalMappingTargets(t),
       listStagingBatches(t),
       listEnabledTenantModules(t),
     ]);
+    const es = Array.from(
+      new Map(
+        targets.map((target) => [target.canonical_entity_id, {
+          id: target.canonical_entity_id,
+          tenant_id: t,
+          module_key: target.module_key,
+          entity_key: target.canonical_entity_key,
+          name: target.canonical_entity_name,
+          description: null,
+          status: 'active',
+          is_system: true,
+          sort_order: visibleEntityOrder.indexOf(target.canonical_entity_key),
+        }]),
+      ).values(),
+    );
+    const appliedFields: CanonicalField[] = targets.map((target, index) => ({
+      id: target.canonical_field_id,
+      tenant_id: t,
+      canonical_entity_id: target.canonical_entity_id,
+      field_key: target.field_key,
+      name: target.field_name,
+      description: null,
+      data_type: target.data_type,
+      is_required: false,
+      is_system: true,
+      sort_order: index,
+    }));
     setEntities(es);
     const sourceBatches = batches.filter(
       (batch) => batch.data_source_id === params.id,
@@ -329,11 +355,7 @@ export default function IntegrationSetupPage() {
     const latestAnySourceBatch = sourceBatches[0] ?? null;
     setLatestSourceBatch(latestAnySourceBatch);
     setTenantModules(reusable);
-    setCanonicalFields(
-      (
-        await Promise.all(es.map((entity) => listCanonicalFields(t, entity.id)))
-      ).flat(),
-    );
+    setCanonicalFields(appliedFields);
     if (c) {
       const latestValidatedBatch =
         sourceBatches.find(
@@ -548,7 +570,6 @@ export default function IntegrationSetupPage() {
   const groupedCanonicalEntities = useMemo(
     () =>
       entities
-        .filter((entity) => visibleEntityOrder.includes(entity.entity_key))
         .map((entity) => ({
           ...entity,
           fields: canonicalFields.filter(
