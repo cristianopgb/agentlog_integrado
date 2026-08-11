@@ -40,6 +40,32 @@ export class MappingService {
       `select=${entityFields}&tenant_id=eq.${tenantId}&order=sort_order.asc`,
     );
   }
+  async listMappingTargets(tenantId: string) {
+    const entities = await this.supabase.select<Array<Record<string, unknown>>>(
+      'canonical_entities',
+      `select=${entityFields}&tenant_id=eq.${tenantId}&status=eq.active&order=sort_order.asc`,
+    );
+    if (!entities.length) return [];
+    const fields = await this.supabase.select<Array<Record<string, unknown>>>(
+      'canonical_fields',
+      `select=${canonicalFieldFields}&tenant_id=eq.${tenantId}&canonical_entity_id=in.(${entities.map((entity) => String(entity.id)).join(',')})&order=sort_order.asc`,
+    );
+    const byId = new Map(entities.map((entity) => [String(entity.id), entity]));
+    return fields.map((field) => {
+      const entity = byId.get(String(field.canonical_entity_id))!;
+      return {
+        canonical_entity_id: entity.id,
+        canonical_entity_key: entity.entity_key,
+        canonical_entity_name: entity.name,
+        canonical_field_id: field.id,
+        field_key: field.field_key,
+        field_name: field.name,
+        data_type: field.data_type,
+        module_key: entity.module_key,
+        label: `${String(entity.name)} / ${String(field.name)}`,
+      };
+    });
+  }
   async getEntity(tenantId: string, entityId: string) {
     return this.one(
       'canonical_entities',

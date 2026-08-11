@@ -9,6 +9,7 @@ import { MappingService } from './mapping.service';
 export class CanonicalEntitiesController {
   constructor(private readonly service: MappingService) {}
   @Get() @RequirePermission('core.canonical_entities.view') list(@Param('tenantId') tenantId: string) { return this.service.listEntities(tenantId); }
+  @Get('mapping-targets') @RequirePermission('core.canonical_fields.view') mappingTargets(@Param('tenantId') tenantId: string) { return this.service.listMappingTargets(tenantId); }
   @Post() @RequirePermission('core.canonical_entities.create') create(@Param('tenantId') tenantId: string, @Req() req: AuthenticatedRequest, @Body() body: Record<string, unknown>) { return this.service.createEntity(tenantId, req.user.id, body); }
   @Get(':entityId') @RequirePermission('core.canonical_entities.view') get(@Param('tenantId') tenantId: string, @Param('entityId') entityId: string) { return this.service.getEntity(tenantId, entityId); }
   @Patch(':entityId') @RequirePermission('core.canonical_entities.update') update(@Param('tenantId') tenantId: string, @Param('entityId') entityId: string, @Req() req: AuthenticatedRequest, @Body() body: Record<string, unknown>) { return this.service.updateEntity(tenantId, entityId, req.user.id, body); }

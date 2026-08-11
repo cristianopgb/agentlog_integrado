@@ -22,6 +22,35 @@ export type CanonicalField = {
   is_system: boolean;
   sort_order: number;
 };
+export type CanonicalMappingTarget = {
+  canonical_entity_id: string;
+  canonical_entity_key: string;
+  canonical_entity_name: string;
+  canonical_field_id: string;
+  field_key: string;
+  field_name: string;
+  data_type: string;
+  module_key: string;
+  label: string;
+};
+
+function canonicalApiBase() {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  if (process.env.NODE_ENV === 'production')
+    throw new Error('API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.');
+  return 'http://localhost:3001';
+}
+
+export async function listCanonicalMappingTargets(tenantId: string) {
+  const response = await fetch(
+    `${canonicalApiBase()}/tenants/${tenantId}/canonical-entities/mapping-targets`,
+    { headers: { Authorization: `Bearer ${localStorage.getItem('sli_supabase_access_token') ?? ''}` } },
+  );
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.message ?? 'Falha ao carregar destinos canônicos.');
+  return body as CanonicalMappingTarget[];
+}
 export type FieldMapping = {
   id: string;
   tenant_id: string;
