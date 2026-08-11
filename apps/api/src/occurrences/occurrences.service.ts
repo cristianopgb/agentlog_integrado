@@ -1487,6 +1487,13 @@ export class OccurrencesService {
         typeof operation.record_type === 'string'
           ? operation.record_type
           : null,
+      driver_name: operation.driver_name ?? null,
+      vehicle_plate: operation.vehicle_plate ?? null,
+      carrier_name: operation.carrier_name ?? null,
+      delivery_status: operation.delivery_status ?? operation.status ?? null,
+      cargo_type: operation.cargo_type ?? null,
+      priority: operation.priority ?? null,
+      volume_m3: operation.volume_m3 ?? null,
     };
     return this.db.insert<Row[]>('occurrence_operation_links', {
       tenant_id: tenantId,
@@ -1586,7 +1593,7 @@ export class OccurrencesService {
   private async operation(tenantId: string, id: string) {
     const rows = await this.db.select<Row[]>(
       'operation_records',
-      `select=id,document_number,invoice_number,manifest_number,external_code,order_number,delivery_number,customer_name,record_type&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`,
+      `select=id,document_number,invoice_number,manifest_number,external_code,order_number,delivery_number,customer_name,record_type,driver_name,vehicle_plate,carrier_name,delivery_status,status,cargo_type,priority,volume_m3&tenant_id=eq.${tenantId}&id=eq.${id}&deleted_at=is.null&limit=1`,
     );
     if (!rows.length)
       throw new BadRequestException('Operation does not belong to tenant.');

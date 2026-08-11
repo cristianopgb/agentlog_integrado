@@ -13,6 +13,7 @@ const definitions:Record<string,{description:string;properties:Record<string,unk
  'attendance.knowledge.search':{description:'Pesquisa orientação publicada.',properties:{query:{type:'string'}},required:['query']},
  'attendance.occurrence.create':{description:'Cria ocorrência local após coletar os dados obrigatórios.',properties:{conversation_id:{type:'string'},contact_id:{type:'string'},operation_record_id:{type:'string'},title:{type:'string'},description:{type:'string'},reason_id:{type:'string'},priority:{type:'string'},evidence_summary:{type:'string'},requires_human_review:{type:'boolean'}},required:['conversation_id','contact_id','title','description','reason_id']},
  'attendance.occurrence.add_treatment':{description:'Adiciona tratativa sem fechar ocorrência.',properties:{occurrence_id:{type:'string'},description:{type:'string'},treatment_type:{type:'string'}},required:['occurrence_id','description']},
+ 'attendance.occurrence.get_detail':{description:'Consulta o contexto completo e tratado de uma ocorrência existente, sem alterar seu estado.',properties:{occurrence_id:{type:'string'}},required:['occurrence_id']},
  'attendance.legacy.check_capability':{description:'Verifica capability declarada.',properties:{capability_key:{type:'string',enum:['occurrences.create']}},required:['capability_key']},
  'attendance.legacy.create_if_configured':{description:'Registra envio controlado; nunca inventa endpoint.',properties:{occurrence_id:{type:'string'}},required:['occurrence_id']},
 };
