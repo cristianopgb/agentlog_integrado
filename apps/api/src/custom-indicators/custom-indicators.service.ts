@@ -13,7 +13,8 @@ type TableName =
   | 'attendance_records'
   | 'finance_records'
   | 'warehouse_records'
-  | 'team_records';
+  | 'team_records'
+  | 'occurrence_analytics_view';
 type Operation =
   | 'PIVOT_CONTROLLED'
   | 'CONTAGEM'
@@ -94,6 +95,7 @@ const tables = [
   'finance_records',
   'warehouse_records',
   'team_records',
+  'occurrence_analytics_view',
 ] as const;
 const ops = [
   'PIVOT_CONTROLLED',
@@ -1650,7 +1652,8 @@ export class CustomIndicatorsService {
     includeArchived = false,
   ) {
     const filters = [`select=*`, `tenant_id=eq.${tenantId}`];
-    if (!includeArchived) filters.push('deleted_at=is.null');
+    if (!includeArchived && table !== 'occurrence_analytics_view')
+      filters.push('deleted_at=is.null');
     if (table === 'operation_records') {
       filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
       if (!includeArchived)

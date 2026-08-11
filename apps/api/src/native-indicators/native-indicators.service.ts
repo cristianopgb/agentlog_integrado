@@ -65,6 +65,7 @@ const allowedTables = [
   'finance_records',
   'warehouse_records',
   'team_records',
+  'occurrence_analytics_view',
 ] as const;
 const tableColumns = {
   operation_records: new Set([
@@ -170,6 +171,32 @@ const tableColumns = {
     'worked_at',
      'updated_at',
     'deleted_at',
+  ]),
+  occurrence_analytics_view: new Set([
+    'occurrence_id',
+    'occurrence_number',
+    'current_status',
+    'current_priority',
+    'source_channel',
+    'opened_at',
+    'due_at',
+    'resolved_at',
+    'closed_at',
+    'sla_status',
+    'reason_code',
+    'reason_name',
+    'reason_category',
+    'responsible_team',
+    'has_operation_link',
+    'has_pending_actions',
+    'pending_actions_count',
+    'overdue_pending_actions_count',
+    'treatments_count',
+    'open_treatments_count',
+    'financial_entries_total',
+    'documents_count',
+    'attachments_count',
+    'resolution_minutes',
   ]),
 } satisfies Record<string, Set<string>>;
 
@@ -401,8 +428,12 @@ export class NativeIndicatorsService {
   ): Promise<Preview> {
     const cfg = d.calculation_config ?? {};
     const calc = d.calculation_type;
-    const scoped = await this.scopedRows(tenantId, 'operation_records', filters);
-    const joined = await this.joinedRows(tenantId, scoped.rows, filters);
+    const metricConfig=(cfg.metric as Record<string,unknown>|undefined);
+    const baseTable=this.safeTable(String(cfg.table??metricConfig?.table??'operation_records'));
+    const scoped = await this.scopedRows(tenantId, baseTable, filters);
+    const joined = baseTable==='occurrence_analytics_view'
+      ? scoped.rows.map(row=>({__operation:row,...this.prefixRow(baseTable,row)} as JoinedRow))
+      : await this.joinedRows(tenantId, scoped.rows, filters);
     const filtered = this.filteredJoinedRows(joined, cfg.filter ?? cfg.where);
     const base = {
       status,
@@ -1051,8 +1082,8 @@ export class NativeIndicatorsService {
     const filters = [
       `select=*`,
       `tenant_id=eq.${tenantId}`,
-      'deleted_at=is.null',
     ];
+    if(table!=='occurrence_analytics_view')filters.push('deleted_at=is.null');
     if (table === 'operation_records') {
       filters.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
       if (!includeArchived) filters.push(await this.supabase.activeOperationalSourceFilter(tenantId));
@@ -1064,7 +1095,8 @@ export class NativeIndicatorsService {
     return rows;
   }
   private async countRows(tenantId: string, table: TableName, extra?: string) {
-    const q = [`select=id`, `tenant_id=eq.${tenantId}`, 'deleted_at=is.null'];
+    const q = [`select=${table==='occurrence_analytics_view'?'occurrence_id':'id'}`, `tenant_id=eq.${tenantId}`];
+    if(table!=='occurrence_analytics_view')q.push('deleted_at=is.null');
     if (table === 'operation_records') {
       q.push('is_current=eq.true', 'canonical_validity_status=eq.valid');
       q.push(await this.supabase.activeOperationalSourceFilter(tenantId));

@@ -87,10 +87,27 @@ export class ApiConnectorSyncService {
 
   async listApiMappings(tenantId: string, sourceId: string) {
     const contract = await this.contract(tenantId, sourceId);
-    return this.db.select(
+    const apiMappings=await this.db.select<Array<Record<string,unknown>>>(
       'data_source_api_field_mappings',
       `select=id,api_source_field_name:source_field_name,data_contract_field_id,status&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active&order=created_at.asc`,
     );
+    if(!apiMappings.length)return [];
+    const contractFieldIds=apiMappings.map(row=>String(row.data_contract_field_id));
+    const mappings=await this.db.select<Array<Record<string,unknown>>>('field_mappings',`select=data_contract_field_id,canonical_entity_id,canonical_field_id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=in.(${contractFieldIds.join(',')})&status=eq.active`);
+    if(!mappings.length)return apiMappings;
+    const entityIds=[...new Set(mappings.map(row=>String(row.canonical_entity_id)))];
+    const fieldIds=[...new Set(mappings.map(row=>String(row.canonical_field_id)))];
+    const [entities,canonicalFields]=await Promise.all([
+      this.db.select<Array<{id:string;entity_key:string;name:string}>>('canonical_entities',`select=id,entity_key,name&tenant_id=eq.${tenantId}&id=in.(${entityIds.join(',')})`),
+      this.db.select<Array<{id:string;field_key:string;name:string}>>('canonical_fields',`select=id,field_key,name&tenant_id=eq.${tenantId}&id=in.(${fieldIds.join(',')})`),
+    ]);
+    return apiMappings.map(apiMapping=>{
+      const mapping=mappings.find(row=>row.data_contract_field_id===apiMapping.data_contract_field_id);
+      if(!mapping)return apiMapping;
+      const entity=entities.find(row=>row.id===mapping.canonical_entity_id);
+      const field=canonicalFields.find(row=>row.id===mapping.canonical_field_id);
+      return {...apiMapping,canonical_entity_id:mapping.canonical_entity_id,canonical_field_id:mapping.canonical_field_id,canonical_entity_key:entity?.entity_key??null,canonical_field_key:field?.field_key??null,canonical_entity_name:entity?.name??null,canonical_field_name:field?.name??null,label:entity&&field?`${entity.name} / ${field.name}`:null};
+    });
   }
 
   async saveApiMappings(
@@ -101,6 +118,8 @@ export class ApiConnectorSyncService {
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;
+        canonical_entity_id?: string;
+        canonical_field_id?: string;
       }>;
     },
   ) {
@@ -117,18 +136,28 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Pareie pelo menos um campo da API antes de confirmar.',
       );
-    if (
-      requested.some(
-        (item) =>
-          !item.source_field_name ||
-          !detected.has(item.source_field_name) ||
-          !item.data_contract_field_id ||
-          !fieldIds.has(item.data_contract_field_id),
-      )
-    )
+    if (requested.some((item) => !item.source_field_name || !detected.has(item.source_field_name) || (!item.data_contract_field_id && !(item.canonical_entity_id&&item.canonical_field_id))))
       throw new BadRequestException(
         'Pareamento contém campo não detectado ou fora do contrato nativo.',
       );
+    for(const item of requested.filter(item=>!item.data_contract_field_id)){
+      const canonical=await this.db.select<Array<{id:string;canonical_entity_id:string;field_key:string;data_type:string;is_required:boolean}>>('canonical_fields',`select=id,canonical_entity_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
+      if(!canonical[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
+      const entities=await this.db.select<Array<{id:string;entity_key:string}>>('canonical_entities',`select=id,entity_key&tenant_id=eq.${tenantId}&id=eq.${item.canonical_entity_id}&limit=1`);
+      if(!entities[0])throw new BadRequestException('Entidade canônica inválida ou fora do tenant.');
+      const deterministicFieldKey=`${entities[0].entity_key}__${canonical[0].field_key}`;
+      let contractField=fields.find(field=>field.field_key===deterministicFieldKey);
+      if(!contractField){
+        const [created]=await this.db.insert<ContractField[]>('data_contract_fields',{tenant_id:tenantId,data_contract_id:contract.id,field_key:deterministicFieldKey,source_field_name:deterministicFieldKey,data_type:canonical[0].data_type,is_required:false,allow_null:true});
+        contractField=created;fields.push(created);fieldIds.add(created.id);
+      }
+      item.data_contract_field_id=contractField.id;
+      const mapping=await this.db.select<Array<{id:string}>>('field_mappings',`select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${contractField.id}&limit=1`);
+      const operationalKeys=new Set(['delivery_number','document_number','external_code','manifest_number','invoice_number','cte_number','order_number']);
+      const payload={tenant_id:tenantId,data_contract_id:contract.id,data_contract_field_id:contractField.id,canonical_entity_id:item.canonical_entity_id,canonical_field_id:item.canonical_field_id,mapping_type:'direct',status:'active',operational_key:entities[0].entity_key==='operation_records'&&operationalKeys.has(canonical[0].field_key),created_by:userId};
+      if(mapping[0])await this.db.update('field_mappings',`tenant_id=eq.${tenantId}&id=eq.${mapping[0].id}`,payload);
+      else await this.db.insert('field_mappings',payload);
+    }
     if (
       new Set(requested.map((item) => item.data_contract_field_id)).size !==
       requested.length
@@ -142,11 +171,12 @@ export class ApiConnectorSyncService {
           field.field_key === 'numero_entrega' ||
           field.field_key === 'delivery_number',
       );
+      const canonicalDelivery=requested.some(item=>item.canonical_field_id&&item.canonical_entity_id&&fields.find(field=>field.id===item.data_contract_field_id)?.field_key==='operation_records__delivery_number');
       if (
-        !deliveryNumber ||
+        !canonicalDelivery&&(!deliveryNumber ||
         !requested.some(
           (item) => item.data_contract_field_id === deliveryNumber.id,
-        )
+        ))
       )
         throw new BadRequestException(
           'Pareie um campo da API com numero_entrega antes de avançar. Esta é a chave operacional delivery_number de entregas.',

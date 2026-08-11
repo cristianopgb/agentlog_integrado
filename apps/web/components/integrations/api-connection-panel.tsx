@@ -22,6 +22,7 @@ import {
   normalizeFieldParseRule,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
+import { listCanonicalMappingTargets, type CanonicalMappingTarget } from '../../lib/canonical-api';
 import type { TenantModuleOption } from '../../lib/modules-api';
 import { updateIntegrationConnection } from '../../lib/integrations-api';
 import {
@@ -145,6 +146,7 @@ export function ApiConnectionPanel({
   const [phase, setPhase] = useState<Phase>('connection');
   const [config, setConfig] = useState<ApiConnectorConfig | null>(null);
   const [runs, setRuns] = useState<ApiSyncRun[]>([]);
+  const [canonicalTargets,setCanonicalTargets]=useState<CanonicalMappingTarget[]>([]);
   const [valueMappings, setValueMappings] = useState<ValueMappingItem[]>([]);
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
@@ -167,20 +169,24 @@ export function ApiConnectionPanel({
     NormalizationError[]
   >([]);
   async function load() {
-    const [current, history, mappings, values, formats] = await Promise.all([
+    const [current, history, mappings, values, formats, targets] = await Promise.all([
       getApiConfig(tenantId, sourceId),
       listApiRuns(tenantId, sourceId),
       listApiFieldMappings(tenantId, sourceId),
       listValueMappings(tenantId, sourceId),
       listFieldParseRules(tenantId, sourceId),
+      listCanonicalMappingTargets(tenantId),
     ]);
+    setCanonicalTargets(targets);
     setConfig(current);
     setRuns(history);
     setDraft(
       Object.fromEntries(
         mappings.map((mapping) => [
           mapping.api_source_field_name,
-          mapping.data_contract_field_id,
+          mapping.canonical_entity_id&&mapping.canonical_field_id
+            ?`canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}`
+            :mapping.data_contract_field_id,
         ]),
       ),
     );
@@ -296,9 +302,14 @@ export function ApiConnectionPanel({
       field.field_key === 'numero_entrega' ||
       field.field_key === 'delivery_number',
   );
+  const canonicalDeliveryTarget=canonicalTargets.find(target=>
+    ['operation_records','deliveries'].includes(target.canonical_entity_key)&&target.field_key==='delivery_number');
+  const canonicalDeliveryValue=canonicalDeliveryTarget
+    ?`canonical:${canonicalDeliveryTarget.canonical_entity_id}:${canonicalDeliveryTarget.canonical_field_id}`:'';
   const missingDeliveryOperationalKey =
     Boolean(deliveryOperationalField) &&
-    !Object.values(draft).includes(deliveryOperationalField!.id);
+    !Object.values(draft).includes(deliveryOperationalField!.id) &&
+    !Object.values(draft).includes(canonicalDeliveryValue);
   const confirmMappings = () =>
     act('mapping', async () => {
       await saveApiFieldMappings(
@@ -306,10 +317,13 @@ export function ApiConnectionPanel({
         sourceId,
         Object.entries(draft)
           .filter(([, target]) => target)
-          .map(([source_field_name, data_contract_field_id]) => ({
-            source_field_name,
-            data_contract_field_id,
-          })),
+          .map(([source_field_name, target]) => {
+            if(target.startsWith('canonical:')){
+              const [,canonical_entity_id,canonical_field_id]=target.split(':');
+              return {source_field_name,data_contract_field_id:'',canonical_entity_id,canonical_field_id};
+            }
+            return {source_field_name,data_contract_field_id:target};
+          }),
       );
       await load();
       setMsg(
@@ -772,11 +786,13 @@ export function ApiConnectionPanel({
                       className="mt-3 w-full rounded-xl border p-2"
                     >
                       <option value="">Não parear</option>
-                      {fields.map((field) => (
-                        <option key={field.id} value={field.id}>
-                          {field.field_key}
-                          {field.is_required ? ' *' : ''}
+                      {canonicalTargets.map((field) => (
+                        <option key={field.canonical_field_id} value={`canonical:${field.canonical_entity_id}:${field.canonical_field_id}`}>
+                          {field.label}
                         </option>
+                      ))}
+                      {fields.filter(field=>Object.values(draft).includes(field.id)).map(field=>(
+                        <option key={`legacy:${field.id}`} value={field.id}>{field.field_key}{field.is_required?' *':''}</option>
                       ))}
                     </select>
                     {duplicate ? (

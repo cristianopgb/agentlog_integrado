@@ -75,6 +75,8 @@ export class ApiIntegrationsController {
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;
+        canonical_entity_id?: string;
+        canonical_field_id?: string;
       }>;
     },
   ) {
