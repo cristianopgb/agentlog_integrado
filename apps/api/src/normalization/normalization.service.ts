@@ -89,6 +89,7 @@ const nativeEntities = new Set([
   'finance_records',
   'warehouse_records',
   'team_records',
+  'occurrences',
   'deliveries',
   'Entregas',
   'Entregas legado',
@@ -100,6 +101,7 @@ const prioritizedEntities = new Set([
   'finance_records',
   'warehouse_records',
   'team_records',
+  'occurrences',
 ]);
 const legacyEntities = new Set(['deliveries', 'Entregas', 'Entregas legado']);
 const extensionEntities = new Set([
@@ -123,6 +125,7 @@ const entityModule: Record<string, string> = {
   finance_records: 'financeiro',
   warehouse_records: 'armazem',
   team_records: 'equipes',
+  occurrences: 'atendimento',
 };
 const allowedStatuses = new Set(['validated', 'partially_valid', 'completed']);
 const operationColumns = new Set([
@@ -308,6 +311,10 @@ const extensionColumns: Record<string, Set<string>> = {
     'worked_at',
   ]),
 };
+const occurrenceColumns = new Set([
+  'occurrence_number','title','description','current_priority','source_channel',
+  'opened_at','due_at','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number',
+]);
 const aliases: Record<string, string> = {
   delivery_status: 'status',
   expected_delivery_date: 'expected_date',
@@ -575,6 +582,7 @@ export class NormalizationService {
       for (const record of recordsWithPayload) {
         const buckets: Record<string, Record<string, unknown>> = {
           operation_records: {},
+          occurrences: {},
         };
         let partial = false;
         for (const mapping of recordMappings) {
@@ -698,6 +706,17 @@ export class NormalizationService {
           };
         }
         this.applyOperationDateFallbacks(buckets);
+        const occurrenceValues=buckets.occurrences;
+        if(Object.keys(occurrenceValues).length && !Object.keys(buckets.operation_records).length){
+          const occurrence=await this.upsertOccurrence(tenantId,occurrenceValues,record,userId);
+          if(!occurrence){
+            await addError('OCCURRENCE_IDEMPOTENCY_KEY_REQUIRED','Ocorrência sem chave segura de idempotência não foi criada.',{},record.id);
+          }else{
+            counters[occurrence.created?'created_extension_records':'updated_extension_records']+=1;
+            counters.processed_records+=1;
+          }
+          continue;
+        }
         if (
           Object.keys(buckets.operation_records).length === 0 &&
           Object.keys(buckets).some((key) => key !== 'operation_records')
@@ -767,6 +786,11 @@ export class NormalizationService {
           record,
           userId,
         );
+        if(Object.keys(occurrenceValues).length){
+          const occurrence=await this.upsertOccurrence(tenantId,occurrenceValues,record,userId,op.id);
+          if(!occurrence)await addError('OCCURRENCE_IDEMPOTENCY_KEY_REQUIRED','Ocorrência sem chave segura de idempotência não foi criada.',{},record.id);
+          else counters[occurrence.created?'created_extension_records':'updated_extension_records']+=1;
+        }
         for (const entity of Object.keys(buckets).filter(
           (key) =>
             extensionEntities.has(key) && Object.keys(buckets[key]).length,
@@ -975,6 +999,7 @@ export class NormalizationService {
     ) {
       return { entity: entityKey, field: fieldKey };
     }
+    if(entityKey==='occurrences'&&occurrenceColumns.has(fieldKey))return {entity:'occurrences',field:fieldKey};
     if (operationColumns.has(aliased)) {
       return { entity: 'operation_records', field: aliased };
     }
@@ -1355,6 +1380,42 @@ export class NormalizationService {
       payload,
     );
     return { id: row.id, created: true };
+  }
+  private async upsertOccurrence(tenantId:string,values:Record<string,unknown>,record:RecordRow,userId:string,operationRecordId?:string){
+    const number=typeof values.occurrence_number==='string'&&/^OC\d{7}$/.test(values.occurrence_number)?values.occurrence_number:null;
+    const channel=String(values.source_channel||'external');
+    const resolvedOperationId=operationRecordId??await this.resolveOccurrenceOperation(tenantId,values);
+    if(!number&&!resolvedOperationId)return null;
+    let existing:Array<Record<string,unknown>>=[];
+    if(number)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type&tenant_id=eq.${tenantId}&occurrence_number=eq.${encodeURIComponent(number)}&deleted_at=is.null&limit=1`);
+    else if(values.title&&values.opened_at){
+      const links=await this.supabase.select<Array<{occurrence_id:string}>>('occurrence_operation_links',`select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${resolvedOperationId}&limit=100`);
+      if(links.length)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type&tenant_id=eq.${tenantId}&id=in.(${links.map(link=>link.occurrence_id).join(',')})&source_channel=eq.${encodeURIComponent(channel)}&title=eq.${encodeURIComponent(String(values.title))}&opened_at=eq.${encodeURIComponent(String(values.opened_at))}&deleted_at=is.null&limit=1`);
+    }else return null;
+    const safeValues=Object.fromEntries(Object.entries(values).filter(([key,value])=>value!==null&&value!==''&&!['linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number'].includes(key)));
+    let id:string,created=false;
+    if(existing[0]){
+      id=String(existing[0].id);
+      const gaps=Object.fromEntries(Object.entries(safeValues).filter(([key])=>existing[0][key]===null||existing[0][key]===undefined||existing[0][key]===''));
+      if(Object.keys(gaps).length)await this.supabase.update('occurrences',`tenant_id=eq.${tenantId}&id=eq.${id}`,{...gaps,updated_by:userId});
+    }else{
+      const allocated=number??String(await this.supabase.rpc('next_tenant_occurrence_number',{p_tenant_id:tenantId}));
+      const [row]=await this.supabase.insert<Array<{id:string}>>('occurrences',{tenant_id:tenantId,occurrence_number:allocated,title:String(values.title||`Ocorrência ${allocated}`),description:values.description??null,current_priority:values.current_priority??'medium',source_channel:channel,opened_at:values.opened_at??new Date().toISOString(),due_at:values.due_at??null,created_by:userId,updated_by:userId,created_by_type:'normalization'});
+      id=row.id;created=true;
+    }
+    if(resolvedOperationId)await this.supabase.insert('occurrence_operation_links',{tenant_id:tenantId,occurrence_id:id,operation_record_id:resolvedOperationId,relationship_type:'source',is_primary:true,linked_by:userId}).catch(()=>undefined);
+    await this.supabase.insert('occurrence_events',{tenant_id:tenantId,occurrence_id:id,event_type:created?'normalized_created':'normalized_updated',event_status:'reported',event_title:created?'Ocorrência normalizada':'Dados externos recebidos',event_description:'Atualização controlada após contrato, staging e pareamento.',event_at:new Date().toISOString(),created_by:userId,created_by_type:'normalization',source_channel:channel,source_reference:record.id,metadata:{}});
+    return{id,created};
+  }
+  private async resolveOccurrenceOperation(tenantId:string,values:Record<string,unknown>){
+    const candidates:[string,string][]=[['linked_document_number','document_number'],['linked_invoice_number','invoice_number'],['linked_cte_number','cte_number'],['linked_delivery_number','delivery_number']];
+    for(const [source,target] of candidates){
+      if(!this.hasOperationalIdentifier(values[source]))continue;
+      const rows=await this.supabase.select<Array<{id:string}>>('operation_records',`select=id&tenant_id=eq.${tenantId}&${target}=eq.${encodeURIComponent(String(values[source]))}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=2`);
+      if(rows.length===1)return rows[0].id;
+      if(rows.length>1)return null;
+    }
+    return null;
   }
   private event(
     tenantId: string,

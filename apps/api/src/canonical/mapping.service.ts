@@ -9,7 +9,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 const entityFields =
   'id,tenant_id,module_key,entity_key,name,description,status,is_system,sort_order,created_at,updated_at';
 const canonicalFieldFields =
-  'id,tenant_id,canonical_entity_id,field_key,name,description,data_type,is_required,is_system,sort_order,created_at,updated_at';
+  'id,tenant_id,canonical_entity_id,field_key,name,description,data_type,is_required,is_system,is_importable,is_analytics_only,sort_order,created_at,updated_at';
 const mappingFields =
   'id,tenant_id,data_contract_id,data_contract_field_id,canonical_entity_id,canonical_field_id,mapping_type,status,notes,operational_key,created_at,updated_at,data_contract_field:data_contract_fields!field_mappings_contract_field_tenant_fk(id,field_key,source_field_name,data_type),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(id,field_key,name,data_type)';
 const transformationRuleFields =
@@ -48,10 +48,10 @@ export class MappingService {
     if (!entities.length) return [];
     const fields = await this.supabase.select<Array<Record<string, unknown>>>(
       'canonical_fields',
-      `select=${canonicalFieldFields}&tenant_id=eq.${tenantId}&canonical_entity_id=in.(${entities.map((entity) => String(entity.id)).join(',')})&order=sort_order.asc`,
+      `select=${canonicalFieldFields}&tenant_id=eq.${tenantId}&canonical_entity_id=in.(${entities.map((entity) => String(entity.id)).join(',')})&is_importable=eq.true&is_analytics_only=eq.false&order=sort_order.asc`,
     );
     const byId = new Map(entities.map((entity) => [String(entity.id), entity]));
-    return fields.map((field) => {
+    return fields.filter(field=>field.is_importable!==false&&field.is_analytics_only!==true).map((field) => {
       const entity = byId.get(String(field.canonical_entity_id))!;
       return {
         canonical_entity_id: entity.id,

@@ -143,6 +143,13 @@ export type ApiFieldMapping = {
   id: string;
   api_source_field_name: string;
   data_contract_field_id: string;
+  canonical_entity_id?: string | null;
+  canonical_field_id?: string | null;
+  canonical_entity_key?: string | null;
+  canonical_field_key?: string | null;
+  canonical_entity_name?: string | null;
+  canonical_field_name?: string | null;
+  label?: string | null;
 };
 export const listApiFieldMappings = (t: string, s: string) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`);
@@ -152,6 +159,8 @@ export const saveApiFieldMappings = (
   mappings: Array<{
     source_field_name: string;
     data_contract_field_id: string;
+    canonical_entity_id?: string;
+    canonical_field_id?: string;
   }>,
 ) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`, {

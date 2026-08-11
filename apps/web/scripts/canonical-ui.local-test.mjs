@@ -3,6 +3,9 @@ const labels=readFileSync(new URL('../lib/report-labels.ts',import.meta.url),'ut
 const migration=readFileSync(new URL('../../../supabase/migrations/202608110001_sprint_7rb_applied_canonical_base.sql',import.meta.url),'utf8');
 const setup=readFileSync(new URL('../app/app/integrations/[id]/setup/page.tsx',import.meta.url),'utf8');
 const api=readFileSync(new URL('../lib/canonical-api.ts',import.meta.url),'utf8');
+const panel=readFileSync(new URL('../components/integrations/api-connection-panel.tsx',import.meta.url),'utf8');
+const occurrenceMigration=readFileSync(new URL('../../../supabase/migrations/202608110002_sprint_10r_g_occurrence_canonical_analytics.sql',import.meta.url),'utf8');
+const hardening=readFileSync(new URL('../../../supabase/migrations/202608110003_sprint_10r_g_hardening.sql',import.meta.url),'utf8');
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 for(const field of ['driver_phone','driver_whatsapp','pod_status','billing_status'])assert(labels.includes(`${field}:`),`Label ausente: ${field}`);
 for(const field of ['driver_phone','driver_whatsapp'])assert(migration.includes(`'${field}'`),`Destino de pareamento ausente: ${field}`);
@@ -11,6 +14,13 @@ const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
 assert(!migration.includes(forbidden)&&!migration.includes(forbiddenWhatsapp),'Campo específico do legado exposto na UI.');
 assert(setup.includes('listCanonicalMappingTargets(t)'),'Pareamento não usa o catálogo canônico aplicado da API.');
 assert(api.includes('/canonical-entities/mapping-targets'),'Cliente não consulta a API de destinos canônicos.');
+assert(panel.includes('listCanonicalMappingTargets(tenantId)'),'Painel API não carrega destinos canônicos.');
+assert(panel.includes('mapping.canonical_entity_id&&mapping.canonical_field_id'),'Painel não restaura mapping canônico após reload.');
+assert(panel.includes('canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}'),'Valor canônico restaurado incorretamente.');
+assert(occurrenceMigration.includes("'occurrence_number','Número da ocorrência'")&&hardening.includes("'occurrence_number','title','description'"),'Grupo Ocorrências não publica número importável.');
+assert(hardening.includes("'financial_entries_total'")&&hardening.includes('is_analytics_only'),'Total financeiro não está classificado como analytics-only.');
+assert(occurrenceMigration.includes("'driver_phone'")||migration.includes("'driver_phone'"),'Telefone do motorista ausente.');
+assert(occurrenceMigration.includes("'driver_whatsapp'")||migration.includes("'driver_whatsapp'"),'WhatsApp do motorista ausente.');
 for(const label of ["operation_records: 'Operações'","transport_records: 'Transporte'","finance_records: 'Financeiro operacional'"])
   assert(setup.includes(label),`Agrupamento amigável ausente: ${label}`);
 assert(!setup.includes('.filter((entity) => visibleEntityOrder.includes(entity.entity_key))'),'UI limita destinos a uma lista antiga de entidades.');
