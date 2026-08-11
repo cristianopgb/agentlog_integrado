@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { AuthGuard } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
@@ -362,7 +363,10 @@ async function main() {
   );
 
   const hardeningMigration = readFileSync(
-    'supabase/migrations/202608080002_sprint_10r_f_function_and_numbering_hardening.sql',
+    join(
+      __dirname,
+      '../../../../supabase/migrations/202608080002_sprint_10r_f_function_and_numbering_hardening.sql',
+    ),
     'utf8',
   );
   for (const signature of [

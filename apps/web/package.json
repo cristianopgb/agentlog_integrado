@@ -7,7 +7,8 @@
     "build": "next build",
     "lint": "eslint .",
     "test:agents-ui": "node scripts/agents-ui.local-test.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:canonical-ui": "node scripts/canonical-ui.local-test.mjs"
   },
   "dependencies": {
     "@openai/agents": "^0.5.0",
