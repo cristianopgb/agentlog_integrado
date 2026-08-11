@@ -58,6 +58,7 @@ const fields = [
   {id:'payment',canonical_entity_id:'finance',field_key:'payment_status',name:'Status de pagamento',data_type:'enum'},
   {id:'occ-number',canonical_entity_id:'occurrences',field_key:'occurrence_number',name:'Número da ocorrência',data_type:'text',is_importable:true,is_analytics_only:false},
   {id:'occ-total',canonical_entity_id:'occurrences',field_key:'financial_entries_total',name:'Total financeiro',data_type:'decimal',is_importable:false,is_analytics_only:true},
+  {id:'internal',canonical_entity_id:'transport',field_key:'operation_record_id',name:'Registro operacional',data_type:'uuid',is_importable:true,is_analytics_only:false},
 ];
 const mappingService = new MappingService({
   select: async (table:string) => table === 'canonical_entities' ? entities : fields,
@@ -71,5 +72,8 @@ mappingService.listMappingTargets('tenant').then((targets) => {
   assert(!targets.some((target:any)=>[forbidden,forbiddenWhatsapp].includes(String(target.field_key))),'Campo de origem legado retornado como destino nativo.');
   assert(targets.some((target:any)=>target.field_key==='occurrence_number'),'Número da ocorrência importável ausente.');
   assert(!targets.some((target:any)=>target.field_key==='financial_entries_total'),'Campo analytics-only exposto no pareamento.');
+  assert(!targets.some((target:any)=>target.field_key==='operation_record_id'),'Campo interno exposto no pareamento.');
+  assert(targets.every((target:any)=>Number.isFinite(target.entity_sort_order)&&Number.isFinite(target.field_sort_order)),'API não retorna ordenação funcional.');
+  assert(targets.findIndex((target:any)=>target.canonical_entity_key==='transport_records') < targets.findIndex((target:any)=>target.canonical_entity_key==='occurrences'),'Grupos não seguem a ordem funcional.');
   console.log('canonical coverage: ok');
 });
