@@ -37,7 +37,11 @@ export class ApiConnectorConfigService {
       auto_sync_enabled: auto, sync_frequency_minutes: auto ? frequency : null,
       next_sync_at: auto && frequency ? (current?.next_sync_at ?? new Date().toISOString()) : null };
     await this.db.upsert('data_source_api_configs', payload, 'tenant_id,data_source_id');
-    await this.db.update('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, { status: 'configuring' });
+    const published = await this.db.select<unknown[]>('operation_records', `select=id&tenant_id=eq.${tenantId}&source_data_source_id=eq.${sourceId}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=1`);
+    if (published.length)
+      await this.db.update('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}&status=eq.configuring`, { status: 'active' });
+    else
+      await this.db.update('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}&status=neq.active`, { status: 'configuring' });
     return this.get(tenantId, sourceId);
   }
   decrypt(value: string | null) {

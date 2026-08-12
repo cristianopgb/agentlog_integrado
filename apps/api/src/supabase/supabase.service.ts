@@ -29,8 +29,11 @@ export class SupabaseService {
   }
 
   async activeOperationalSourceFilter(tenantId: string): Promise<string> {
-    const sources = await this.select<Array<{ id: string }>>('data_sources', `select=id&tenant_id=eq.${tenantId}&status=eq.active&limit=10000`);
-    return sources.length ? `source_data_source_id=in.(${sources.map(({ id }) => `"${id}"`).join(',')})` : 'source_data_source_id=in.(00000000-0000-0000-0000-000000000000)';
+    // Kept as an explicit canonical predicate for consumers that compose
+    // filters dynamically. Source lifecycle/module metadata must not decide
+    // visibility of already-published records.
+    void tenantId;
+    return 'deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid';
   }
 
   async upsert<T>(table: string, payload: Record<string, unknown>, onConflict: string): Promise<T> { const response = await fetch(`${this.url}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, { method: "POST", headers: { ...this.adminHeaders(), Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify(payload) }); return this.parseResponse<T>(response); }

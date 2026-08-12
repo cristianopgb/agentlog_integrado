@@ -89,7 +89,7 @@ export class ApiConnectorSyncService {
     const contract = await this.contract(tenantId, sourceId);
     const apiMappings=await this.db.select<Array<Record<string,unknown>>>(
       'data_source_api_field_mappings',
-      `select=id,api_source_field_name:source_field_name,data_contract_field_id,status&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active&order=created_at.asc`,
+      `select=id,api_source_field_name:source_field_name,data_contract_field_id,status,data_contract_field:data_contract_fields!api_field_mapping_contract_field_tenant_fk(field_key,data_type)&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.active&order=created_at.asc`,
     );
     if(!apiMappings.length)return [];
     const contractFieldIds=apiMappings.map(row=>String(row.data_contract_field_id));
@@ -106,7 +106,8 @@ export class ApiConnectorSyncService {
       if(!mapping)return apiMapping;
       const entity=entities.find(row=>row.id===mapping.canonical_entity_id);
       const field=canonicalFields.find(row=>row.id===mapping.canonical_field_id);
-      return {...apiMapping,canonical_entity_id:mapping.canonical_entity_id,canonical_field_id:mapping.canonical_field_id,canonical_entity_key:entity?.entity_key??null,canonical_field_key:field?.field_key??null,canonical_entity_name:entity?.name??null,canonical_field_name:field?.name??null,label:entity&&field?`${entity.name} / ${field.name}`:null};
+      const canonicalLabel=entity&&field?`${entity.name} / ${field.name}`:null;
+      return {...apiMapping,canonical_entity_id:mapping.canonical_entity_id,canonical_field_id:mapping.canonical_field_id,canonical_entity_key:entity?.entity_key??null,canonical_field_key:field?.field_key??null,canonical_entity_name:entity?.name??null,canonical_field_name:field?.name??null,canonical_label:canonicalLabel,label:canonicalLabel};
     });
   }
 
@@ -152,6 +153,13 @@ export class ApiConnectorSyncService {
       if(!contractField){
         const [created]=await this.db.insert<ContractField[]>('data_contract_fields',{tenant_id:tenantId,data_contract_id:contract.id,field_key:deterministicFieldKey,source_field_name:deterministicFieldKey,data_type:canonical[0].data_type,is_required:false,allow_null:true});
         contractField=created;fields.push(created);fieldIds.add(created.id);
+      }
+      if (entities[0].entity_key === 'operation_records' && canonical[0].field_key === 'delivery_status') {
+        const nativeValues = ['pending','scheduled','in_transit','delivered','delayed','failed','canceled'];
+        const existing = await this.db.select<Array<{value:string}>>('data_contract_allowed_values', `select=value&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${contractField.id}`);
+        const known = new Set(existing.map(({value}) => value));
+        const missing = nativeValues.filter((value) => !known.has(value));
+        if (missing.length) await this.db.insert('data_contract_allowed_values', missing.map((value,index)=>({tenant_id:tenantId,data_contract_id:contract.id,data_contract_field_id:contractField!.id,value,label:value,is_active:true,sort_order:index})));
       }
       item.data_contract_field_id=contractField.id;
       const mapping=await this.db.select<Array<{id:string}>>('field_mappings',`select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${contractField.id}&limit=1`);
@@ -219,6 +227,17 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Confirme o pareamento antes de sincronizar.',
       );
+    const parseRules = await this.fieldFormats.list(tenantId, sourceId);
+    const samples = config.sample_preview ?? [];
+    const pendingFormat = mappings.some((mapping) => {
+      const type = mapping.data_contract_field.data_type;
+      if (!['date','datetime','decimal','number','integer','boolean'].includes(type)) return false;
+      const rule = parseRules.find((item) => item.data_contract_field_id === mapping.data_contract_field_id && item.source_field_name === mapping.api_source_field_name);
+      if (rule) return false;
+      const values = samples.map((row) => row[mapping.api_source_field_name]).filter((value) => value !== null && value !== undefined && value !== '');
+      return values.some((value) => !parseFieldValue(value, {data_type:type,date_format:null,timezone:null,decimal_separator:null,thousand_separator:null,boolean_true_values:null,boolean_false_values:null}).ok);
+    });
+    if (pendingFormat) throw new BadRequestException('Existem campos numéricos ou de data sem formato configurado.');
     const runs = await this.db.insert<Array<{ id: string }>>(
       'data_source_api_sync_runs',
       {
@@ -344,8 +363,9 @@ export class ApiConnectorSyncService {
         {
           ...(status === 'validated' ? { last_cursor: fetched.cursor } : {}),
           last_sync_at: now,
-          last_success_at: now,
-          last_error_safe: null,
+          ...(validation.rejected
+            ? { last_failure_at: now, last_error_safe: `${validation.rejected} registro(s) rejeitado(s) na última sincronização.` }
+            : { last_success_at: now, last_error_safe: null }),
           next_sync_at: next,
         },
       );

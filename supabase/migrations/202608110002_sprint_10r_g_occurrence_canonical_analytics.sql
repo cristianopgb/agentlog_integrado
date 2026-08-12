@@ -1,4 +1,7 @@
 -- Sprint 10R-G: occurrences as an applied canonical and analytical entity.
+alter table public.indicator_field_catalog drop constraint if exists indicator_field_catalog_base_table_check;
+alter table public.indicator_field_catalog add constraint indicator_field_catalog_base_table_check
+  check (base_table in ('operation_records','transport_records','attendance_records','finance_records','warehouse_records','team_records','occurrence_analytics_view'));
 -- The projection is a security-invoker view: callers remain constrained by the
 -- RLS policies of every transactional table used below.
 create or replace view public.occurrence_analytics_view
@@ -33,23 +36,35 @@ left join lateral (select count(*) total from public.occurrence_documents x wher
 left join lateral (select count(*) total from public.occurrence_attachments x where x.tenant_id=o.tenant_id and x.occurrence_id=o.id and x.deleted_at is null) att on true
 where o.deleted_at is null;
 
+update public.canonical_entities
+set name='Ocorrências', module_key='atendimento', status='active', is_system=true
+where entity_key='occurrences';
+
 with entity_seed as (select t.id tenant_id from public.tenants t)
 insert into public.canonical_entities(tenant_id,module_key,entity_key,name,description,status,is_system,sort_order)
 select tenant_id,'atendimento','occurrences','Ocorrências','Agregado transacional nativo e projeção analítica segura.','active',true,40 from entity_seed
-on conflict(tenant_id,entity_key) do update set name=excluded.name,module_key=excluded.module_key,status='active',is_system=true;
+where not exists (select 1 from public.canonical_entities e where e.tenant_id=entity_seed.tenant_id and e.entity_key='occurrences');
 
 with f(field_key,name,data_type,sort_order) as (values
- ('occurrence_number','Número da ocorrência','text',400),('title','Título','text',401),('description','Descrição','text',402),('current_status','Status','enum',403),('current_priority','Prioridade','enum',404),('source_channel','Canal de origem','enum',405),('opened_at','Data de abertura','datetime',406),('due_at','Prazo','datetime',407),('resolved_at','Data de resolução','datetime',408),('closed_at','Data de fechamento','datetime',409),('sla_status','SLA','enum',410),('resolution_summary','Resumo da resolução','text',411),('closed_reason','Motivo do fechamento','text',412),('closed_notes','Notas do fechamento','text',413),('reason_code','Código do motivo','text',414),('reason_name','Motivo','text',415),('reason_category','Categoria do motivo','text',416),('responsible_team','Equipe responsável','text',417),('linked_document_number','Documento vinculado','text',418),('linked_invoice_number','NF vinculada','text',419),('linked_cte_number','CTe vinculado','text',420),('linked_delivery_number','Entrega vinculada','text',421),('has_operation_link','Possui vínculo operacional','boolean',422),('has_pending_actions','Possui pendências','boolean',423),('pending_actions_count','Quantidade de pendências','integer',424),('treatments_count','Quantidade de tratativas','integer',425),('financial_entries_total','Total financeiro','decimal',426),('documents_count','Quantidade de documentos','integer',427),('attachments_count','Quantidade de anexos','integer',428))
+ ('occurrence_number','Número da ocorrência','text',400),('title','Título','text',401),('description','Descrição','text',402),('current_status','Status','enum',403),('current_priority','Prioridade','enum',404),('source_channel','Canal de origem','enum',405),('opened_at','Data de abertura','datetime',406),('due_at','Prazo','datetime',407),('resolved_at','Data de resolução','datetime',408),('closed_at','Data de fechamento','datetime',409),('sla_status','SLA','enum',410),('resolution_summary','Resumo da resolução','text',411),('closed_reason','Motivo do fechamento','text',412),('closed_notes','Notas do fechamento','text',413),('reason_code','Código do motivo','text',414),('reason_name','Motivo','text',415),('reason_category','Categoria do motivo','text',416),('responsible_team','Equipe responsável','text',417),('linked_document_number','Documento vinculado','text',418),('linked_invoice_number','NF vinculada','text',419),('linked_cte_number','CTe vinculado','text',420),('linked_delivery_number','Entrega vinculada','text',421),('has_operation_link','Possui vínculo operacional','boolean',422),('has_pending_actions','Possui pendências','boolean',423),('pending_actions_count','Quantidade de pendências','integer',424),('treatments_count','Quantidade de tratativas','integer',425),('financial_entries_total','Total financeiro','decimal',426),('documents_count','Quantidade de documentos','integer',427),('attachments_count','Quantidade de anexos','integer',428)),
+updated as (
+ update public.canonical_fields cf set name=f.name,data_type=f.data_type,is_system=true
+ from f, public.canonical_entities e
+ where e.entity_key='occurrences' and cf.tenant_id=e.tenant_id and cf.canonical_entity_id=e.id and cf.field_key=f.field_key
+ returning cf.id
+)
 insert into public.canonical_fields(tenant_id,canonical_entity_id,field_key,name,data_type,is_required,is_system,sort_order)
-select e.tenant_id,e.id,f.field_key,f.name,f.data_type,false,true,f.sort_order from f join public.canonical_entities e on e.entity_key='occurrences'
-on conflict(canonical_entity_id,field_key) do update set name=excluded.name,data_type=excluded.data_type,is_system=true;
+select e.tenant_id,e.id,f.field_key,f.name,f.data_type,false,true,f.sort_order
+from f join public.canonical_entities e on e.entity_key='occurrences'
+where not exists (select 1 from public.canonical_fields cf where cf.tenant_id=e.tenant_id and cf.canonical_entity_id=e.id and cf.field_key=f.field_key);
 
 with f(field_key,label,data_type,semantic_type,is_dimension,is_measure,filters) as (values
  ('current_status','Status','text','status',true,false,true),('current_priority','Prioridade','text','status',true,false,true),('sla_status','SLA','text','status',true,false,true),('source_channel','Canal de origem','text','channel',true,false,true),('reason_code','Código do motivo','text','category',true,false,true),('reason_name','Motivo','text','category',true,false,false),('reason_category','Categoria do motivo','text','category',true,false,true),('responsible_team','Equipe responsável','text','category',true,false,true),('has_operation_link','Possui vínculo operacional','boolean','flag',true,false,true),('has_pending_actions','Possui pendências','boolean','flag',true,false,true),('opened_at','Data de abertura','date','date',false,false,true),('due_at','Prazo','date','date',false,false,true),('closed_at','Data de fechamento','date','date',false,false,true),('count','Ocorrências','number','count',false,true,false),('resolution_minutes','Tempo de resolução (minutos)','number','duration',false,true,false),('pending_actions_count','Pendências','number','count',false,true,false),('overdue_pending_actions_count','Pendências vencidas','number','count',false,true,false),('treatments_count','Tratativas','number','count',false,true,false),('open_treatments_count','Tratativas abertas','number','count',false,true,false),('financial_entries_total','Total financeiro','number','money',false,true,false),('documents_count','Documentos','number','count',false,true,false),('attachments_count','Anexos','number','count',false,true,false))
 insert into public.indicator_field_catalog(tenant_id,module_key,base_table,field_key,label,data_type,semantic_type,allowed_operations,allowed_filters,is_dimension,is_measure)
 select null,'atendimento','occurrence_analytics_view',field_key,label,data_type,semantic_type,
  case when is_measure then '["SOMA","MÉDIA","MÍNIMO","MÁXIMO","CONTAGEM"]'::jsonb else '["CONTAGEM","CONTAGEM_DISTINTA","DISTRIBUIÇÃO_POR_CATEGORIA"]'::jsonb end,
- case when filters then '["igual a","diferente de","preenchido","não preenchido","entre"]'::jsonb else '[]'::jsonb end,is_dimension,is_measure from f on conflict do nothing;
+ case when filters then '["igual a","diferente de","preenchido","não preenchido","entre"]'::jsonb else '[]'::jsonb end,is_dimension,is_measure from f
+where not exists (select 1 from public.indicator_field_catalog c where c.tenant_id is null and c.base_table='occurrence_analytics_view' and c.field_key=f.field_key);
 
 with d(indicator_key,name,calculation_type,config,required,sort_order) as (values
  ('occurrences_open_count','Ocorrências abertas','count','{"table":"occurrence_analytics_view","metric":{"table":"occurrence_analytics_view","field":"occurrence_id","aggregation":"count"},"filter":[{"table":"occurrence_analytics_view","field":"current_status","operator":"not_in","value":["closed","canceled","resolved"]}]}'::jsonb,'[{"key":"status","label":"Status","any_of":[{"table":"occurrence_analytics_view","field":"current_status"}]}]'::jsonb,700),
@@ -63,9 +78,15 @@ with d(indicator_key,name,calculation_type,config,required,sort_order) as (value
  ('occurrence_pending_actions_overdue_count','Pendências vencidas de ocorrências','sum','{"table":"occurrence_analytics_view","metric":{"table":"occurrence_analytics_view","field":"overdue_pending_actions_count","aggregation":"sum"}}'::jsonb,'[]'::jsonb,708),
  ('occurrence_financial_entries_total','Total financeiro de ocorrências','sum','{"table":"occurrence_analytics_view","metric":{"table":"occurrence_analytics_view","field":"financial_entries_total","aggregation":"sum"}}'::jsonb,'[]'::jsonb,709))
 insert into public.native_indicator_definitions(module_key,family_key,indicator_key,name,description,indicator_type,visualization_type,value_format,calculation_type,calculation_config,required_fields,optional_fields,availability_rules,sort_order)
-select 'atendimento','occurrences',indicator_key,name,'Calculado exclusivamente sobre a projeção segura de ocorrências.',calculation_type,case when calculation_type='group_by' then 'bar' else 'kpi' end,case when indicator_key like '%financial%' then 'currency' else 'number' end,calculation_type,config,required,'[]'::jsonb,'{}'::jsonb,sort_order from d on conflict(indicator_key) do update set calculation_config=excluded.calculation_config,required_fields=excluded.required_fields;
+select 'atendimento','occurrences',indicator_key,name,'Calculado exclusivamente sobre a projeção segura de ocorrências.',calculation_type,case when calculation_type='group_by' then 'bar' else 'kpi' end,case when indicator_key like '%financial%' then 'currency' else 'number' end,calculation_type,config,required,'[]'::jsonb,'{}'::jsonb,sort_order from d
+where not exists (select 1 from public.native_indicator_definitions n where n.indicator_key=d.indicator_key);
 
 with p(key,name,resource,action) as (values
  ('occurrences.canonical.view','Visualizar campos canônicos de ocorrência','occurrences_canonical','view'),('occurrences.mapping.manage','Parear campos de ocorrência','occurrences_mapping','manage'),('occurrences.normalize','Normalizar ocorrências','occurrences','normalize'),('occurrences.indicators.view','Visualizar indicadores de ocorrência','occurrence_indicators','view'),('occurrences.analytics.use','Usar ocorrência em relatórios e dashboards','occurrence_analytics','use'),('occurrences.ai.create_draft','Criar rascunho de ocorrência por IA','occurrences','ai_create_draft'),('occurrences.ai.create_confirmed','Criar ocorrência confirmada por IA','occurrences','ai_create_confirmed'),('occurrences.ai.add_treatment','Adicionar tratativa por IA','occurrence_treatments','ai_create'),('occurrences.legacy.push','Registrar solicitação de envio ao legado','occurrences_legacy','push'))
-insert into public.permissions(key,name,module_key,resource,action,description) select key,name,'atendimento',resource,action,name||'.' from p on conflict(key) do nothing;
-insert into public.role_permissions(tenant_id,role_id,permission_id) select r.tenant_id,r.id,p.id from public.roles r cross join public.permissions p where r.key='owner' and p.key in ('occurrences.canonical.view','occurrences.mapping.manage','occurrences.normalize','occurrences.indicators.view','occurrences.analytics.use','occurrences.ai.create_draft','occurrences.ai.create_confirmed','occurrences.ai.add_treatment','occurrences.legacy.push') on conflict do nothing;
+insert into public.permissions(key,name,module_key,resource,action,description)
+select p.key,p.name,'atendimento',p.resource,p.action,p.name||'.' from p
+where not exists (select 1 from public.permissions existing where existing.key=p.key);
+insert into public.role_permissions(tenant_id,role_id,permission_id)
+select r.tenant_id,r.id,p.id from public.roles r cross join public.permissions p
+where r.key='owner' and p.key in ('occurrences.canonical.view','occurrences.mapping.manage','occurrences.normalize','occurrences.indicators.view','occurrences.analytics.use','occurrences.ai.create_draft','occurrences.ai.create_confirmed','occurrences.ai.add_treatment','occurrences.legacy.push')
+and not exists (select 1 from public.role_permissions rp where rp.tenant_id=r.tenant_id and rp.role_id=r.id and rp.permission_id=p.id);

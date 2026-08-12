@@ -19,6 +19,7 @@ import {
   type ApiSyncRun,
   type ValueMappingItem,
   type FieldParseRule,
+  type ApiFieldMapping,
   normalizeFieldParseRule,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
@@ -75,8 +76,8 @@ const entityOrder = [
   'finance_records', 'warehouse_records', 'team_records', 'deliveries',
 ];
 const entityLabels: Record<string, string> = {
-  operation_records: 'Operações', transport_records: 'Transporte', occurrences: 'Ocorrências',
-  attendance_records: 'Atendimento', finance_records: 'Financeiro operacional', warehouse_records: 'Armazém',
+  operation_records: 'Operações', transport_records: 'Transporte', occurrences: 'Ocorrências operacionais',
+  attendance_records: 'Atendimento / Tickets e conversas', finance_records: 'Financeiro operacional', warehouse_records: 'Armazém',
   team_records: 'Equipes', deliveries: 'Entregas legado',
 };
 const essentialTargets = [
@@ -228,6 +229,7 @@ export function ApiConnectionPanel({
   const [runs, setRuns] = useState<ApiSyncRun[]>([]);
   const [canonicalTargets,setCanonicalTargets]=useState<CanonicalMappingTarget[]>([]);
   const [valueMappings, setValueMappings] = useState<ValueMappingItem[]>([]);
+  const [apiMappings, setApiMappings] = useState<ApiFieldMapping[]>([]);
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
     Record<string, FieldParseRule>
@@ -259,6 +261,7 @@ export function ApiConnectionPanel({
       listCanonicalMappingTargets(tenantId),
     ]);
     setCanonicalTargets(targets);
+    setApiMappings(mappings);
     setConfig(current);
     setRuns(history);
     setDraft(
@@ -455,8 +458,13 @@ export function ApiConnectionPanel({
       );
       setPhase('formats');
     });
-  const formatRows = Object.entries(draft).flatMap(([source, id]) => {
-    const field = fields.find((item) => item.id === id);
+  const formatRows = apiMappings.flatMap((mapping) => {
+    const source = mapping.api_source_field_name;
+    const field = fields.find((item) => item.id === mapping.data_contract_field_id) ?? (mapping.data_contract_field ? ({
+      id: mapping.data_contract_field_id,
+      field_key: mapping.data_contract_field.field_key,
+      data_type: mapping.data_contract_field.data_type,
+    } as DataContractField) : undefined);
     return field &&
       ['date', 'datetime', 'decimal', 'number', 'integer', 'boolean'].includes(
         field.data_type,
@@ -498,6 +506,13 @@ export function ApiConnectionPanel({
     });
   const sync = () =>
     act('sync', async () => {
+      const pending = formatRows.some(({source,field}) => {
+        const sample = sampleValue(source);
+        const automatic = ['date','datetime'].includes(field.data_type) && typeof sample === 'string' && /^\d{4}-\d{2}-\d{2}(?:T|$)/.test(sample);
+        const native = ['decimal','number','integer'].includes(field.data_type) && typeof sample === 'number';
+        return !automatic && !native && !formatDraft[`${field.id}\0${source}`];
+      });
+      if (pending) throw new Error('Existem campos numéricos ou de data sem formato configurado.');
       const response = await syncApiNow(tenantId, sourceId);
       await load();
       setMsg(
@@ -604,6 +619,12 @@ export function ApiConnectionPanel({
         >
           {msg}
         </p>
+      ) : null}
+      {config?.last_failure_at && (!config.last_success_at || config.last_failure_at > config.last_success_at) ? (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-bold">Última sincronização falhou</p>
+          <p>{config.last_error_safe ?? 'A fonte encontrou um erro na última tentativa. Os dados tratados já publicados continuam disponíveis nos indicadores.'}</p>
+        </div>
       ) : null}
       {processingErrors.length ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
@@ -1018,7 +1039,7 @@ export function ApiConnectionPanel({
                       <span className="text-xs text-slate-500">
                         Campo nativo
                       </span>
-                      <p className="font-semibold">{item.field_key}</p>
+                      <p className="font-semibold">{item.canonical_label ?? item.field_key}</p>
                     </div>
                     <div>
                       <span className="text-xs text-slate-500">
@@ -1114,7 +1135,7 @@ export function ApiConnectionPanel({
                   </div>
                   <div>
                     <span className="text-xs text-slate-500">Campo nativo</span>
-                    <p className="font-semibold">{field.field_key}</p>
+                    <p className="font-semibold">{apiMappings.find((mapping) => mapping.data_contract_field_id === field.id)?.canonical_label ?? field.field_key}</p>
                     <StatusBadge
                       tone={automatic || rule ? 'success' : 'warning'}
                     >

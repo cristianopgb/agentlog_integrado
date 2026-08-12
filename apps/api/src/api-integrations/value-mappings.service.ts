@@ -67,6 +67,7 @@ export class ValueMappingsService {
       ...(configs[0]?.sample_preview ?? []),
       ...staging.map((row) => row.raw_payload),
     ];
+    const resolved = await this.canonicalLabels(tenantId, contract.id);
     return sourceMappings.flatMap((source) => {
       const field = fields.find(
         (item) => item.id === source.data_contract_field_id,
@@ -113,6 +114,7 @@ export class ValueMappingsService {
           source_field_name: source.source_field_name,
           data_contract_field_id: field.id,
           field_key: field.field_key,
+          ...resolved.get(field.id),
           source_value: sourceValue,
           target_value:
             mapping?.target_value ??
@@ -126,6 +128,19 @@ export class ValueMappingsService {
         };
       });
     });
+  }
+
+  private async canonicalLabels(tenantId: string, contractId: string) {
+    const mappings = await this.db.select<Array<{data_contract_field_id:string;canonical_entity_id:string;canonical_field_id:string}>>('field_mappings', `select=data_contract_field_id,canonical_entity_id,canonical_field_id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&status=eq.active`);
+    const result = new Map<string,Record<string,unknown>>();
+    for (const mapping of mappings) {
+      const [entities, fields] = await Promise.all([
+        this.db.select<Array<{entity_key:string;name:string}>>('canonical_entities', `select=entity_key,name&tenant_id=eq.${tenantId}&id=eq.${mapping.canonical_entity_id}&limit=1`),
+        this.db.select<Array<{field_key:string;name:string}>>('canonical_fields', `select=field_key,name&tenant_id=eq.${tenantId}&id=eq.${mapping.canonical_field_id}&limit=1`),
+      ]);
+      if (entities[0] && fields[0]) result.set(mapping.data_contract_field_id,{canonical_entity_id:mapping.canonical_entity_id,canonical_field_id:mapping.canonical_field_id,canonical_entity_key:entities[0].entity_key,canonical_field_key:fields[0].field_key,canonical_entity_name:entities[0].name,canonical_field_name:fields[0].name,canonical_label:`${entities[0].name} / ${fields[0].name}`});
+    }
+    return result;
   }
 
   async save(

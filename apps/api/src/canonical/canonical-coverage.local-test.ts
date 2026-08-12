@@ -11,6 +11,9 @@ const reports=readFileSync(join(root,'apps/api/src/reports/reports.service.ts'),
 const migration=readFileSync(join(root,'supabase/migrations/202608110001_sprint_7rb_applied_canonical_base.sql'),'utf8');
 const occurrenceMigration=readFileSync(join(root,'supabase/migrations/202608110002_sprint_10r_g_occurrence_canonical_analytics.sql'),'utf8');
 const hardening=readFileSync(join(root,'supabase/migrations/202608110003_sprint_10r_g_hardening.sql'),'utf8');
+const publishedSourceHardening=readFileSync(join(root,'supabase/migrations/202608110004_sprint_10r_g_published_source_hardening.sql'),'utf8');
+const supabaseService=readFileSync(join(root,'apps/api/src/supabase/supabase.service.ts'),'utf8');
+const apiConfig=readFileSync(join(root,'apps/api/src/api-integrations/api-connector-config.service.ts'),'utf8');
 const apiMappings=readFileSync(join(root,'apps/api/src/api-integrations/api-connector-sync.service.ts'),'utf8');
 const forbidden=['carga','motorista','telefone'].join('_');
 const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
@@ -33,6 +36,13 @@ assert(!/staging|raw_payload/.test(attendance),'Tool de atendimento não pode co
 assert(occurrenceMigration.includes("select tenant_id,'atendimento','occurrences'"),'Ocorrências deve usar módulo atendimento.');
 assert(occurrenceMigration.includes("select null,'atendimento','occurrence_analytics_view'"),'Catálogo analítico deve usar módulo atendimento.');
 assert(occurrenceMigration.includes("select 'atendimento','occurrences',indicator_key"),'Indicadores devem manter módulo atendimento e família occurrences.');
+assert(!occurrenceMigration.toLowerCase().includes('on conflict'),'Migration 202608110002 não deve depender de constraints ON CONFLICT.');
+assert(occurrenceMigration.includes("'occurrence_analytics_view'"),'Constraint deve liberar occurrence_analytics_view.');
+assert(!supabaseService.includes("return '';"),'Filtro operacional não pode ser vazio.');
+assert(supabaseService.includes('canonical_validity_status=eq.valid'),'Filtro operacional deve ser canônico explícito.');
+assert(apiConfig.includes("status: 'active'"),'Configuração deve promover fonte que já publicou dados válidos.');
+assert(publishedSourceHardening.includes("status = 'active'")&&publishedSourceHardening.includes("then 'core'"),'Backfill deve ativar e alinhar fonte operacional multi-módulo.');
+for(const value of ['pending','scheduled','in_transit','delivered','delayed','failed','canceled'])assert(publishedSourceHardening.includes(`'${value}'`),`Backfill enum ausente: ${value}`);
 assert(hardening.includes('is_importable')&&hardening.includes('is_analytics_only'),'Campos canônicos não classificam importação e analytics.');
 for(const field of ['resolved_at','closed_at','closed_reason','closed_notes','resolution_summary'])assert(!normalization.match(new RegExp(`const occurrenceColumns[\\s\\S]{0,500}['\"]${field}['\"]`)),`${field} não deve ser importável.`);
 assert(apiMappings.includes('deterministicFieldKey=`${entities[0].entity_key}__${canonical[0].field_key}`'),'Campo automático não usa entity__field.');

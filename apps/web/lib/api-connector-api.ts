@@ -150,6 +150,8 @@ export type ApiFieldMapping = {
   canonical_entity_name?: string | null;
   canonical_field_name?: string | null;
   label?: string | null;
+  canonical_label?: string | null;
+  data_contract_field?: { field_key: string; data_type: string } | null;
 };
 export const listApiFieldMappings = (t: string, s: string) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`);
@@ -171,6 +173,7 @@ export type ValueMappingItem = {
   source_field_name: string;
   data_contract_field_id: string;
   field_key: string;
+  canonical_label?: string | null;
   source_value: string;
   target_value: string | null;
   allowed_values: string[];
