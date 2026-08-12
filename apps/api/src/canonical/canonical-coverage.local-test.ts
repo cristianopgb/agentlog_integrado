@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { NormalizationService } from '../normalization/normalization.service';
 import { MappingService } from './mapping.service';
+import { CanonicalValueDomainsService } from './canonical-value-domains.service';
 
 const assert=(ok:unknown,message:string)=>{if(!ok)throw new Error(message)};
 const root=join(__dirname,'../../../..');
@@ -15,6 +16,8 @@ const publishedSourceHardening=readFileSync(join(root,'supabase/migrations/20260
 const supabaseService=readFileSync(join(root,'apps/api/src/supabase/supabase.service.ts'),'utf8');
 const apiConfig=readFileSync(join(root,'apps/api/src/api-integrations/api-connector-config.service.ts'),'utf8');
 const apiMappings=readFileSync(join(root,'apps/api/src/api-integrations/api-connector-sync.service.ts'),'utf8');
+const valueMappings=readFileSync(join(root,'apps/api/src/api-integrations/value-mappings.service.ts'),'utf8');
+const ignoreMigration=readFileSync(join(root,'supabase/migrations/202608120001_canonical_value_domains_and_ignore_decisions.sql'),'utf8');
 const forbidden=['carga','motorista','telefone'].join('_');
 const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
 
@@ -48,6 +51,20 @@ for(const field of ['resolved_at','closed_at','closed_reason','closed_notes','re
 assert(apiMappings.includes('deterministicFieldKey=`${entities[0].entity_key}__${canonical[0].field_key}`'),'Campo automático não usa entity__field.');
 assert(apiMappings.includes('canonical_entity_id:mapping.canonical_entity_id')&&apiMappings.includes('canonical_field_id:mapping.canonical_field_id'),'Reload não retorna IDs canônicos.');
 assert(apiMappings.includes("entities[0].entity_key==='operation_records'&&operationalKeys.has"),'Chave de ocorrência não pode virar chave operacional de entrega.');
+const domains = new CanonicalValueDomainsService({} as any);
+for (const key of ['operation_records.delivery_status','operation_records.priority','transport_records.pod_status','finance_records.payment_status'])
+  assert(domains.getCanonicalAllowedValues(...key.split('.') as [string,string]).length > 0,`Domínio canônico ausente: ${key}`);
+assert(domains.getCanonicalAllowedValues('operation_records','delivery_status').some(({value})=>value==='delivered'),'Domínio de entrega perdeu delivered.');
+assert(!domains.getCanonicalAllowedValues('operation_records','delivery_status').some(({value})=>value==='Separado para carregamento'),'Valor legado não pode virar allowed_value.');
+assert(valueMappings.includes("field.data_type !== 'enum' && !allowedValues.length"),'Campo não controlado passou a exigir De/Para.');
+assert(valueMappings.includes("allowedValues.includes(sourceValue) ? sourceValue : null")&&valueMappings.includes("'exact_match'"),'exact_match automático foi removido.');
+assert(valueMappings.includes("decision === 'ignored_value'")&&valueMappings.includes("status: 'ignored_value'"),'Decisão ignored_value não é persistida.');
+assert(valueMappings.includes("decision === 'ignored_field'")&&valueMappings.includes('Campo obrigatório mínimo não pode ser ignorado.'),'Governança de ignored_field incompleta.');
+assert(apiMappings.includes("configured?.status === 'ignored_value'")&&apiMappings.includes("'VALUE_MAPPING_REQUIRED'"),'Sync não distingue ignore de pendência real.');
+for(const status of ['ignored_value','ignored_field'])assert(ignoreMigration.includes(status),`Migration não suporta ${status}.`);
+assert(ignoreMigration.includes('not exists')&&!ignoreMigration.includes('on conflict(data_contract_field_id,value)'),'Backfill deve ser idempotente sem depender de constraint implícita.');
+assert(apiMappings.includes('status=eq.ignored_field')&&apiMappings.includes('listIgnoredApiFields'),'Campos ignorados não possuem caminho de auditoria visual.');
+assert(apiMappings.includes('status=neq.ignored_field'),'Salvar pareamentos não deve apagar decisões ignored_field.');
 assert(!normalization.includes("const composite=!number&&values.linked_document_number"),'Idempotência composta antiga permanece ativa.');
 assert(normalization.includes('resolveOccurrenceOperation')&&normalization.includes('if(!number&&!resolvedOperationId)return null'),'Ocorrência sem vínculo seguro ainda pode ser criada.');
 for(const unsafe of ['storage_path','external_url','document_key','metadata','snapshot','tenant_id','current_owner_id','created_by','updated_by','closed_by','responsible_user_id','authorized_by','requested_by'])assert(!attendance.match(new RegExp(`clean\\([^\\n]+['\"]${unsafe}['\"]`)),`Sanitização retorna ${unsafe}.`);

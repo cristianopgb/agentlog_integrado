@@ -4,6 +4,7 @@ import { Card, StatusBadge } from '../ui';
 import {
   getApiConfig,
   listApiFieldMappings,
+  listIgnoredApiFields,
   listApiRuns,
   listValueMappings,
   listFieldParseRules,
@@ -20,6 +21,7 @@ import {
   type ValueMappingItem,
   type FieldParseRule,
   type ApiFieldMapping,
+  type IgnoredApiField,
   normalizeFieldParseRule,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
@@ -230,6 +232,7 @@ export function ApiConnectionPanel({
   const [canonicalTargets,setCanonicalTargets]=useState<CanonicalMappingTarget[]>([]);
   const [valueMappings, setValueMappings] = useState<ValueMappingItem[]>([]);
   const [apiMappings, setApiMappings] = useState<ApiFieldMapping[]>([]);
+  const [ignoredFields, setIgnoredFields] = useState<IgnoredApiField[]>([]);
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
     Record<string, FieldParseRule>
@@ -252,16 +255,18 @@ export function ApiConnectionPanel({
     NormalizationError[]
   >([]);
   async function load() {
-    const [current, history, mappings, values, formats, targets] = await Promise.all([
+    const [current, history, mappings, ignored, values, formats, targets] = await Promise.all([
       getApiConfig(tenantId, sourceId),
       listApiRuns(tenantId, sourceId),
       listApiFieldMappings(tenantId, sourceId),
+      listIgnoredApiFields(tenantId, sourceId),
       listValueMappings(tenantId, sourceId),
       listFieldParseRules(tenantId, sourceId),
       listCanonicalMappingTargets(tenantId),
     ]);
     setCanonicalTargets(targets);
     setApiMappings(mappings);
+    setIgnoredFields(ignored);
     setConfig(current);
     setRuns(history);
     setDraft(
@@ -440,7 +445,7 @@ export function ApiConnectionPanel({
       )
         return;
       const mappings = valueMappings
-        .filter((item) => item.status !== 'exact_match')
+        .filter((item) => item.status !== 'exact_match' && item.status !== 'ignored_value')
         .map((item) => ({
           source_field_name: item.source_field_name,
           data_contract_field_id: item.data_contract_field_id,
@@ -457,6 +462,30 @@ export function ApiConnectionPanel({
         'Configuração salva. Revalide os lotes pendentes ou sincronize novamente para aplicar as regras atuais.',
       );
       setPhase('formats');
+    });
+  const ignoreValue = (item: ValueMappingItem) =>
+    act('values', async () => {
+      await saveValueMappings(tenantId, sourceId, [{
+        source_field_name: item.source_field_name,
+        data_contract_field_id: item.data_contract_field_id,
+        source_value: item.source_value,
+        target_value: null,
+        decision: 'ignored_value',
+      }]);
+      await load();
+      setMsg('Valor ignorado. Os demais campos continuam disponíveis para sincronização.');
+    });
+  const ignoreField = (item: ValueMappingItem) =>
+    act('values', async () => {
+      await saveValueMappings(tenantId, sourceId, [{
+        source_field_name: item.source_field_name,
+        data_contract_field_id: item.data_contract_field_id,
+        source_value: item.source_value,
+        target_value: null,
+        decision: 'ignored_field',
+      }]);
+      await load();
+      setMsg('Campo ignorado nesta integração. Ele não alimentará indicadores, regras ou agentes.');
     });
   const formatRows = apiMappings.flatMap((mapping) => {
     const source = mapping.api_source_field_name;
@@ -974,6 +1003,11 @@ export function ApiConnectionPanel({
             os valores nativos do sistema. O sistema não adivinha valores
             operacionais.
           </p>
+          {ignoredFields.length ? (
+            <p className="mt-3 rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700">
+              {ignoredFields.length} campo(s) ignorado(s) nesta integração: {ignoredFields.map((field) => field.source_field_name).join(', ')}. Eles não participam do De/Para, formatos ou sincronização.
+            </p>
+          ) : null}
           <div className="mt-4 grid gap-2 sm:grid-cols-4">
             <p className="rounded-xl bg-slate-50 p-3">
               <b>
@@ -1025,7 +1059,7 @@ export function ApiConnectionPanel({
                 return (
                   <div
                     key={key}
-                    className="grid gap-3 rounded-2xl border p-3 md:grid-cols-4"
+                    className="grid gap-3 rounded-2xl border p-3 md:grid-cols-5"
                   >
                     <div>
                       <span className="text-xs text-slate-500">
@@ -1076,9 +1110,18 @@ export function ApiConnectionPanel({
                           ? 'pendente'
                           : item.status === 'mapped'
                             ? 'configurado'
-                            : 'correspondência exata'}
+                            : item.status === 'ignored_value'
+                              ? 'Ignorado'
+                              : 'Automático'}
                       </StatusBadge>
+                      {!item.allowed_values.length ? <p className="mt-2 text-xs text-amber-800">Este campo é controlado, mas ainda não possui domínio nativo cadastrado no AgentLog. Ignore o campo ou solicite revisão do catálogo canônico antes de sincronizar.</p> : null}
                     </label>
+                    <div className="flex flex-col gap-2 text-xs">
+                      <span className="text-slate-500">Ações</span>
+                      {item.status === 'pending' ? <button type="button" className="rounded-xl border px-3 py-2 font-semibold" onClick={() => ignoreValue(item)}>Ignorar valor</button> : null}
+                      <button type="button" disabled={item.is_required} title={item.is_required ? 'Campo obrigatório mínimo não pode ser ignorado.' : undefined} className="rounded-xl border px-3 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-40" onClick={() => ignoreField(item)}>Ignorar campo nesta integração</button>
+                      {!item.is_required ? <p className="text-slate-500">Ignorar este campo permite sincronizar os demais dados, mas esse campo não alimentará indicadores, regras ou agentes nesta integração.</p> : null}
+                    </div>
                   </div>
                 );
               })

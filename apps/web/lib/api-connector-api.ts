@@ -155,6 +155,13 @@ export type ApiFieldMapping = {
 };
 export const listApiFieldMappings = (t: string, s: string) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`);
+export type IgnoredApiField = {
+  source_field_name: string;
+  data_contract_field_id: string;
+  ignored_at: string | null;
+};
+export const listIgnoredApiFields = (t: string, s: string) =>
+  call<IgnoredApiField[]>(`${route(t, s)}/ignored-api-fields`);
 export const saveApiFieldMappings = (
   t: string,
   s: string,
@@ -173,11 +180,12 @@ export type ValueMappingItem = {
   source_field_name: string;
   data_contract_field_id: string;
   field_key: string;
+  is_required: boolean;
   canonical_label?: string | null;
   source_value: string;
   target_value: string | null;
   allowed_values: string[];
-  status: 'mapped' | 'pending' | 'exact_match';
+  status: 'mapped' | 'pending' | 'exact_match' | 'ignored_value';
 };
 export const listValueMappings = (t: string, s: string) =>
   call<ValueMappingItem[]>(`${route(t, s)}/value-mappings`);
@@ -189,6 +197,7 @@ export const saveValueMappings = (
     data_contract_field_id: string;
     source_value: string;
     target_value: string | null;
+    decision?: 'mapped' | 'ignored_value' | 'ignored_field';
   }>,
 ) =>
   call<ValueMappingItem[]>(`${route(t, s)}/value-mappings`, {

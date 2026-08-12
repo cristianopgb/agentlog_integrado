@@ -64,6 +64,11 @@ export class ApiIntegrationsController {
   mappings(@Param('tenantId') t: string, @Param('sourceId') s: string) {
     return this.syncs.listApiMappings(t, s);
   }
+  @Get('ignored-api-fields')
+  @RequirePermission('integrations.api.configure')
+  ignoredFields(@Param('tenantId') t: string, @Param('sourceId') s: string) {
+    return this.syncs.listIgnoredApiFields(t, s);
+  }
   @Put('api-field-mappings')
   @RequirePermission('integrations.api.configure')
   saveMappings(
@@ -100,6 +105,7 @@ export class ApiIntegrationsController {
         data_contract_field_id?: string;
         source_value?: string;
         target_value?: string | null;
+        decision?: 'mapped' | 'ignored_value' | 'ignored_field';
       }>;
     },
   ) {
