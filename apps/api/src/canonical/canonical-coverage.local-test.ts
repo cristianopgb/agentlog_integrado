@@ -18,6 +18,7 @@ const apiConfig=readFileSync(join(root,'apps/api/src/api-integrations/api-connec
 const apiMappings=readFileSync(join(root,'apps/api/src/api-integrations/api-connector-sync.service.ts'),'utf8');
 const valueMappings=readFileSync(join(root,'apps/api/src/api-integrations/value-mappings.service.ts'),'utf8');
 const ignoreMigration=readFileSync(join(root,'supabase/migrations/202608120001_canonical_value_domains_and_ignore_decisions.sql'),'utf8');
+const hotfixMigration=readFileSync(join(root,'supabase/migrations/202608120002_delivery_status_occurrence_indicators_hotfix.sql'),'utf8');
 const forbidden=['carga','motorista','telefone'].join('_');
 const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
 
@@ -27,6 +28,11 @@ assert(!migration.toLowerCase().includes('hostgator'),'Catálogo não pode conte
 assert(!migration.includes(forbidden)&&!migration.includes(forbiddenWhatsapp),'Campo de origem específico não pode ser nativo.');
 const service=Object.create(NormalizationService.prototype) as any;
 assert(service.resolveTarget('deliveries','delivery_number')?.field==='delivery_number','Alias legado delivery_number deixou de resolver.');
+assert(service.resolveTarget('operation_records','delivery_status')?.field==='delivery_status','delivery_status deve publicar na própria coluna.');
+assert(service.resolveTarget('operation_records','status')?.field==='status','status deve publicar na própria coluna.');
+assert(service.resolveTarget('operation_records','delivery_status')?.field!=='status','delivery_status não pode ser convertido em status.');
+assert(service.resolveTarget('operation_records','status')?.field!=='delivery_status','status não pode ser convertido em delivery_status.');
+assert(normalization.match(/const operationColumns[\s\S]*?'delivery_status'/),'delivery_status ausente da whitelist publicável.');
 assert(service.resolveTarget('transport_records','driver_phone')?.field==='driver_phone','driver_phone não resolve.');
 assert(service.resolveTarget('transport_records','driver_whatsapp')?.field==='driver_whatsapp','driver_whatsapp não resolve.');
 assert(normalization.includes("'driver_phone'")&&normalization.includes("'driver_whatsapp'"),'Normalizador não publica os telefones tratados.');
@@ -41,6 +47,13 @@ assert(occurrenceMigration.includes("select null,'atendimento','occurrence_analy
 assert(occurrenceMigration.includes("select 'atendimento','occurrences',indicator_key"),'Indicadores devem manter módulo atendimento e família occurrences.');
 assert(!occurrenceMigration.toLowerCase().includes('on conflict'),'Migration 202608110002 não deve depender de constraints ON CONFLICT.');
 assert(occurrenceMigration.includes("'occurrence_analytics_view'"),'Constraint deve liberar occurrence_analytics_view.');
+const occurrenceIndicators=['occurrences_open_count','occurrences_overdue_count','occurrences_by_status','occurrences_by_sla_status','occurrences_by_priority','occurrences_by_reason_category','occurrences_by_reason','occurrence_avg_resolution_time','occurrences_with_pending_actions','occurrence_pending_actions_overdue_count','occurrences_without_operation_link','occurrences_by_source_channel'];
+for(const key of occurrenceIndicators)assert(hotfixMigration.includes(`'${key}'`),`Indicador de ocorrências ausente: ${key}`);
+assert(hotfixMigration.includes("'atendimento','occurrences',d.indicator_key"),'Indicadores de ocorrências não estão no módulo/família corretos.');
+assert(hotfixMigration.includes('not exists(select 1 from public.native_indicator_definitions'),'Indicadores de ocorrências não são idempotentes.');
+assert(!/dashboard_widgets|report_definitions|report_blocks/.test(hotfixMigration),'Hotfix não pode criar widgets ou relatórios automaticamente.');
+for(const unsafe of ['raw_payload','staging','storage_path','external_url','metadata'])assert(!hotfixMigration.includes(unsafe),`Hotfix de indicadores expõe campo interno: ${unsafe}`);
+for(const field of ['occurrence_number','current_status','current_priority','source_channel','opened_at','due_at','resolved_at','closed_at','sla_status','reason_code','reason_name','reason_category','responsible_team','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number','has_operation_link','has_pending_actions','pending_actions_count','overdue_pending_actions_count','treatments_count','open_treatments_count','financial_entries_total','documents_count','attachments_count','resolution_minutes'])assert(hotfixMigration.includes(`'${field}'`),`Campo seguro de relatório ausente: ${field}`);
 assert(!supabaseService.includes("return '';"),'Filtro operacional não pode ser vazio.');
 assert(supabaseService.includes('canonical_validity_status=eq.valid'),'Filtro operacional deve ser canônico explícito.');
 assert(apiConfig.includes("status: 'active'"),'Configuração deve promover fonte que já publicou dados válidos.');

@@ -6,6 +6,10 @@ const api=readFileSync(new URL('../lib/canonical-api.ts',import.meta.url),'utf8'
 const panel=readFileSync(new URL('../components/integrations/api-connection-panel.tsx',import.meta.url),'utf8');
 const occurrenceMigration=readFileSync(new URL('../../../supabase/migrations/202608110002_sprint_10r_g_occurrence_canonical_analytics.sql',import.meta.url),'utf8');
 const hardening=readFileSync(new URL('../../../supabase/migrations/202608110003_sprint_10r_g_hardening.sql',import.meta.url),'utf8');
+const hotfix=readFileSync(new URL('../../../supabase/migrations/202608120002_delivery_status_occurrence_indicators_hotfix.sql',import.meta.url),'utf8');
+const dashboardEditor=readFileSync(new URL('../app/app/dashboards/[id]/edit/page.tsx',import.meta.url),'utf8');
+const dashboardApi=readFileSync(new URL('../../../apps/api/src/dashboards/dashboards.service.ts',import.meta.url),'utf8');
+const reports=readFileSync(new URL('../../../apps/api/src/reports/reports.service.ts',import.meta.url),'utf8');
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 for(const field of ['driver_phone','driver_whatsapp','pod_status','billing_status'])assert(labels.includes(`${field}:`),`Label ausente: ${field}`);
 for(const field of ['driver_phone','driver_whatsapp'])assert(migration.includes(`'${field}'`),`Destino de pareamento ausente: ${field}`);
@@ -33,5 +37,11 @@ assert(panel.includes("item.status === 'exact_match'")&&panel.includes("disabled
 assert(panel.includes('item.canonical_label ?? item.field_key'),'Label canônico amigável não é prioritário.');
 assert(setup.includes("attendance_records: 'Atendimento / Tickets e conversas'")||panel.includes("attendance_records: 'Atendimento / Tickets e conversas'"),'Atendimento não está separado de Ocorrências operacionais.');
 assert(panel.includes("item.status !== 'ignored_value'"),'Salvar De/Para geral revoga ignored_value após reload.');
+for(const name of ['Ocorrências abertas','Ocorrências vencidas','Ocorrências por status','Ocorrências por SLA','Ocorrências por prioridade','Ocorrências por categoria de motivo','Ocorrências por motivo','Tempo médio de resolução','Ocorrências com pendências','Pendências vencidas','Ocorrências sem vínculo operacional','Ocorrências por canal de origem'])assert(hotfix.includes(`'${name}'`),`Indicador não aparece no catálogo: ${name}`);
+assert(dashboardEditor.includes('item.family_label')&&dashboardApi.includes("'Ocorrências operacionais'"),'Widget builder não identifica a família Ocorrências operacionais.');
+assert(dashboardEditor.includes('pending.allowed_visual_types.map'),'Widget builder não oferece os tipos visuais permitidos.');
+assert(!/dashboard_widgets/.test(hotfix),'Migration não pode adicionar widgets automaticamente.');
+for(const field of ['occurrence_number','current_status','current_priority','source_channel','opened_at','due_at','resolved_at','closed_at','sla_status','reason_name','reason_category','responsible_team','has_operation_link','has_pending_actions'])assert(labels.includes(`${field}:`)||reports.includes(`${field}:`),`Report builder não possui label/filtro seguro: ${field}`);
+assert(reports.includes("family_label:x.family_key==='occurrences'?'Ocorrências operacionais':null"),'Relatórios não identificam a família de ocorrências.');
 assert(panel.includes('campo(s) ignorado(s) nesta integração')&&panel.includes('não participam do De/Para, formatos ou sincronização'),'UI não informa campos ignorados.');
 console.log('canonical ui: ok');

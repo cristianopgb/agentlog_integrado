@@ -316,7 +316,6 @@ const occurrenceColumns = new Set([
   'opened_at','due_at','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number',
 ]);
 const aliases: Record<string, string> = {
-  delivery_status: 'status',
   expected_delivery_date: 'expected_date',
   delivered_at: 'completed_at',
 };
