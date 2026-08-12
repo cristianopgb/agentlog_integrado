@@ -50,6 +50,7 @@ import {
 import { getSessionContext } from '../../../../../lib/setup-api';
 import { listEnabledTenantModules, type TenantModuleOption } from '../../../../../lib/modules-api';
 import { ApiConnectionPanel } from '../../../../../components/integrations/api-connection-panel';
+import { reprocessApiBatch } from '../../../../../lib/api-connector-api';
 
 const steps = [
   { key: 'connection', label: 'Conexão' },
@@ -298,6 +299,7 @@ export default function IntegrationSetupPage() {
     NormalizationError[]
   >([]);
   const [normalizing, setNormalizing] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
   const [query, setQuery] = useState('');
   const [perms, setPerms] = useState<UserPermission[]>([]);
   const [tenantModules, setTenantModules] = useState<TenantModuleOption[]>([]);
@@ -740,6 +742,20 @@ export default function IntegrationSetupPage() {
       setMsg(message);
     } finally {
       setNormalizing(false);
+    }
+  }
+
+  async function handleReprocess() {
+    if (!tenantId || !latestBatch || reprocessing) return;
+    setReprocessing(true);
+    try {
+      const result = await reprocessApiBatch(tenantId, params.id, latestBatch.id);
+      setMsg(`Reprocessamento concluído. Processados: ${result.processed_records} · criados: ${result.created_records} · atualizados: ${result.updated_records} · ignorados: ${result.ignored_records} · erros: ${result.error_records} · publicados: ${result.published_records} · não publicados: ${result.not_published_records}.`);
+      await refreshNormalizationSummary(tenantId, latestBatch.id);
+    } catch (error) {
+      setMsg(error instanceof Error ? error.message : 'Não foi possível reprocessar os dados tratados.');
+    } finally {
+      setReprocessing(false);
     }
   }
   const missingItems = [
@@ -1417,6 +1433,14 @@ export default function IntegrationSetupPage() {
               >
                 {normalizing ? 'Processando...' : 'Processar para base nativa'}
               </button>
+              {source?.source_type === 'api' && latestBatch?.status === 'validated' && latestBatch.valid_records > 0 ? (
+                <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-sm text-slate-700">Republica os registros válidos do último lote validado usando as regras atuais de normalização. Não busca novos dados na API e não altera conexão, contrato, pareamento, De/Para ou formatos.</p>
+                  <button type="button" disabled={!canRunNormalization || reprocessing} onClick={handleReprocess} className="mt-3 rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300">
+                    {reprocessing ? 'Reprocessando...' : 'Reprocessar dados tratados'}
+                  </button>
+                </div>
+              ) : null}
               {normalizationDisabledReason ? (
                 <p className="mt-2 text-sm text-amber-700">
                   {normalizationDisabledReason}

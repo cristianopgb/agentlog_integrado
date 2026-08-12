@@ -189,6 +189,11 @@ const tableColumns = {
     'reason_name',
     'reason_category',
     'responsible_team',
+    'primary_operation_record_id',
+    'linked_document_number',
+    'linked_invoice_number',
+    'linked_cte_number',
+    'linked_delivery_number',
     'has_operation_link',
     'has_pending_actions',
     'pending_actions_count',
@@ -1005,6 +1010,26 @@ export class NativeIndicatorsService {
       include_archived: filters.include_archived === true,
     };
     let next = await this.rows(tenantId, table, scope.include_archived);
+    // This security-invoker view is its own tenant-scoped analytical source.
+    // Manual occurrences may have no operation link, therefore only filters
+    // backed by a safe view column are applicable here.
+    if (table === 'occurrence_analytics_view') {
+      const sourceFilters = Array.isArray(filters.global_filters)
+        ? filters.global_filters
+        : Array.isArray(filters.filters)
+          ? filters.filters
+          : [];
+      const global_filters = sourceFilters.filter((item) => {
+        const filter = item as Record<string, unknown>;
+        return tableColumns.occurrence_analytics_view.has(
+          String(filter?.field_key ?? filter?.field ?? ''),
+        );
+      });
+      return {
+        rows: this.applyDashboardFilters(next, { ...filters, global_filters, filters: [] }),
+        scope,
+      };
+    }
     if (table !== 'operation_records') {
       const operationScope = await this.scopedRows(
         tenantId,

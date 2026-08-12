@@ -4,5 +4,5 @@ import { SupabaseModule } from '../supabase/supabase.module';
 import { NormalizationController } from './normalization.controller';
 import { NormalizationService } from './normalization.service';
 
-@Module({ imports: [SupabaseModule, RbacModule], controllers: [NormalizationController], providers: [NormalizationService] })
+@Module({ imports: [SupabaseModule, RbacModule], controllers: [NormalizationController], providers: [NormalizationService], exports: [NormalizationService] })
 export class NormalizationModule {}
