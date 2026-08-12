@@ -184,7 +184,10 @@ export class StagingService {
       `select=entity_key&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=eq.active`,
     );
     const entityKeys = [...new Set(contracts.map((contract) => contract.entity_key))];
-    const nextStatus = sources[0].source_type === 'api' ? 'configuring' : 'active';
+    const published = sources[0].source_type === 'api'
+      ? await this.supabase.select<unknown[]>('operation_records', `select=id&tenant_id=eq.${tenantId}&source_data_source_id=eq.${sourceId}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=1`)
+      : [];
+    const nextStatus = sources[0].source_type === 'api' && !published.length ? 'configuring' : 'active';
     if (nextStatus === 'active' && entityKeys.length) {
       const otherModules = await this.supabase.select<Array<{ data_source_id: string; module_key: string }>>(
         'data_source_modules',
@@ -209,7 +212,7 @@ export class StagingService {
     const metadata = { ...(sources[0].metadata ?? {}), ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {}), module_keys: moduleKeys };
     const rows = await this.supabase.update<Record<string, unknown>[]>('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`, {
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined,
-      module_key: moduleKeys[0], metadata, status: nextStatus, updated_by: userId,
+      module_key: moduleKeys.length > 1 ? 'core' : moduleKeys[0], metadata, status: nextStatus, updated_by: userId,
     });
     return rows[0];
   }
