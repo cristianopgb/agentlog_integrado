@@ -21,6 +21,8 @@ type Definition = {
   optional_fields: FieldGroup[];
   availability_rules: Record<string, unknown>;
   sort_order: number;
+  available_for_dashboard: boolean;
+  available_for_reports: boolean;
 };
 type TableName = keyof typeof tableColumns;
 
@@ -205,9 +207,25 @@ export class NativeIndicatorsService {
   constructor(private readonly supabase: SupabaseService) {}
 
   async list(tenantId: string) {
-    const defs = await this.definitions();
+    const [defs, modules] = await Promise.all([
+      this.definitions(),
+      this.supabase.select<Array<{ module: { key: string } | null }>>(
+        'tenant_modules',
+        `select=module:modules(key)&tenant_id=eq.${tenantId}&is_active=eq.true`,
+      ),
+    ]);
+    const moduleAliases: Record<string, string[]> = {
+      core: ['core', 'operation'],
+      transporte: ['transporte', 'transport'],
+      atendimento: ['atendimento', 'attendance'],
+      financeiro: ['financeiro', 'finance'],
+      armazem: ['armazem', 'warehouse'],
+      equipes: ['equipes', 'teams'],
+    };
+    const enabledKeys = ['core', ...modules.map((row) => row.module?.key).filter((key): key is string => Boolean(key))];
+    const activeModules = new Set(enabledKeys.flatMap((key) => moduleAliases[key] ?? [key]));
     const items = await Promise.all(
-      defs.map(async (definition) => ({
+      defs.filter((definition) => activeModules.has(definition.module_key)).map(async (definition) => ({
         ...this.publicDefinition(definition),
         availability: await this.availability(tenantId, definition),
       })),
@@ -332,6 +350,8 @@ export class NativeIndicatorsService {
       required_fields: d.required_fields ?? [],
       optional_fields: d.optional_fields ?? [],
       sort_order: d.sort_order,
+      available_for_dashboard: d.available_for_dashboard !== false,
+      available_for_reports: d.available_for_reports !== false,
       rationale: this.rationale(d),
       native_data_used: this.configFieldsFromRefs(d.calculation_config ?? {}),
     };
