@@ -699,10 +699,7 @@ export class NormalizationService {
             partial = true;
             continue;
           }
-          buckets[resolved.entity] = {
-            ...(buckets[resolved.entity] ?? {}),
-            [resolved.field]: canonical.value,
-          };
+          this.publishCanonicalValue(buckets, resolved, canonical.value);
         }
         this.applyOperationDateFallbacks(buckets);
         const occurrenceValues=buckets.occurrences;
@@ -1003,6 +1000,17 @@ export class NormalizationService {
       return { entity: 'operation_records', field: aliased };
     }
     return null;
+  }
+
+  private publishCanonicalValue(
+    buckets: Record<string, Record<string, unknown>>,
+    target: { entity: string; field: string },
+    value: unknown,
+  ) {
+    buckets[target.entity] = {
+      ...(buckets[target.entity] ?? {}),
+      [target.field]: value,
+    };
   }
 
   private applyOperationDateFallbacks(

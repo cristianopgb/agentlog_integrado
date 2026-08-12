@@ -19,6 +19,7 @@ const apiMappings=readFileSync(join(root,'apps/api/src/api-integrations/api-conn
 const valueMappings=readFileSync(join(root,'apps/api/src/api-integrations/value-mappings.service.ts'),'utf8');
 const ignoreMigration=readFileSync(join(root,'supabase/migrations/202608120001_canonical_value_domains_and_ignore_decisions.sql'),'utf8');
 const hotfixMigration=readFileSync(join(root,'supabase/migrations/202608120002_delivery_status_occurrence_indicators_hotfix.sql'),'utf8');
+const runtimeHotfixMigration=readFileSync(join(root,'supabase/migrations/202608120003_occurrence_catalog_runtime_hotfix.sql'),'utf8');
 const forbidden=['carga','motorista','telefone'].join('_');
 const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
 
@@ -33,6 +34,24 @@ assert(service.resolveTarget('operation_records','status')?.field==='status','st
 assert(service.resolveTarget('operation_records','delivery_status')?.field!=='status','delivery_status não pode ser convertido em status.');
 assert(service.resolveTarget('operation_records','status')?.field!=='delivery_status','status não pode ser convertido em delivery_status.');
 assert(normalization.match(/const operationColumns[\s\S]*?'delivery_status'/),'delivery_status ausente da whitelist publicável.');
+const publishedPayloads:Array<Record<string,unknown>>=[];
+const runtimeService=Object.create(NormalizationService.prototype) as any;
+runtimeService.supabase={
+  select:async()=>[],
+  insert:async(_table:string,payload:Record<string,unknown>)=>{publishedPayloads.push(payload);return [{id:'operation'}]},
+  update:async()=>[{id:'operation'}],
+};
+const publishRuntime=async(field:string,value:string)=>{
+  const buckets:Record<string,Record<string,unknown>>={operation_records:{}};
+  const target=runtimeService.resolveTarget('operation_records',field);
+  runtimeService.publishCanonicalValue(buckets,target,value);
+  await runtimeService.upsertOperation('tenant',{id:'batch',data_source_id:null,data_contract_id:'contract',source_reference:'api'} as any,{id:`record-${field}`,normalized_payload:{[field]:value}} as any,buckets.operation_records,false,true,'source','integration','deliveries',[field]);
+  return publishedPayloads.at(-1)!;
+};
+(async()=>{const delivery=await publishRuntime('delivery_status','pending');const status=await publishRuntime('status','active');
+  assert(delivery.delivery_status==='pending'&&delivery.status===undefined,'Runtime publicou delivery_status no campo genérico status.');
+  assert(status.status==='active'&&status.delivery_status===undefined,'Runtime publicou status genérico em delivery_status.');
+})();
 assert(service.resolveTarget('transport_records','driver_phone')?.field==='driver_phone','driver_phone não resolve.');
 assert(service.resolveTarget('transport_records','driver_whatsapp')?.field==='driver_whatsapp','driver_whatsapp não resolve.');
 assert(normalization.includes("'driver_phone'")&&normalization.includes("'driver_whatsapp'"),'Normalizador não publica os telefones tratados.');
@@ -52,6 +71,8 @@ for(const key of occurrenceIndicators)assert(hotfixMigration.includes(`'${key}'`
 assert(hotfixMigration.includes("'atendimento','occurrences',d.indicator_key"),'Indicadores de ocorrências não estão no módulo/família corretos.');
 assert(hotfixMigration.includes('not exists(select 1 from public.native_indicator_definitions'),'Indicadores de ocorrências não são idempotentes.');
 assert(!/dashboard_widgets|report_definitions|report_blocks/.test(hotfixMigration),'Hotfix não pode criar widgets ou relatórios automaticamente.');
+assert(runtimeHotfixMigration.includes("occurrence_financial_entries_total")&&runtimeHotfixMigration.includes("status='inactive'"),'Indicador financeiro fora do MVP deve ficar inativo.');
+assert(!/dashboard_widgets|dashboard_definitions|report_definitions|ai_agents/.test(runtimeHotfixMigration),'Migration de catálogo não pode criar objetos de consumo ou agentes.');
 for(const unsafe of ['raw_payload','staging','storage_path','external_url','metadata'])assert(!hotfixMigration.includes(unsafe),`Hotfix de indicadores expõe campo interno: ${unsafe}`);
 for(const field of ['occurrence_number','current_status','current_priority','source_channel','opened_at','due_at','resolved_at','closed_at','sla_status','reason_code','reason_name','reason_category','responsible_team','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number','has_operation_link','has_pending_actions','pending_actions_count','overdue_pending_actions_count','treatments_count','open_treatments_count','financial_entries_total','documents_count','attachments_count','resolution_minutes'])assert(hotfixMigration.includes(`'${field}'`),`Campo seguro de relatório ausente: ${field}`);
 assert(!supabaseService.includes("return '';"),'Filtro operacional não pode ser vazio.');
@@ -79,6 +100,11 @@ assert(ignoreMigration.includes('not exists')&&!ignoreMigration.includes('on con
 assert(apiMappings.includes('status=eq.ignored_field')&&apiMappings.includes('listIgnoredApiFields'),'Campos ignorados não possuem caminho de auditoria visual.');
 assert(apiMappings.includes('status=neq.ignored_field'),'Salvar pareamentos não deve apagar decisões ignored_field.');
 assert(!normalization.includes("const composite=!number&&values.linked_document_number"),'Idempotência composta antiga permanece ativa.');
+const dashboards=readFileSync(join(root,'apps/api/src/dashboards/dashboards.service.ts'),'utf8');
+const nativeIndicators=readFileSync(join(root,'apps/api/src/native-indicators/native-indicators.service.ts'),'utf8');
+assert(nativeIndicators.includes("'tenant_modules'")&&nativeIndicators.includes('is_active=eq.true'),'Catálogo nativo não filtra módulos ativos do tenant.');
+assert(dashboards.includes("availability.status!=='failed'")&&!dashboards.includes("['available','partial'].includes(i.availability.status)"),'Widget builder ainda oculta indicadores aguardando dados.');
+assert(!dashboards.includes('dashboard_definitions.module_key'),'Widget builder não pode depender de module_key no dashboard.');
 assert(normalization.includes('resolveOccurrenceOperation')&&normalization.includes('if(!number&&!resolvedOperationId)return null'),'Ocorrência sem vínculo seguro ainda pode ser criada.');
 for(const unsafe of ['storage_path','external_url','document_key','metadata','snapshot','tenant_id','current_owner_id','created_by','updated_by','closed_by','responsible_user_id','authorized_by','requested_by'])assert(!attendance.match(new RegExp(`clean\\([^\\n]+['\"]${unsafe}['\"]`)),`Sanitização retorna ${unsafe}.`);
 assert(attendance.includes("['occurrences.ai.create_draft','occurrences.ai.create_confirmed']"),'Permissões alternativas de criação ausentes.');
