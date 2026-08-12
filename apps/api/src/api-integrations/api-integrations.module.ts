@@ -9,6 +9,7 @@ import {
 } from './api-integrations.controller';
 import { ValueMappingsService } from './value-mappings.service';
 import { FieldParseRulesService } from './field-parse-rules.service';
+import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
 @Module({
   imports: [SupabaseModule, RbacModule],
   controllers: [ApiIntegrationsController, ApiIntegrationsInternalController],
@@ -17,6 +18,7 @@ import { FieldParseRulesService } from './field-parse-rules.service';
     ApiConnectorSyncService,
     ValueMappingsService,
     FieldParseRulesService,
+    CanonicalValueDomainsService,
   ],
 })
 export class ApiIntegrationsModule {}

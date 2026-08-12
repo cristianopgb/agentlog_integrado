@@ -28,4 +28,10 @@ assert(occurrenceMigration.includes("'driver_whatsapp'")||migration.includes("'d
 for(const label of ["operation_records: 'Operações'","transport_records: 'Transporte'","finance_records: 'Financeiro operacional'"])
   assert(setup.includes(label),`Agrupamento amigável ausente: ${label}`);
 assert(!setup.includes('.filter((entity) => visibleEntityOrder.includes(entity.entity_key))'),'UI limita destinos a uma lista antiga de entidades.');
+for(const text of ['Ignorar valor','Ignorar campo nesta integração','Automático','Este campo é controlado, mas ainda não possui domínio nativo cadastrado no AgentLog.','Campo obrigatório mínimo não pode ser ignorado.'])assert(panel.includes(text),`UX de De/Para ausente: ${text}`);
+assert(panel.includes("item.status === 'exact_match'")&&panel.includes("disabled={item.status === 'exact_match'}"),'Correspondência automática passou a exigir ação manual.');
+assert(panel.includes('item.canonical_label ?? item.field_key'),'Label canônico amigável não é prioritário.');
+assert(setup.includes("attendance_records: 'Atendimento / Tickets e conversas'")||panel.includes("attendance_records: 'Atendimento / Tickets e conversas'"),'Atendimento não está separado de Ocorrências operacionais.');
+assert(panel.includes("item.status !== 'ignored_value'"),'Salvar De/Para geral revoga ignored_value após reload.');
+assert(panel.includes('campo(s) ignorado(s) nesta integração')&&panel.includes('não participam do De/Para, formatos ou sincronização'),'UI não informa campos ignorados.');
 console.log('canonical ui: ok');

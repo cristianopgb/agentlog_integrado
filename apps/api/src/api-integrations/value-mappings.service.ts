@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { clearInvalidRecordStates } from './invalid-record-states';
+import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
 
 type JsonRecord = Record<string, unknown>;
-type ControlledField = { id: string; field_key: string; data_type: string };
+type ControlledField = { id: string; field_key: string; data_type: string; is_required: boolean };
 type SourceMapping = {
   source_field_name: string;
   data_contract_field_id: string;
@@ -17,15 +18,16 @@ export type ActiveValueMapping = {
   source_field_name: string;
   source_value: string;
   target_value: string;
+  status: 'active' | 'ignored_value';
 };
 
 @Injectable()
 export class ValueMappingsService {
-  constructor(private readonly db: SupabaseService) {}
+  constructor(private readonly db: SupabaseService, private readonly canonicalDomains: CanonicalValueDomainsService) {}
 
   async list(tenantId: string, sourceId: string) {
     const contract = await this.contract(tenantId, sourceId);
-    const [
+    let [
       fields,
       sourceMappings,
       allowed,
@@ -36,7 +38,7 @@ export class ValueMappingsService {
     ] = await Promise.all([
       this.db.select<ControlledField[]>(
         'data_contract_fields',
-        `select=id,field_key,data_type&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}`,
+        `select=id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}`,
       ),
       this.sourceMappings(tenantId, sourceId, contract.id),
       this.db.select<Array<{ data_contract_field_id: string; value: string }>>(
@@ -63,11 +65,16 @@ export class ValueMappingsService {
         `select=source_field_name,raw_value,staging_record:staging_records!staging_errors_record_tenant_fk(raw_payload),staging_batch:staging_batches!staging_errors_batch_tenant_fk!inner(data_source_id)&tenant_id=eq.${tenantId}&staging_batch.data_source_id=eq.${sourceId}&error_code=eq.VALUE_MAPPING_REQUIRED&order=created_at.desc&limit=200`,
       ),
     ]);
+    const resolved = await this.canonicalLabels(tenantId, contract.id);
+    for (const source of sourceMappings) {
+      const canonical = resolved.get(source.data_contract_field_id);
+      if (canonical) await this.canonicalDomains.ensureAllowedValues(tenantId, contract.id, source.data_contract_field_id, String(canonical.canonical_entity_key), String(canonical.canonical_field_key));
+    }
+    allowed = await this.db.select<Array<{ data_contract_field_id: string; value: string }>>('data_contract_allowed_values', `select=data_contract_field_id,value&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&is_active=eq.true&order=sort_order.asc`);
     const values = [
       ...(configs[0]?.sample_preview ?? []),
       ...staging.map((row) => row.raw_payload),
     ];
-    const resolved = await this.canonicalLabels(tenantId, contract.id);
     return sourceMappings.flatMap((source) => {
       const field = fields.find(
         (item) => item.id === source.data_contract_field_id,
@@ -114,14 +121,15 @@ export class ValueMappingsService {
           source_field_name: source.source_field_name,
           data_contract_field_id: field.id,
           field_key: field.field_key,
+          is_required: field.is_required || ['operation_records__delivery_number','deliveries__delivery_number','numero_entrega','documento_operacional'].includes(field.field_key),
           ...resolved.get(field.id),
           source_value: sourceValue,
           target_value:
-            mapping?.target_value ??
+            mapping?.status === 'active' ? mapping.target_value :
             (allowedValues.includes(sourceValue) ? sourceValue : null),
           allowed_values: allowedValues,
           status: mapping
-            ? 'mapped'
+            ? mapping.status === 'active' ? 'mapped' : 'ignored_value'
             : allowedValues.includes(sourceValue)
               ? 'exact_match'
               : 'pending',
@@ -153,6 +161,7 @@ export class ValueMappingsService {
         data_contract_field_id?: string;
         source_value?: string;
         target_value?: string | null;
+        decision?: 'mapped' | 'ignored_value' | 'ignored_field';
       }>;
     },
   ) {
@@ -170,8 +179,7 @@ export class ValueMappingsService {
       if (
         !item.source_field_name ||
         !item.data_contract_field_id ||
-        item.source_value == null ||
-        item.source_value === ''
+        (item.decision !== 'ignored_field' && (item.source_value == null || item.source_value === ''))
       )
         throw new BadRequestException('De/Para incompleto.');
       if (
@@ -184,7 +192,11 @@ export class ValueMappingsService {
         throw new BadRequestException(
           'Campo recebido não está pareado ao campo nativo informado.',
         );
-      if (item.target_value) {
+      if (item.decision === 'ignored_field') {
+        const field = await this.db.select<Array<{is_required:boolean;field_key:string}>>('data_contract_fields', `select=is_required,field_key&tenant_id=eq.${tenantId}&id=eq.${item.data_contract_field_id}&limit=1`);
+        const essential = field[0]?.is_required || ['operation_records__delivery_number','deliveries__delivery_number','numero_entrega','documento_operacional'].includes(field[0]?.field_key ?? '');
+        if (essential) throw new BadRequestException('Campo obrigatório mínimo não pode ser ignorado.');
+      } else if (item.decision !== 'ignored_value' && item.target_value) {
         const allowed = await this.db.select<unknown[]>(
           'data_contract_allowed_values',
           `select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${item.data_contract_field_id}&value=eq.${encodeURIComponent(item.target_value)}&is_active=eq.true&limit=1`,
@@ -200,6 +212,14 @@ export class ValueMappingsService {
       keys.add(key);
     }
     for (const item of requested) {
+      if (item.decision === 'ignored_field') {
+        await this.db.update('data_source_api_field_mappings', `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_field_id=eq.${item.data_contract_field_id}&source_field_name=eq.${encodeURIComponent(item.source_field_name!)}`, { status: 'ignored_field', ignored_by: userId, ignored_at: new Date().toISOString() });
+        continue;
+      }
+      if (item.decision === 'ignored_value') {
+        await this.db.upsert('data_source_value_mappings', { tenant_id: tenantId, data_source_id: sourceId, data_contract_id: contract.id, data_contract_field_id: item.data_contract_field_id!, source_field_name: item.source_field_name!, source_value: item.source_value!, target_value: null, status: 'ignored_value', revoked_at: null, created_by: userId }, 'tenant_id,data_source_id,data_contract_field_id,source_field_name,source_value');
+        continue;
+      }
       if (!item.target_value) {
         await this.db.update(
           'data_source_value_mappings',
@@ -232,7 +252,7 @@ export class ValueMappingsService {
   active(tenantId: string, sourceId: string) {
     return this.db.select<ActiveValueMapping[]>(
       'data_source_value_mappings',
-      `select=data_contract_field_id,source_field_name,source_value,target_value&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=eq.active`,
+      `select=data_contract_field_id,source_field_name,source_value,target_value,status&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=in.(active,ignored_value)`,
     );
   }
 

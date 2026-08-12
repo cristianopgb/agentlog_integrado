@@ -6,6 +6,7 @@ import { ApiConfig } from './api-connector.types';
 import { ValueMappingsService } from './value-mappings.service';
 import { FieldParseRulesService } from './field-parse-rules.service';
 import { parseFieldValue, ParseRule } from './field-value-parser';
+import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
 
 type JsonRecord = Record<string, unknown>;
 type FetchResult = {
@@ -47,6 +48,7 @@ export class ApiConnectorSyncService {
     private readonly configs: ApiConnectorConfigService,
     private readonly valueMappings: ValueMappingsService,
     private readonly fieldFormats: FieldParseRulesService,
+    private readonly canonicalDomains: CanonicalValueDomainsService,
   ) {}
 
   async test(tenantId: string, sourceId: string) {
@@ -111,6 +113,14 @@ export class ApiConnectorSyncService {
     });
   }
 
+  async listIgnoredApiFields(tenantId: string, sourceId: string) {
+    const contract = await this.contract(tenantId, sourceId);
+    return this.db.select<Array<{source_field_name:string;data_contract_field_id:string;ignored_at:string|null}>>(
+      'data_source_api_field_mappings',
+      `select=source_field_name,data_contract_field_id,ignored_at&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&data_contract_id=eq.${contract.id}&status=eq.ignored_field&order=ignored_at.desc`,
+    );
+  }
+
   async saveApiMappings(
     tenantId: string,
     sourceId: string,
@@ -154,13 +164,7 @@ export class ApiConnectorSyncService {
         const [created]=await this.db.insert<ContractField[]>('data_contract_fields',{tenant_id:tenantId,data_contract_id:contract.id,field_key:deterministicFieldKey,source_field_name:deterministicFieldKey,data_type:canonical[0].data_type,is_required:false,allow_null:true});
         contractField=created;fields.push(created);fieldIds.add(created.id);
       }
-      if (entities[0].entity_key === 'operation_records' && canonical[0].field_key === 'delivery_status') {
-        const nativeValues = ['pending','scheduled','in_transit','delivered','delayed','failed','canceled'];
-        const existing = await this.db.select<Array<{value:string}>>('data_contract_allowed_values', `select=value&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${contractField.id}`);
-        const known = new Set(existing.map(({value}) => value));
-        const missing = nativeValues.filter((value) => !known.has(value));
-        if (missing.length) await this.db.insert('data_contract_allowed_values', missing.map((value,index)=>({tenant_id:tenantId,data_contract_id:contract.id,data_contract_field_id:contractField!.id,value,label:value,is_active:true,sort_order:index})));
-      }
+      await this.canonicalDomains.ensureAllowedValues(tenantId, contract.id, contractField.id, entities[0].entity_key, canonical[0].field_key);
       item.data_contract_field_id=contractField.id;
       const mapping=await this.db.select<Array<{id:string}>>('field_mappings',`select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${contractField.id}&limit=1`);
       const operationalKeys=new Set(['delivery_number','document_number','external_code','manifest_number','invoice_number','cte_number','order_number']);
@@ -196,7 +200,7 @@ export class ApiConnectorSyncService {
     }
     await this.db.delete(
       'data_source_api_field_mappings',
-      `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`,
+      `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=neq.ignored_field`,
     );
     if (requested.length)
       await this.db.insert(
@@ -789,6 +793,7 @@ export class ApiConnectorSyncService {
               item.source_field_name === mapping.api_source_field_name &&
               item.source_value === sourceValue,
           );
+          if (configured?.status === 'ignored_value') continue;
           const target =
             configured?.target_value ??
             (allowed.includes(sourceValue) ? sourceValue : null);
