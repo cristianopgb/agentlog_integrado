@@ -140,11 +140,13 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Pareamento contém campo não detectado ou fora do contrato nativo.',
       );
+    const requestedCanonicalKeys = new Set<string>();
     for(const item of requested.filter(item=>!item.data_contract_field_id)){
       const canonical=await this.db.select<Array<{id:string;canonical_entity_id:string;field_key:string;data_type:string;is_required:boolean}>>('canonical_fields',`select=id,canonical_entity_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
       if(!canonical[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
       const entities=await this.db.select<Array<{id:string;entity_key:string}>>('canonical_entities',`select=id,entity_key&tenant_id=eq.${tenantId}&id=eq.${item.canonical_entity_id}&limit=1`);
       if(!entities[0])throw new BadRequestException('Entidade canônica inválida ou fora do tenant.');
+      requestedCanonicalKeys.add(`${entities[0].entity_key}.${canonical[0].field_key}`);
       const deterministicFieldKey=`${entities[0].entity_key}__${canonical[0].field_key}`;
       let contractField=fields.find(field=>field.field_key===deterministicFieldKey);
       if(!contractField){
@@ -171,7 +173,9 @@ export class ApiConnectorSyncService {
           field.field_key === 'numero_entrega' ||
           field.field_key === 'delivery_number',
       );
-      const canonicalDelivery=requested.some(item=>item.canonical_field_id&&item.canonical_entity_id&&fields.find(field=>field.id===item.data_contract_field_id)?.field_key==='operation_records__delivery_number');
+      const canonicalDelivery = requestedCanonicalKeys.has('operation_records.delivery_number') ||
+        requestedCanonicalKeys.has('deliveries.delivery_number') ||
+        requested.some((item) => ['operation_records__delivery_number', 'deliveries__delivery_number'].includes(fields.find((field) => field.id === item.data_contract_field_id)?.field_key ?? ''));
       if (
         !canonicalDelivery&&(!deliveryNumber ||
         !requested.some(
@@ -179,7 +183,7 @@ export class ApiConnectorSyncService {
         ))
       )
         throw new BadRequestException(
-          'Pareie um campo da API com numero_entrega antes de avançar. Esta é a chave operacional delivery_number de entregas.',
+          'Pareie um campo da API com Operações / Número da entrega antes de avançar.',
         );
     }
     await this.db.delete(

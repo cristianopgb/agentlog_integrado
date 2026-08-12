@@ -27,6 +27,21 @@ const operationalFieldKeys = new Set([
 ]);
 const invalidOperationalKeyMessage =
   'A chave operacional deve apontar para um identificador canônico válido do núcleo operacional.';
+const mappingEntityPresentation: Record<string, { label: string; order: number }> = {
+  operation_records: { label: 'Operações', order: 10 },
+  transport_records: { label: 'Transporte', order: 20 },
+  occurrences: { label: 'Ocorrências', order: 30 },
+  attendance_records: { label: 'Atendimento', order: 40 },
+  finance_records: { label: 'Financeiro operacional', order: 50 },
+  warehouse_records: { label: 'Armazém', order: 60 },
+  team_records: { label: 'Equipes', order: 70 },
+  deliveries: { label: 'Entregas legado', order: 80 },
+};
+const internalMappingFields = new Set([
+  'id', 'tenant_id', 'operation_record_id', 'occurrence_id', 'created_by',
+  'updated_by', 'deleted_at', 'metadata', 'snapshot', 'storage_path',
+  'external_url', 'raw_payload', 'source_reference',
+]);
 
 @Injectable()
 export class MappingService {
@@ -51,20 +66,34 @@ export class MappingService {
       `select=${canonicalFieldFields}&tenant_id=eq.${tenantId}&canonical_entity_id=in.(${entities.map((entity) => String(entity.id)).join(',')})&is_importable=eq.true&is_analytics_only=eq.false&order=sort_order.asc`,
     );
     const byId = new Map(entities.map((entity) => [String(entity.id), entity]));
-    return fields.filter(field=>field.is_importable!==false&&field.is_analytics_only!==true).map((field) => {
+    return fields.filter(field =>
+      field.is_importable !== false &&
+      field.is_analytics_only !== true &&
+      !internalMappingFields.has(String(field.field_key)),
+    ).map((field) => {
       const entity = byId.get(String(field.canonical_entity_id))!;
+      const presentation = mappingEntityPresentation[String(entity.entity_key)] ?? {
+        label: String(entity.name),
+        order: 999,
+      };
       return {
         canonical_entity_id: entity.id,
         canonical_entity_key: entity.entity_key,
-        canonical_entity_name: entity.name,
+        canonical_entity_name: presentation.label,
         canonical_field_id: field.id,
         field_key: field.field_key,
         field_name: field.name,
         data_type: field.data_type,
         module_key: entity.module_key,
-        label: `${String(entity.name)} / ${String(field.name)}`,
+        entity_sort_order: presentation.order,
+        field_sort_order: Number(field.sort_order ?? 9999),
+        label: `${presentation.label} / ${String(field.name)}`,
       };
-    });
+    }).sort((left, right) =>
+      left.entity_sort_order - right.entity_sort_order ||
+      left.field_sort_order - right.field_sort_order ||
+      left.label.localeCompare(right.label, 'pt-BR'),
+    );
   }
   async getEntity(tenantId: string, entityId: string) {
     return this.one(

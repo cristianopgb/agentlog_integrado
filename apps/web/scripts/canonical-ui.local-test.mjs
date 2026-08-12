@@ -17,6 +17,10 @@ assert(api.includes('/canonical-entities/mapping-targets'),'Cliente não consult
 assert(panel.includes('listCanonicalMappingTargets(tenantId)'),'Painel API não carrega destinos canônicos.');
 assert(panel.includes('mapping.canonical_entity_id&&mapping.canonical_field_id'),'Painel não restaura mapping canônico após reload.');
 assert(panel.includes('canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}'),'Valor canônico restaurado incorretamente.');
+for(const text of ['TargetCombobox','Buscar destino por nome ou chave','Não parear','Filtrar campos pendentes','Aplicar sugestão','Operações / Número da entrega','Ocorrências'])assert(panel.includes(text),`Hardening UX ausente: ${text}`);
+assert(panel.includes("'operation_records', 'transport_records', 'occurrences', 'attendance_records'")&&panel.includes("'finance_records', 'warehouse_records', 'team_records', 'deliveries'"),'Grupos não têm ordem funcional explícita.');
+assert(panel.includes("['operation_records.delivery_number', 'deliveries.delivery_number']"),'Número da entrega canônico não satisfaz a pendência.');
+assert(!panel.includes('campo(s) nativo(s) obrigatório(s) ainda não pareado(s)'),'Alerta ainda expõe terminologia técnica antiga.');
 assert(occurrenceMigration.includes("'occurrence_number','Número da ocorrência'")&&hardening.includes("'occurrence_number','title','description'"),'Grupo Ocorrências não publica número importável.');
 assert(hardening.includes("'financial_entries_total'")&&hardening.includes('is_analytics_only'),'Total financeiro não está classificado como analytics-only.');
 assert(occurrenceMigration.includes("'driver_phone'")||migration.includes("'driver_phone'"),'Telefone do motorista ausente.');

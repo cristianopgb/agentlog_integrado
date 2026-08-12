@@ -32,6 +32,8 @@ export type CanonicalMappingTarget = {
   data_type: string;
   module_key: string;
   label: string;
+  entity_sort_order: number;
+  field_sort_order: number;
 };
 
 function canonicalApiBase() {
