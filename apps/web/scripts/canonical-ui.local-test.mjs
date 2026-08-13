@@ -64,6 +64,7 @@ assert(bases.includes('Operações')&&bases.includes('Ocorrências operacionais'
 assert(occurrenceFields.some(field=>field.is_dimension&&field.label==='Status'),'Linha de Ocorrências não oferece Status.');
 assert(occurrenceFields.some(field=>field.is_measure&&field.label==='Pendências'),'Valores de Ocorrências não oferecem Pendências.');
 assert(indicatorClient.includes('base_label?: string')&&indicatorClient.includes('family_label?: string'),'Cliente remove labels funcionais da resposta.');
-assert(indicatorBuilder.includes('field.base_table === form.base_table')&&indicatorBuilder.includes("base_table: form.base_table || 'operation_records'"),'Builder não filtra seletores/salva a base selecionada.');
+assert(!indicatorBuilder.includes('field.base_table === form.base_table')&&indicatorBuilder.includes('parseFieldRef(form.value.field).base_table'),'Builder ainda restringe o catálogo a uma base isolada.');
+assert(indicatorBuilder.includes('fieldRefKey')&&indicatorBuilder.includes('field_key: parseFieldRef'),'Payload não preserva base_table + field_key.');
 assert(functionalCatalog.includes("occurrence_analytics_view: 'Ocorrências operacionais'")&&!indicatorBuilder.includes('label: f.base_table'), 'UI expõe o nome técnico da view.');
 console.log('canonical ui: ok');
