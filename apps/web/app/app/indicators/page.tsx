@@ -148,7 +148,7 @@ const initialCalcForm: CalcForm = {
   module_key: 'transport',
   calculation_kind: 'row_calculated_field',
   template: 'math',
-  left_field: 'gross_weight',
+  left_field: 'operation_records:gross_weight',
   right_field: '',
   operator: 'divide',
   constant: '1000',
@@ -247,29 +247,27 @@ export default function IndicatorsPage() {
   const catalog = useMemo(
     () =>
       sortFunctionalCatalog(
-        fields.filter(
-          (f) =>
-            f.base_table === form.base_table &&
-            !technicalBlocked.includes(f.field_key),
-        ),
+        fields.filter((f) => !technicalBlocked.includes(f.field_key)),
       ),
-    [fields, form.base_table],
+    [fields],
   );
   useEffect(() => {
     if (!catalog.length) return;
     setForm((current) => {
       const valueExists = catalog.some(
-        (f) => f.field_key === current.value.field,
+        (f) => fieldRefKey(f) === current.value.field,
       );
       const freight = catalog.find((f) => f.field_key === 'freight_value');
       const fallback = catalog[0];
       const valueField = valueExists
         ? current.value.field
-        : ((freight ?? fallback)?.field_key ?? '');
-      const row = catalog.some((f) => f.field_key === current.row)
+        : (freight ?? fallback)
+          ? fieldRefKey(freight ?? fallback)
+          : '';
+      const row = catalog.some((f) => fieldRefKey(f) === current.row)
         ? current.row
         : '';
-      const column = catalog.some((f) => f.field_key === current.column)
+      const column = catalog.some((f) => fieldRefKey(f) === current.column)
         ? current.column
         : '';
       if (valueExists && row === current.row && column === current.column)
@@ -282,22 +280,21 @@ export default function IndicatorsPage() {
           ...current.value,
           field: valueField,
           label:
-            catalog.find((f) => f.field_key === valueField)?.label ??
+            catalog.find((f) => fieldRefKey(f) === valueField)?.label ??
             current.value.label,
         },
       };
     });
   }, [catalog]);
   const calcPayload = (status: 'draft' | 'active') => {
-    const calcBase =
-      fields.find((field) => field.field_key === calcForm.left_field)
-        ?.base_table ?? 'operation_records';
+    const leftRef = parseFieldRef(calcForm.left_field);
+    const rightRef = parseFieldRef(calcForm.right_field);
     const expression =
       calcForm.template === 'date_diff_days'
         ? {
             type: 'date_diff_days',
-            start: { table: calcBase, field: calcForm.left_field },
-            end: { table: calcBase, field: calcForm.right_field },
+            start: { table: leftRef.base_table, field: leftRef.field_key },
+            end: { table: rightRef.base_table, field: rightRef.field_key },
           }
         : (() => {
             const rightBase = calcForm.right_field
@@ -305,14 +302,14 @@ export default function IndicatorsPage() {
                 ? {
                     aggregate: 'sum',
                     field: {
-                      table: calcBase,
-                      field: calcForm.right_field,
+                      table: rightRef.base_table,
+                      field: rightRef.field_key,
                     },
                   }
                 : {
                     field: {
-                      table: calcBase,
-                      field: calcForm.right_field,
+                      table: rightRef.base_table,
+                      field: rightRef.field_key,
                     },
                   }
               : { constant: Number(calcForm.constant) };
@@ -331,14 +328,14 @@ export default function IndicatorsPage() {
                 ? {
                     aggregate: 'sum',
                     field: {
-                      table: calcBase,
-                      field: calcForm.left_field,
+                      table: leftRef.base_table,
+                      field: leftRef.field_key,
                     },
                   }
                 : {
                     field: {
-                      table: calcBase,
-                      field: calcForm.left_field,
+                      table: leftRef.base_table,
+                      field: leftRef.field_key,
                     },
                   };
             return { op: calcForm.operator, left, right };
@@ -420,28 +417,32 @@ export default function IndicatorsPage() {
     available_for_dashboard: status === 'active',
     available_for_reports: status === 'active',
     calculation_config: {
-      base_table: form.base_table || 'operation_records',
+      base_table: parseFieldRef(form.value.field).base_table,
       operation_key: 'PIVOT_CONTROLLED',
       rationale: form.rationale,
       values: [
         {
-          field: form.value.field,
+          field: parseFieldRef(form.value.field).field_key,
+          field_key: parseFieldRef(form.value.field).field_key,
+          base_table: parseFieldRef(form.value.field).base_table,
           source:
-            catalog.find((f) => f.field_key === form.value.field)?.source ??
+            catalog.find((f) => fieldRefKey(f) === form.value.field)?.source ??
             'native',
           aggregation: form.value.aggregation,
           format: form.value.format,
           label:
             form.value.label ||
-            catalog.find((f) => f.field_key === form.value.field)?.label,
+            catalog.find((f) => fieldRefKey(f) === form.value.field)?.label,
         },
       ],
       rows: form.row
         ? [
             {
-              field: form.row,
+              field: parseFieldRef(form.row).field_key,
+              field_key: parseFieldRef(form.row).field_key,
+              base_table: parseFieldRef(form.row).base_table,
               label:
-                catalog.find((f) => f.field_key === form.row)?.label ??
+                catalog.find((f) => fieldRefKey(f) === form.row)?.label ??
                 form.row,
             },
           ]
@@ -449,9 +450,11 @@ export default function IndicatorsPage() {
       columns: form.column
         ? [
             {
-              field: form.column,
+              field: parseFieldRef(form.column).field_key,
+              field_key: parseFieldRef(form.column).field_key,
+              base_table: parseFieldRef(form.column).base_table,
               label:
-                catalog.find((f) => f.field_key === form.column)?.label ??
+                catalog.find((f) => fieldRefKey(f) === form.column)?.label ??
                 form.column,
             },
           ]
@@ -1110,16 +1113,28 @@ function CreatorModal({
   onTest: () => void;
   onSave: (s: 'draft' | 'active') => void;
 }) {
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const normalizedSearch = catalogSearch.trim().toLocaleLowerCase('pt-BR');
   const catalog = sortFunctionalCatalog(
-    fields.filter(
-      (field) =>
-        field.base_table === form.base_table &&
-        !technicalBlocked.includes(field.field_key),
-    ),
+    fields.filter((field) => {
+      if (technicalBlocked.includes(field.field_key)) return false;
+      if (!normalizedSearch) return true;
+      return [
+        field.label,
+        field.field_key,
+        field.module_label,
+        field.family_label,
+        functionalFamilyLabel(field),
+      ].some((value) =>
+        String(value ?? '')
+          .toLocaleLowerCase('pt-BR')
+          .includes(normalizedSearch),
+      );
+    }),
   );
-  const valueField = fields.find((f) => f.field_key === form.value.field);
-  const rowField = fields.find((f) => f.field_key === form.row);
-  const columnField = fields.find((f) => f.field_key === form.column);
+  const valueField = fields.find((f) => fieldRefKey(f) === form.value.field);
+  const rowField = fields.find((f) => fieldRefKey(f) === form.row);
+  const columnField = fields.find((f) => fieldRefKey(f) === form.column);
   const group = [rowField?.label, columnField?.label]
     .filter(Boolean)
     .join(' x ');
@@ -1134,7 +1149,7 @@ function CreatorModal({
       setForm({ ...form, rationale: suggested });
   }, [suggested]);
   function pickValue(field: string) {
-    const f = fields.find((x) => x.field_key === field);
+    const f = fields.find((x) => fieldRefKey(x) === field);
     const agg =
       f?.source === 'calculated' &&
       (f as IndicatorField & { calculation_kind?: string }).calculation_kind ===
@@ -1210,28 +1225,15 @@ function CreatorModal({
           <section className="mb-5 rounded-2xl border p-4">
             <h3 className="font-bold">B) Parâmetros do indicador</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <Select
-                label="Base funcional"
-                value={form.base_table}
-                onChange={(base_table) =>
-                  setForm({
-                    ...form,
-                    base_table,
-                    row: '',
-                    column: '',
-                    value: { ...form.value, field: '' },
-                  })
-                }
-                options={[
-                  ...new Map(
-                    fields.map((f) => [
-                      f.base_table,
-                      { value: f.base_table, label: functionalFamilyLabel(f) },
-                    ]),
-                  ).values(),
-                ]}
+              <Input
+                label="Buscar no catálogo canônico"
+                value={catalogSearch}
+                onChange={setCatalogSearch}
               />
-              <div />
+              <p className="self-end pb-2 text-sm text-slate-600">
+                Lista única organizada por família funcional; o backend valida
+                relações seguras.
+              </p>
               <Select
                 label="Linha"
                 value={form.row}
@@ -1347,8 +1349,18 @@ function CreatorModal({
 }
 function fieldOption(f: IndicatorField) {
   return {
-    value: f.field_key,
-    label: `${f.label} · ${f.source === 'calculated' ? 'Calculado' : 'Nativo'} · ${fieldTypeLabel(f)}`,
+    value: fieldRefKey(f),
+    label: `${functionalFamilyLabel(f)} / ${f.label} · ${f.source === 'calculated' ? 'Calculado' : 'Nativo'} · ${fieldTypeLabel(f)}`,
+  };
+}
+function fieldRefKey(f: Pick<IndicatorField, 'base_table' | 'field_key'>) {
+  return `${f.base_table}:${f.field_key}`;
+}
+function parseFieldRef(value: string) {
+  const [base_table, ...field] = value.split(':');
+  return {
+    base_table: base_table || 'operation_records',
+    field_key: field.join(':'),
   };
 }
 function fieldTypeLabel(f: IndicatorField) {
@@ -1536,8 +1548,8 @@ function CalcModal({
                 value={form.left_field}
                 onChange={(v) => setForm({ ...form, left_field: v })}
                 options={dateFields.map((f) => ({
-                  value: f.field_key,
-                  label: f.label,
+                  value: fieldRefKey(f),
+                  label: `${functionalFamilyLabel(f)} / ${f.label}`,
                 }))}
               />
               <Select
@@ -1545,8 +1557,8 @@ function CalcModal({
                 value={form.right_field}
                 onChange={(v) => setForm({ ...form, right_field: v })}
                 options={dateFields.map((f) => ({
-                  value: f.field_key,
-                  label: f.label,
+                  value: fieldRefKey(f),
+                  label: `${functionalFamilyLabel(f)} / ${f.label}`,
                 }))}
               />
               <Select
@@ -1592,8 +1604,8 @@ function CalcModal({
                 value={form.left_field}
                 onChange={(v) => setForm({ ...form, left_field: v })}
                 options={fields.map((f) => ({
-                  value: f.field_key,
-                  label: f.label,
+                  value: fieldRefKey(f),
+                  label: `${functionalFamilyLabel(f)} / ${f.label}`,
                 }))}
               />
               <Select
@@ -1616,8 +1628,8 @@ function CalcModal({
                 options={[
                   { value: '', label: 'Usar constante' },
                   ...fields.map((f) => ({
-                    value: f.field_key,
-                    label: f.label,
+                    value: fieldRefKey(f),
+                    label: `${functionalFamilyLabel(f)} / ${f.label}`,
                   })),
                 ]}
               />

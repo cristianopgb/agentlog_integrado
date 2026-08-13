@@ -80,6 +80,14 @@ const blocked = [
   'created_at',
   'updated_at',
   'deleted_at',
+  'occurrence_id',
+  'primary_operation_record_id',
+  'metadata',
+  'storage_path',
+  'external_url',
+  'created_by',
+  'updated_by',
+  'responsible_user_id',
 ];
 const sqlJs =
   /\b(select|insert|update|delete|drop|alter|from|where|join|union|script|function|eval|return|new\s+Function|javascript)\b|=>/i;
@@ -344,7 +352,7 @@ export class CalculatedFieldsService {
     const tables = [...new Set(refs.map((ref) => ref.table))];
     if (tables.length > 1)
       throw new BadRequestException(
-        'Uma fórmula deve usar uma única base analítica.',
+        'Essa combinação de campos ainda não possui relação canônica segura.',
       );
     return tables[0] ?? 'operation_records';
   }
