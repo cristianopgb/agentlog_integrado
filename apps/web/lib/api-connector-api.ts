@@ -139,6 +139,8 @@ export const revalidateApiBatch = (t: string, s: string, batchId: string) =>
   }>(`${route(t, s)}/staging-batches/${batchId}/revalidate-current-rules`, {
     method: 'POST',
   });
+export type ReprocessBatchResult = {processed_records:number;created_records:number;updated_records:number;ignored_records:number;error_records:number;published_records:number;not_published_records:number};
+export const reprocessApiBatch = (t:string,s:string,batchId:string) => call<ReprocessBatchResult>(`${route(t,s)}/staging-batches/${batchId}/reprocess`, {method:'POST'});
 export type ApiFieldMapping = {
   id: string;
   api_source_field_name: string;

@@ -10,8 +10,9 @@ import {
 import { ValueMappingsService } from './value-mappings.service';
 import { FieldParseRulesService } from './field-parse-rules.service';
 import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
+import { NormalizationModule } from '../normalization/normalization.module';
 @Module({
-  imports: [SupabaseModule, RbacModule],
+  imports: [SupabaseModule, RbacModule, NormalizationModule],
   controllers: [ApiIntegrationsController, ApiIntegrationsInternalController],
   providers: [
     ApiConnectorConfigService,

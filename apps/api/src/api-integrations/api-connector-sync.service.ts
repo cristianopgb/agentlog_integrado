@@ -7,6 +7,7 @@ import { ValueMappingsService } from './value-mappings.service';
 import { FieldParseRulesService } from './field-parse-rules.service';
 import { parseFieldValue, ParseRule } from './field-value-parser';
 import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
+import { NormalizationService } from '../normalization/normalization.service';
 
 type JsonRecord = Record<string, unknown>;
 type FetchResult = {
@@ -49,7 +50,22 @@ export class ApiConnectorSyncService {
     private readonly valueMappings: ValueMappingsService,
     private readonly fieldFormats: FieldParseRulesService,
     private readonly canonicalDomains: CanonicalValueDomainsService,
+    private readonly normalization: NormalizationService,
   ) {}
+
+  async reprocessValidatedBatch(tenantId: string, sourceId: string, batchId: string, userId: string) {
+    const batches = await this.db.select<Array<{id:string;status:string}>>('staging_batches', `select=id,status&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&id=eq.${batchId}&limit=1`);
+    const batch = batches[0];
+    if (!batch) throw new BadRequestException('Lote não encontrado para esta integração.');
+    if (batch.status !== 'validated') throw new BadRequestException('Somente lotes validados podem ser reprocessados.');
+    const valid = await this.db.select<Array<{id:string}>>('staging_records', `select=id&tenant_id=eq.${tenantId}&staging_batch_id=eq.${batchId}&validation_status=eq.valid&limit=1`);
+    if (!valid.length) throw new BadRequestException('Não há registros válidos neste lote para reprocessar.');
+    // This path consumes validated normalized_payload through the canonical
+    // publisher. It deliberately never calls fetch or recreates staging.
+    const run = await this.normalization.normalizeBatch(tenantId, batchId, userId) as Record<string, unknown>;
+    const created = Number(run.created_count ?? 0), updated = Number(run.updated_count ?? 0), ignored = Number(run.skipped_count ?? 0), errors = Number(run.error_count ?? 0);
+    return {processed_records:Number(run.processed_records ?? 0),created_records:created,updated_records:updated,ignored_records:ignored,error_records:errors,published_records:created+updated,not_published_records:ignored+errors};
+  }
 
   async test(tenantId: string, sourceId: string) {
     const result = await this.fetch(

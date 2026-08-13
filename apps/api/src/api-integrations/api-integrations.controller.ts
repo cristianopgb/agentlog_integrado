@@ -169,6 +169,11 @@ export class ApiIntegrationsController {
   ) {
     return this.syncs.revalidateBatchWithCurrentRules(t, s, b, req.user.id);
   }
+  @Post('staging-batches/:batchId/reprocess')
+  @RequirePermission('integrations.api.sync_now')
+  reprocess(@Param('tenantId') t:string,@Param('sourceId') s:string,@Param('batchId') b:string,@Req() req:AuthenticatedRequest) {
+    return this.syncs.reprocessValidatedBatch(t,s,b,req.user.id);
+  }
 }
 @Controller('internal/integrations/api')
 export class ApiIntegrationsInternalController {

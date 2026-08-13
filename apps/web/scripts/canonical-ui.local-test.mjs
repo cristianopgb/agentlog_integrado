@@ -10,6 +10,8 @@ const hotfix=readFileSync(new URL('../../../supabase/migrations/202608120002_del
 const dashboardEditor=readFileSync(new URL('../app/app/dashboards/[id]/edit/page.tsx',import.meta.url),'utf8');
 const dashboardApi=readFileSync(new URL('../../../apps/api/src/dashboards/dashboards.service.ts',import.meta.url),'utf8');
 const reports=readFileSync(new URL('../../../apps/api/src/reports/reports.service.ts',import.meta.url),'utf8');
+const reportBuilder=readFileSync(new URL('../app/app/setup/reports/[id]/page.tsx',import.meta.url),'utf8');
+const apiConnector=readFileSync(new URL('../lib/api-connector-api.ts',import.meta.url),'utf8');
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 for(const field of ['driver_phone','driver_whatsapp','pod_status','billing_status'])assert(labels.includes(`${field}:`),`Label ausente: ${field}`);
 for(const field of ['driver_phone','driver_whatsapp'])assert(migration.includes(`'${field}'`),`Destino de pareamento ausente: ${field}`);
@@ -43,5 +45,9 @@ assert(dashboardEditor.includes('pending.allowed_visual_types.map'),'Widget buil
 assert(!/dashboard_widgets/.test(hotfix),'Migration não pode adicionar widgets automaticamente.');
 for(const field of ['occurrence_number','current_status','current_priority','source_channel','opened_at','due_at','resolved_at','closed_at','sla_status','reason_name','reason_category','responsible_team','has_operation_link','has_pending_actions'])assert(labels.includes(`${field}:`)||reports.includes(`${field}:`),`Report builder não possui label/filtro seguro: ${field}`);
 assert(reports.includes("family_label:x.family_key==='occurrences'?'Ocorrências operacionais':null"),'Relatórios não identificam a família de ocorrências.');
+assert(reportBuilder.includes("x.availability!=='failed'")&&!reportBuilder.includes("x.availability==='available'||x.availability==='partial'"),'Report builder oculta indicadores empty/waiting_data.');
+assert(setup.includes('Reprocessar dados tratados')&&setup.includes('Não busca novos dados na API'),'Ação explícita de reprocessamento ou explicação sem fetch ausente.');
+assert(apiConnector.includes('/staging-batches/${batchId}/reprocess'),'Cliente chama endpoint de reprocessamento incorreto.');
+for(const counter of ['processed_records','created_records','updated_records','ignored_records','error_records','published_records','not_published_records'])assert(setup.includes(`result.${counter}`),`UI não exibe contador ${counter}.`);
 assert(panel.includes('campo(s) ignorado(s) nesta integração')&&panel.includes('não participam do De/Para, formatos ou sincronização'),'UI não informa campos ignorados.');
 console.log('canonical ui: ok');

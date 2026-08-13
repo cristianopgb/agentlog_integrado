@@ -102,9 +102,18 @@ assert(apiMappings.includes('status=neq.ignored_field'),'Salvar pareamentos não
 assert(!normalization.includes("const composite=!number&&values.linked_document_number"),'Idempotência composta antiga permanece ativa.');
 const dashboards=readFileSync(join(root,'apps/api/src/dashboards/dashboards.service.ts'),'utf8');
 const nativeIndicators=readFileSync(join(root,'apps/api/src/native-indicators/native-indicators.service.ts'),'utf8');
+const apiController=readFileSync(join(root,'apps/api/src/api-integrations/api-integrations.controller.ts'),'utf8');
 assert(nativeIndicators.includes("'tenant_modules'")&&nativeIndicators.includes('is_active=eq.true'),'Catálogo nativo não filtra módulos ativos do tenant.');
 assert(dashboards.includes("availability.status!=='failed'")&&!dashboards.includes("['available','partial'].includes(i.availability.status)"),'Widget builder ainda oculta indicadores aguardando dados.');
 assert(!dashboards.includes('dashboard_definitions.module_key'),'Widget builder não pode depender de module_key no dashboard.');
+assert(nativeIndicators.includes("table === 'occurrence_analytics_view'")&&nativeIndicators.includes('tableColumns.occurrence_analytics_view.has'),'View de ocorrências não possui escopo analítico próprio com filtros seguros.');
+assert(!nativeIndicators.split("if (table !== 'operation_records')")[0].split("if (table === 'occurrence_analytics_view')").at(-1)?.includes('r.operation_record_id'),'View de ocorrências voltou a depender de operation_record_id.');
+for(const field of ['primary_operation_record_id','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number'])assert(nativeIndicators.includes(`'${field}'`),`Campo seguro da view ausente: ${field}`);
+assert(dashboards.includes("body.title.trim()")&&dashboards.includes('Informe um título para o dashboard.'),'Título do dashboard não é validado/persistido antes da publicação.');
+assert(reports.includes("x.available_for_reports!==false&&x.availability?.status!=='failed'"),'Biblioteca de relatórios ainda depende da disponibilidade de dashboard/dados.');
+assert(apiController.includes("staging-batches/:batchId/reprocess")&&apiController.includes("@RequirePermission('integrations.api.sync_now')"),'Endpoint controlado de reprocessamento ausente ou sem permissão.');
+assert(apiMappings.includes('reprocessValidatedBatch')&&apiMappings.includes('this.normalization.normalizeBatch'),'Reprocessamento não reutiliza o publicador canônico.');
+assert(apiMappings.includes('validation_status=eq.valid')&&apiMappings.includes('normalized_payload'),'Reprocessamento não está restrito ao payload normalizado validado.');
 assert(normalization.includes('resolveOccurrenceOperation')&&normalization.includes('if(!number&&!resolvedOperationId)return null'),'Ocorrência sem vínculo seguro ainda pode ser criada.');
 for(const unsafe of ['storage_path','external_url','document_key','metadata','snapshot','tenant_id','current_owner_id','created_by','updated_by','closed_by','responsible_user_id','authorized_by','requested_by'])assert(!attendance.match(new RegExp(`clean\\([^\\n]+['\"]${unsafe}['\"]`)),`Sanitização retorna ${unsafe}.`);
 assert(attendance.includes("['occurrences.ai.create_draft','occurrences.ai.create_confirmed']"),'Permissões alternativas de criação ausentes.');
