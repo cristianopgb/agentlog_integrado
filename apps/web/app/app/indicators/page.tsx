@@ -188,6 +188,7 @@ export default function IndicatorsPage() {
   const [calcModalOpen, setCalcModalOpen] = useState(false);
   const [calcForm, setCalcForm] = useState<CalcForm>(initialCalcForm);
   const [calcPreview, setCalcPreview] = useState<CustomPreview | null>(null);
+  const [calcError, setCalcError] = useState('');
   const [calcTarget, setCalcTarget] = useState<'value' | 'standalone'>(
     'standalone',
   );
@@ -359,12 +360,13 @@ export default function IndicatorsPage() {
   };
   async function testCalc() {
     if (!tenantId) return;
+    setCalcError('');
     try {
       setCalcPreview(
         await previewCalculatedField(tenantId, calcPayload('draft')),
       );
     } catch (e) {
-      setMessage(
+      setCalcError(
         e instanceof Error
           ? e.message
           : 'Não foi possível pré-visualizar campo calculado.',
@@ -384,7 +386,7 @@ export default function IndicatorsPage() {
           ...current,
           value: {
             ...current.value,
-            field: created.field_key,
+            field: `${String((created as CalculatedField & { base_table?: string }).base_table ?? 'operation_records')}:${created.field_key}`,
             label: created.name,
             format: created.value_format,
           },
@@ -406,61 +408,62 @@ export default function IndicatorsPage() {
     }
   }
   const validation = validateBuilder(form, catalog);
-  const payload = (status: 'draft' | 'active') => ({
-    name: form.name,
-    description: form.description,
-    module_key: form.module_key,
-    family_key: form.family_key,
-    indicator_type: form.indicator_type,
-    value_format: form.value.format,
-    status,
-    available_for_dashboard: status === 'active',
-    available_for_reports: status === 'active',
-    calculation_config: {
-      base_table: parseFieldRef(form.value.field).base_table,
-      operation_key: 'PIVOT_CONTROLLED',
-      rationale: form.rationale,
-      values: [
-        {
-          field: parseFieldRef(form.value.field).field_key,
-          field_key: parseFieldRef(form.value.field).field_key,
-          base_table: parseFieldRef(form.value.field).base_table,
-          source:
-            catalog.find((f) => fieldRefKey(f) === form.value.field)?.source ??
-            'native',
-          aggregation: form.value.aggregation,
-          format: form.value.format,
-          label:
-            form.value.label ||
-            catalog.find((f) => fieldRefKey(f) === form.value.field)?.label,
-        },
-      ],
-      rows: form.row
-        ? [
-            {
-              field: parseFieldRef(form.row).field_key,
-              field_key: parseFieldRef(form.row).field_key,
-              base_table: parseFieldRef(form.row).base_table,
-              label:
-                catalog.find((f) => fieldRefKey(f) === form.row)?.label ??
-                form.row,
-            },
-          ]
-        : [],
-      columns: form.column
-        ? [
-            {
-              field: parseFieldRef(form.column).field_key,
-              field_key: parseFieldRef(form.column).field_key,
-              base_table: parseFieldRef(form.column).base_table,
-              label:
-                catalog.find((f) => fieldRefKey(f) === form.column)?.label ??
-                form.column,
-            },
-          ]
-        : [],
-    },
-  });
+  const payload = (status: 'draft' | 'active') => {
+    const valueRef = buildFieldPayload(form.value.field);
+    return {
+      name: form.name,
+      description: form.description,
+      module_key: form.module_key,
+      family_key: form.family_key,
+      indicator_type: form.indicator_type,
+      value_format: form.value.format,
+      status,
+      available_for_dashboard: status === 'active',
+      available_for_reports: status === 'active',
+      calculation_config: {
+        base_table: parseFieldRef(form.value.field).base_table,
+        operation_key: 'PIVOT_CONTROLLED',
+        rationale: form.rationale,
+        values: [
+          {
+            field: valueRef.field_key,
+            field_key: parseFieldRef(form.value.field).field_key,
+            base_table: valueRef.base_table,
+            source:
+              catalog.find((f) => fieldRefKey(f) === form.value.field)
+                ?.source ?? 'native',
+            aggregation: form.value.aggregation,
+            format: form.value.format,
+            label:
+              form.value.label ||
+              catalog.find((f) => fieldRefKey(f) === form.value.field)?.label,
+          },
+        ],
+        rows: form.row
+          ? [
+              {
+                field: buildFieldPayload(form.row).field_key,
+                ...buildFieldPayload(form.row),
+                label:
+                  catalog.find((f) => fieldRefKey(f) === form.row)?.label ??
+                  form.row,
+              },
+            ]
+          : [],
+        columns: form.column
+          ? [
+              {
+                field: buildFieldPayload(form.column).field_key,
+                ...buildFieldPayload(form.column),
+                label:
+                  catalog.find((f) => fieldRefKey(f) === form.column)?.label ??
+                  form.column,
+              },
+            ]
+          : [],
+      },
+    };
+  };
   async function testBuilder() {
     if (!tenantId || !validation.ok) return;
     try {
@@ -543,6 +546,7 @@ export default function IndicatorsPage() {
           setForm={setCalcForm}
           fields={catalog.filter((f) => f.source !== 'calculated')}
           preview={calcPreview}
+          error={calcError}
           onClose={() => setCalcModalOpen(false)}
           onTest={testCalc}
           onSave={saveCalc}
@@ -568,16 +572,16 @@ export default function IndicatorsPage() {
   );
 }
 function validateBuilder(form: FormState, fields: IndicatorField[]) {
-  const valueField = fields.find((f) => f.field_key === form.value.field);
+  const valueField = findFieldByRef(fields, form.value.field);
   if (!form.name.trim())
     return { ok: false, message: 'Informe o nome do indicador.' };
   if (!valueField) return { ok: false, message: 'Escolha um campo em Valor.' };
-  if (form.row && !fields.some((f) => f.field_key === form.row))
+  if (form.row && !findFieldByRef(fields, form.row))
     return { ok: false, message: 'Linha fora do catálogo controlado.' };
-  if (form.column && !fields.some((f) => f.field_key === form.column))
+  if (form.column && !findFieldByRef(fields, form.column))
     return { ok: false, message: 'Coluna fora do catálogo controlado.' };
   if (
-    form.value.field === 'freight_value' &&
+    parseFieldRef(form.value.field).field_key === 'freight_value' &&
     form.value.format === 'currency_per_ton'
   )
     return {
@@ -1356,6 +1360,13 @@ function fieldOption(f: IndicatorField) {
 function fieldRefKey(f: Pick<IndicatorField, 'base_table' | 'field_key'>) {
   return `${f.base_table}:${f.field_key}`;
 }
+function findFieldByRef(fields: IndicatorField[], ref: string) {
+  return fields.find((field) => fieldRefKey(field) === ref);
+}
+function buildFieldPayload(ref: string) {
+  const { base_table, field_key } = parseFieldRef(ref);
+  return { base_table, field_key };
+}
 function parseFieldRef(value: string) {
   const [base_table, ...field] = value.split(':');
   return {
@@ -1480,6 +1491,7 @@ function CalcModal({
   setForm,
   fields,
   preview,
+  error,
   onClose,
   onTest,
   onSave,
@@ -1488,6 +1500,7 @@ function CalcModal({
   setForm: (f: CalcForm) => void;
   fields: IndicatorField[];
   preview: CustomPreview | null;
+  error: string;
   onClose: () => void;
   onTest: () => void;
   onSave: (s: 'draft' | 'active') => void;
@@ -1648,6 +1661,11 @@ function CalcModal({
           )}
         </div>
         <PreviewBox preview={preview} />
+        {error ? (
+          <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800">
+            {error}
+          </p>
+        ) : null}
         <div className="mt-4 flex justify-end gap-2">
           <button
             className="rounded-xl bg-blue-600 px-4 py-2 font-bold text-white"

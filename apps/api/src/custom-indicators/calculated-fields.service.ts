@@ -106,10 +106,7 @@ export class CalculatedFieldsService {
 
   async preview(tenantId: string, body: Record<string, unknown>) {
     const formula = await this.normalizeAndValidate(tenantId, body);
-    const rows = await this.rows(
-      tenantId,
-      this.formulaTable(formula.expression),
-    );
+    const rows = await this.formulaRows(tenantId, formula.expression);
     const result = this.calculate(rows, formula);
     return {
       status: result.used ? 'success' : 'insufficient_data',
@@ -335,26 +332,79 @@ export class CalculatedFieldsService {
     );
   }
   private formulaTable(expr: Expr): SafeAnalyticsTable {
-    const refs: FieldRef[] = [];
-    const visit = (node: Expr): void => {
-      if ('type' in node) refs.push(node.start, node.end);
-      else if ('field' in node) refs.push(node.field);
-      else if ('aggregate' in node)
-        refs.push(
-          (node as unknown as { aggregate: Agg; field: FieldRef }).field,
-        );
-      else if ('op' in node) {
-        visit(node.left);
-        visit(node.right);
-      }
-    };
-    visit(expr);
+    const refs = this.fieldRefs(expr);
     const tables = [...new Set(refs.map((ref) => ref.table))];
-    if (tables.length > 1)
+    if (!this.safeRelation(tables))
       throw new BadRequestException(
         'Essa combinação de campos ainda não possui relação canônica segura.',
       );
     return tables[0] ?? 'operation_records';
+  }
+  private fieldRefs(expr: Expr): FieldRef[] {
+    if ('type' in expr) return [expr.start, expr.end];
+    if ('field' in expr) return [expr.field];
+    if ('aggregate' in expr)
+      return [(expr as unknown as { aggregate: Agg; field: FieldRef }).field];
+    if ('op' in expr)
+      return [...this.fieldRefs(expr.left), ...this.fieldRefs(expr.right)];
+    return [];
+  }
+  private safeRelation(tables: SafeAnalyticsTable[]) {
+    const names = [...new Set(tables)];
+    return (
+      names.length <= 1 ||
+      (names.length === 2 &&
+        names.includes('operation_records') &&
+        names.some((name) =>
+          [
+            'finance_records',
+            'transport_records',
+            'occurrence_analytics_view',
+          ].includes(name),
+        ))
+    );
+  }
+  private async formulaRows(tenantId: string, expr: Expr) {
+    const tables = [...new Set(this.fieldRefs(expr).map((ref) => ref.table))];
+    if (!this.safeRelation(tables))
+      throw new BadRequestException(
+        'Essa combinação de campos ainda não possui relação canônica segura.',
+      );
+    if (tables.length <= 1) {
+      const table = this.formulaTable(expr);
+      return (await this.rows(tenantId, table)).map((row) =>
+        this.qualify(table, row),
+      );
+    }
+    const related = tables.find((table) => table !== 'operation_records')!;
+    const [operations, relatedRows] = await Promise.all([
+      this.rows(tenantId, 'operation_records'),
+      this.rows(tenantId, related),
+    ]);
+    const byId = new Map(operations.map((row) => [String(row.id), row]));
+    const relationKey =
+      related === 'occurrence_analytics_view'
+        ? 'primary_operation_record_id'
+        : 'operation_record_id';
+    return relatedRows.flatMap((row) => {
+      const operation = byId.get(String(row[relationKey] ?? ''));
+      return operation
+        ? [
+            {
+              ...this.qualify('operation_records', operation),
+              ...this.qualify(related, row),
+            },
+          ]
+        : [];
+    });
+  }
+  private qualify(table: SafeAnalyticsTable, row: Record<string, unknown>) {
+    return {
+      ...row,
+      ...Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [`${table}:${key}`, value]),
+      ),
+    };
   }
   private calculateRow(rows: Record<string, unknown>[], expr: Expr) {
     let used = 0;
@@ -389,9 +439,13 @@ export class CalculatedFieldsService {
   }
   private evalRow(expr: Expr, row: Record<string, unknown>): number {
     if ('type' in expr && expr.type === 'date_diff_days')
-      return this.diffDays(row[expr.start.field], row[expr.end.field]);
+      return this.diffDays(
+        row[`${expr.start.table}:${expr.start.field}`],
+        row[`${expr.end.table}:${expr.end.field}`],
+      );
     if ('constant' in expr) return Number(expr.constant);
-    if ('field' in expr) return Number(row[expr.field.field]);
+    if ('field' in expr)
+      return Number(row[`${expr.field.table}:${expr.field.field}`]);
     if ('aggregate' in expr) return Number.NaN;
     if ('op' in expr)
       return this.apply(
@@ -411,7 +465,7 @@ export class CalculatedFieldsService {
       return this.aggregate(
         rows,
         aggregateExpr.aggregate,
-        aggregateExpr.field.field,
+        `${aggregateExpr.field.table}:${aggregateExpr.field.field}`,
       );
     }
     if ('field' in expr) return Number.NaN;
@@ -449,9 +503,14 @@ export class CalculatedFieldsService {
   ): boolean {
     if ('type' in expr && expr.type === 'date_diff_days')
       return Number.isFinite(
-        this.diffDays(row[expr.start.field], row[expr.end.field]),
+        this.diffDays(
+          row[`${expr.start.table}:${expr.start.field}`],
+          row[`${expr.end.table}:${expr.end.field}`],
+        ),
       );
-    const fields = this.fieldKeys(expr);
+    const fields = this.fieldRefs(expr).map(
+      (ref) => `${ref.table}:${ref.field}`,
+    );
     return fields.every(
       (field) =>
         row[field] !== null &&
