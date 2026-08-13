@@ -1110,6 +1110,13 @@ function CreatorModal({
   onTest: () => void;
   onSave: (s: 'draft' | 'active') => void;
 }) {
+  const catalog = sortFunctionalCatalog(
+    fields.filter(
+      (field) =>
+        field.base_table === form.base_table &&
+        !technicalBlocked.includes(field.field_key),
+    ),
+  );
   const valueField = fields.find((f) => f.field_key === form.value.field);
   const rowField = fields.find((f) => f.field_key === form.row);
   const columnField = fields.find((f) => f.field_key === form.column);
@@ -1231,7 +1238,7 @@ function CreatorModal({
                 onChange={(v) => setForm({ ...form, row: v })}
                 options={[
                   { value: '', label: 'Sem linha' },
-                  ...fields.filter((f) => f.is_dimension).map(fieldOption),
+                  ...catalog.filter((f) => f.is_dimension).map(fieldOption),
                 ]}
               />
               <Select
@@ -1240,7 +1247,7 @@ function CreatorModal({
                 onChange={(v) => setForm({ ...form, column: v })}
                 options={[
                   { value: '', label: 'Sem coluna' },
-                  ...fields.filter((f) => f.is_dimension).map(fieldOption),
+                  ...catalog.filter((f) => f.is_dimension).map(fieldOption),
                 ]}
               />
               <div className="md:col-span-2">
@@ -1249,13 +1256,20 @@ function CreatorModal({
                     label="Valor"
                     value={form.value.field}
                     onChange={pickValue}
-                    options={fields
+                    options={catalog
                       .filter(
                         (f) =>
                           f.is_measure ||
                           f.allowed_operations.includes('CONTAGEM'),
                       )
-                      .map(fieldOption)}
+                      .map((field) => ({
+                        ...fieldOption(field),
+                        label:
+                          field.base_table === 'occurrence_analytics_view' &&
+                          field.field_key === 'occurrence_number'
+                            ? 'Ocorrências · Nativo · Contagem'
+                            : fieldOption(field).label,
+                      }))}
                   />
                   <button
                     type="button"

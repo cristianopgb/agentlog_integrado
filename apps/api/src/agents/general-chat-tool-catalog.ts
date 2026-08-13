@@ -118,6 +118,18 @@ const metadata: Record<
     output_contract: ['found', 'status', 'record'],
     fallback_allowed: true,
   },
+  'occurrences.analytics.list': {
+    authority_level: 'canonical_search',
+    use_when: 'Listar números e resumo seguro de ocorrências tratadas.',
+    output_contract: ['found', 'status', 'occurrences'],
+    fallback_allowed: true,
+  },
+  'occurrences.analytics.detail': {
+    authority_level: 'canonical_search',
+    use_when: 'Detalhar uma ocorrência tratada por número OC.',
+    output_contract: ['found', 'status', 'occurrence'],
+    fallback_allowed: true,
+  },
 };
 /** Safe inspection only; it is never referenced by the OpenAI request path. */
 export function inspectGeneralChatToolContract() {
