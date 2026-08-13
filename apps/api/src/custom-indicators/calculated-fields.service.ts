@@ -8,7 +8,12 @@ import { SupabaseService } from '../supabase/supabase.service';
 export type CalcKind = 'row_calculated_field' | 'aggregate_calculated_measure';
 type Op = 'add' | 'subtract' | 'multiply' | 'divide';
 type Agg = 'sum' | 'avg' | 'count' | 'max' | 'min';
-type FieldRef = { table: 'operation_records'; field: string };
+export type SafeAnalyticsTable =
+  | 'operation_records'
+  | 'transport_records'
+  | 'finance_records'
+  | 'occurrence_analytics_view';
+type FieldRef = { table: SafeAnalyticsTable; field: string };
 export type Expr =
   | { op: Op; left: Expr; right: Expr }
   | { field: FieldRef }
@@ -51,6 +56,12 @@ const formats = [
 ];
 const operators: Op[] = ['add', 'subtract', 'multiply', 'divide'];
 const aggregates: Agg[] = ['sum', 'avg', 'count', 'max', 'min'];
+const safeTables = new Set<SafeAnalyticsTable>([
+  'operation_records',
+  'transport_records',
+  'finance_records',
+  'occurrence_analytics_view',
+]);
 const blocked = [
   'raw_payload',
   'staging',
@@ -87,7 +98,10 @@ export class CalculatedFieldsService {
 
   async preview(tenantId: string, body: Record<string, unknown>) {
     const formula = await this.normalizeAndValidate(tenantId, body);
-    const rows = await this.rows(tenantId);
+    const rows = await this.rows(
+      tenantId,
+      this.formulaTable(formula.expression),
+    );
     const result = this.calculate(rows, formula);
     return {
       status: result.used ? 'success' : 'insufficient_data',
@@ -251,11 +265,9 @@ export class CalculatedFieldsService {
       field: FieldRef;
     };
     const ref = aggregateExpr.field;
-    if (ref.table !== 'operation_records')
-      throw new BadRequestException(
-        'Campos calculados devem usar somente a base nativa/canônica operation_records.',
-      );
-    const field = cat.get(ref.field);
+    if (!safeTables.has(ref.table))
+      throw new BadRequestException('Base analítica fora da lista controlada.');
+    const field = cat.get(`${ref.table}:${ref.field}`);
     if (!field || blocked.includes(ref.field))
       throw new BadRequestException('Campo fora do catálogo controlado.');
     if ('aggregate' in expr) {
@@ -275,21 +287,19 @@ export class CalculatedFieldsService {
   private async catalog(tenantId: string) {
     const rows = await this.supabase.select<CatalogField[]>(
       'indicator_field_catalog',
-      `select=base_table,field_key,label,data_type,semantic_type,is_measure,is_dimension,is_active&is_active=eq.true&base_table=eq.operation_records&or=(tenant_id.is.null,tenant_id.eq.${tenantId})`,
+      `select=base_table,field_key,label,data_type,semantic_type,is_measure,is_dimension,is_active&is_active=eq.true&base_table=in.(${[...safeTables].join(',')})&or=(tenant_id.is.null,tenant_id.eq.${tenantId})`,
     );
     return new Map(
       rows
         .filter((f) => !blocked.includes(f.field_key))
-        .map((f) => [f.field_key, f]),
+        .map((f) => [`${f.base_table}:${f.field_key}`, f]),
     );
   }
 
   private validateDateRef(ref: FieldRef, cat: Map<string, CatalogField>) {
-    if (ref.table !== 'operation_records')
-      throw new BadRequestException(
-        'Campos calculados devem usar somente operation_records.',
-      );
-    const field = cat.get(ref.field);
+    if (!safeTables.has(ref.table))
+      throw new BadRequestException('Base analítica fora da lista controlada.');
+    const field = cat.get(`${ref.table}:${ref.field}`);
     if (!field || blocked.includes(ref.field))
       throw new BadRequestException('Campo fora do catálogo controlado.');
     if (!(
@@ -301,13 +311,42 @@ export class CalculatedFieldsService {
         'Diferença entre datas aceita somente campos de data.',
       );
   }
-  private async rows(tenantId: string) {
-    const activeSources =
-      await this.supabase.activeOperationalSourceFilter(tenantId);
+  private async rows(tenantId: string, table: SafeAnalyticsTable) {
+    const filters = [`select=*`, `tenant_id=eq.${tenantId}`];
+    if (table !== 'occurrence_analytics_view')
+      filters.push('deleted_at=is.null');
+    if (table === 'operation_records')
+      filters.push(
+        'is_current=eq.true',
+        'canonical_validity_status=eq.valid',
+        await this.supabase.activeOperationalSourceFilter(tenantId),
+      );
     return this.supabase.select<Record<string, unknown>[]>(
-      'operation_records',
-      `select=*&tenant_id=eq.${tenantId}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&${activeSources}&limit=10000`,
+      table,
+      `${filters.join('&')}&limit=10000`,
     );
+  }
+  private formulaTable(expr: Expr): SafeAnalyticsTable {
+    const refs: FieldRef[] = [];
+    const visit = (node: Expr): void => {
+      if ('type' in node) refs.push(node.start, node.end);
+      else if ('field' in node) refs.push(node.field);
+      else if ('aggregate' in node)
+        refs.push(
+          (node as unknown as { aggregate: Agg; field: FieldRef }).field,
+        );
+      else if ('op' in node) {
+        visit(node.left);
+        visit(node.right);
+      }
+    };
+    visit(expr);
+    const tables = [...new Set(refs.map((ref) => ref.table))];
+    if (tables.length > 1)
+      throw new BadRequestException(
+        'Uma fórmula deve usar uma única base analítica.',
+      );
+    return tables[0] ?? 'operation_records';
   }
   private calculateRow(rows: Record<string, unknown>[], expr: Expr) {
     let used = 0;

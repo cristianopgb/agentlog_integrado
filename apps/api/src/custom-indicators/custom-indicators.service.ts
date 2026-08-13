@@ -3,7 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { isCanonicalNameAmbiguous, isCanonicalNameMatch, resolveCanonicalCustomerName } from '../shared/canonical-customer-matching';
+import {
+  isCanonicalNameAmbiguous,
+  isCanonicalNameMatch,
+  resolveCanonicalCustomerName,
+} from '../shared/canonical-customer-matching';
 import { SupabaseService } from '../supabase/supabase.service';
 import type { Formula, Expr } from './calculated-fields.service';
 
@@ -43,6 +47,11 @@ type Field = {
   is_dimension: boolean;
   is_measure: boolean;
   is_active: boolean;
+  base_label?: string;
+  module_label?: string;
+  family_key?: string;
+  family_label?: string;
+  sort_order?: number;
   records_in_scope?: number;
   records_with_data?: number;
   available_for_calculation?: boolean;
@@ -201,7 +210,21 @@ const blockedFields: string[] = [
   'integration',
   'origem',
   'lote',
+  'occurrence_id',
+  'primary_operation_record_id',
+  'metadata',
+  'storage_path',
+  'external_url',
+  'created_by',
+  'updated_by',
+  'responsible_user_id',
 ];
+const safeCatalogTables = new Set<TableName>([
+  'operation_records',
+  'transport_records',
+  'finance_records',
+  'occurrence_analytics_view',
+]);
 const friendlyLabels: Record<string, string> = {
   freight_value: 'Frete',
   gross_weight: 'Peso total',
@@ -218,14 +241,37 @@ const friendlyLabels: Record<string, string> = {
 export class CustomIndicatorsService {
   constructor(private readonly supabase: SupabaseService) {}
   async fields(tenantId: string) {
-    const rows = await this.rows(tenantId, 'operation_records', false);
-    const data = (await this.catalog(tenantId))
-      .filter(
-        (f) =>
-          f.base_table === 'operation_records' &&
-          !blockedFields.includes(f.field_key),
-      )
-      .map((f) => this.enrichField(f, rows));
+    const catalog = (await this.catalog(tenantId)).filter(
+      (f) =>
+        safeCatalogTables.has(f.base_table) &&
+        !blockedFields.includes(f.field_key),
+    );
+    const byTable = new Map<TableName, Record<string, unknown>[]>();
+    await Promise.all(
+      [...new Set(catalog.map((field) => field.base_table))].map(
+        async (table) => {
+          byTable.set(table, await this.rows(tenantId, table, false));
+        },
+      ),
+    );
+    const data = catalog.map((field) => {
+      const occurrence = field.base_table === 'occurrence_analytics_view';
+      return this.enrichField(
+        {
+          ...field,
+          base_label: occurrence
+            ? 'Ocorrências operacionais'
+            : field.base_label,
+          module_key: occurrence ? 'atendimento' : field.module_key,
+          module_label: occurrence ? 'Atendimento' : field.module_label,
+          family_key: occurrence ? 'occurrences' : field.family_key,
+          family_label: occurrence
+            ? 'Ocorrências operacionais'
+            : field.family_label,
+        },
+        byTable.get(field.base_table) ?? [],
+      );
+    });
     return { data: this.dedupeFields(data) };
   }
   async list(tenantId: string) {
@@ -638,7 +684,9 @@ export class CustomIndicatorsService {
           {
             config_diagnostics: diagnostics,
             filters_applied: scope.filters_applied,
-            ...(scope.data_quality_notes?.length ? { data_quality_notes: scope.data_quality_notes } : {}),
+            ...(scope.data_quality_notes?.length
+              ? { data_quality_notes: scope.data_quality_notes }
+              : {}),
           },
         );
       }
@@ -647,24 +695,28 @@ export class CustomIndicatorsService {
       diagnostics.records_used =
         'used' in r ? r.used : Math.max(scope.rows.length - r.ignored, 0);
       failureStage = 'build_result';
-      const res = this.enforceRenderableResult(this.result(
-        'success',
-        r.value,
-        r.series,
-        r.table,
-        scope.rows.length,
-        cfg,
-        by,
-        this.scopeMessage(scope.scope, r.ignored),
-        r.ignored,
-        scope.scope,
-        'used' in r ? r.used : undefined,
-        {
-          config_diagnostics: diagnostics,
-          filters_applied: scope.filters_applied,
-            ...(scope.data_quality_notes?.length ? { data_quality_notes: scope.data_quality_notes } : {}),
-        },
-      ));
+      const res = this.enforceRenderableResult(
+        this.result(
+          'success',
+          r.value,
+          r.series,
+          r.table,
+          scope.rows.length,
+          cfg,
+          by,
+          this.scopeMessage(scope.scope, r.ignored),
+          r.ignored,
+          scope.scope,
+          'used' in r ? r.used : undefined,
+          {
+            config_diagnostics: diagnostics,
+            filters_applied: scope.filters_applied,
+            ...(scope.data_quality_notes?.length
+              ? { data_quality_notes: scope.data_quality_notes }
+              : {}),
+          },
+        ),
+      );
       failureStage = 'log_result';
       try {
         await this.log(tenantId, indicatorId, userId, res);
@@ -1391,13 +1443,14 @@ export class CustomIndicatorsService {
       : [];
     const applied = this.simpleRuntimeFilters(filters, by);
     if (isCanonicalNameAmbiguous(customerMatch)) next = [];
-    else next = next.filter((row) =>
-      applied.every((item) =>
-        item.field === 'customer_name' && isCanonicalNameMatch(customerMatch)
-          ? row.customer_name === customerMatch.matched_value
-          : this.matchesFilter(row[item.field], item.operator, item.value),
-      ),
-    );
+    else
+      next = next.filter((row) =>
+        applied.every((item) =>
+          item.field === 'customer_name' && isCanonicalNameMatch(customerMatch)
+            ? row.customer_name === customerMatch.matched_value
+            : this.matchesFilter(row[item.field], item.operator, item.value),
+        ),
+      );
     return {
       rows: next,
       scope,

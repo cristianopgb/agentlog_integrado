@@ -1,30 +1,288 @@
 const tokenKey = 'sli_supabase_access_token';
-function getApiBase() { const configured = process.env.NEXT_PUBLIC_API_URL; if (configured) return configured.replace(/\/$/, ''); if (process.env.NODE_ENV === 'production') throw new Error('API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.'); return 'http://localhost:3001'; }
-async function api<T>(path: string, init?: RequestInit): Promise<T> { const token = window.localStorage.getItem(tokenKey); const response = await fetch(`${getApiBase()}${path}`, { ...init, headers: { Authorization: token ? `Bearer ${token}` : '', 'Content-Type': 'application/json', ...(init?.headers ?? {}) } }); const text = await response.text(); const body = text ? JSON.parse(text) as unknown : null; if (!response.ok) throw new Error(typeof body === 'object' && body && 'message' in body ? String((body as { message: unknown }).message) : 'Falha ao carregar indicadores.'); return body as T; }
-export type IndicatorStatus = 'available' | 'partial' | 'waiting_data' | 'empty' | 'failed';
-export type FieldGroup = { key: string; label: string; any_of: Array<{ table: string; field: string }> };
-export type Indicator = { id: string; module_key: string; family_key: string; indicator_key: string; name: string; description: string | null; indicator_type: string; visualization_type: string; value_format: string; calculation_type: string; required_fields: FieldGroup[]; optional_fields: FieldGroup[]; rationale?: string; native_data_used?: string[]; availability: { status: IndicatorStatus; records_considered: number; missing_fields: string[]; available_fields: string[]; message: string } };
-export type IndicatorPreviewScope = { scope: string; date_from?: string; date_to?: string; status?: string; data_quality_status?: string };
-export type IndicatorPreviewFilters = { scope?: string; source_data_source_id?: string; source_staging_batch_id?: string; date_from?: string; date_to?: string; status?: string; data_quality_status?: string; include_archived?: boolean };
-export type IndicatorPreview = { status: IndicatorStatus; value: unknown; series: Array<Record<string, unknown>>; table: Array<Record<string, unknown>>; records_considered: number; records_used: number; records_ignored_missing_data: number; scope: IndicatorPreviewScope; missing_fields: string[]; available_fields: string[]; message: string; calculation_type: string; display_value?: string | null; debug?: { indicator_key: string; calculation_type: string; records_considered: number; records_used: number; value: unknown; table_length: number; series_length: number } };
-export type IndicatorSummary = { total: number; available: number; partial: number; waiting_data: number; empty: number };
-export function listIndicators(tenantId: string) { return api<{ data: Indicator[] }>(`/tenants/${tenantId}/native-indicators`); }
-export function getIndicatorsSummary(tenantId: string) { return api<IndicatorSummary>(`/tenants/${tenantId}/native-indicators/summary`); }
-export function getIndicator(tenantId: string, key: string) { return api<Indicator & { preview: IndicatorPreview | null }>(`/tenants/${tenantId}/native-indicators/${key}`); }
-export function previewIndicator(tenantId: string, key: string, filters: IndicatorPreviewFilters = {}) { return api<IndicatorPreview>(`/tenants/${tenantId}/native-indicators/${key}/preview`, { method: 'POST', body: JSON.stringify(filters) }); }
+function getApiBase() {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  if (process.env.NODE_ENV === 'production')
+    throw new Error(
+      'API backend não configurada. Defina NEXT_PUBLIC_API_URL no ambiente.',
+    );
+  return 'http://localhost:3001';
+}
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = window.localStorage.getItem(tokenKey);
+  const response = await fetch(`${getApiBase()}${path}`, {
+    ...init,
+    headers: {
+      Authorization: token ? `Bearer ${token}` : '',
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+  const text = await response.text();
+  const body = text ? (JSON.parse(text) as unknown) : null;
+  if (!response.ok)
+    throw new Error(
+      typeof body === 'object' && body && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : 'Falha ao carregar indicadores.',
+    );
+  return body as T;
+}
+export type IndicatorStatus =
+  'available' | 'partial' | 'waiting_data' | 'empty' | 'failed';
+export type FieldGroup = {
+  key: string;
+  label: string;
+  any_of: Array<{ table: string; field: string }>;
+};
+export type Indicator = {
+  id: string;
+  module_key: string;
+  family_key: string;
+  indicator_key: string;
+  name: string;
+  description: string | null;
+  indicator_type: string;
+  visualization_type: string;
+  value_format: string;
+  calculation_type: string;
+  required_fields: FieldGroup[];
+  optional_fields: FieldGroup[];
+  rationale?: string;
+  native_data_used?: string[];
+  availability: {
+    status: IndicatorStatus;
+    records_considered: number;
+    missing_fields: string[];
+    available_fields: string[];
+    message: string;
+  };
+};
+export type IndicatorPreviewScope = {
+  scope: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  data_quality_status?: string;
+};
+export type IndicatorPreviewFilters = {
+  scope?: string;
+  source_data_source_id?: string;
+  source_staging_batch_id?: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  data_quality_status?: string;
+  include_archived?: boolean;
+};
+export type IndicatorPreview = {
+  status: IndicatorStatus;
+  value: unknown;
+  series: Array<Record<string, unknown>>;
+  table: Array<Record<string, unknown>>;
+  records_considered: number;
+  records_used: number;
+  records_ignored_missing_data: number;
+  scope: IndicatorPreviewScope;
+  missing_fields: string[];
+  available_fields: string[];
+  message: string;
+  calculation_type: string;
+  display_value?: string | null;
+  debug?: {
+    indicator_key: string;
+    calculation_type: string;
+    records_considered: number;
+    records_used: number;
+    value: unknown;
+    table_length: number;
+    series_length: number;
+  };
+};
+export type IndicatorSummary = {
+  total: number;
+  available: number;
+  partial: number;
+  waiting_data: number;
+  empty: number;
+};
+export function listIndicators(tenantId: string) {
+  return api<{ data: Indicator[] }>(`/tenants/${tenantId}/native-indicators`);
+}
+export function getIndicatorsSummary(tenantId: string) {
+  return api<IndicatorSummary>(
+    `/tenants/${tenantId}/native-indicators/summary`,
+  );
+}
+export function getIndicator(tenantId: string, key: string) {
+  return api<Indicator & { preview: IndicatorPreview | null }>(
+    `/tenants/${tenantId}/native-indicators/${key}`,
+  );
+}
+export function previewIndicator(
+  tenantId: string,
+  key: string,
+  filters: IndicatorPreviewFilters = {},
+) {
+  return api<IndicatorPreview>(
+    `/tenants/${tenantId}/native-indicators/${key}/preview`,
+    { method: 'POST', body: JSON.stringify(filters) },
+  );
+}
 export type CustomIndicatorStatus = 'draft' | 'active' | 'inactive';
-export type IndicatorField = { id:string; module_key:string; base_table:string; field_key:string; label:string; data_type:string; semantic_type:string; allowed_operations:string[]; allowed_filters:string[]; is_dimension:boolean; is_measure:boolean; records_in_scope?:number; records_with_data?:number; available_for_calculation?:boolean; field_role?:string; source?:'native'|'calculated'; calculation_kind?:'row_calculated_field'|'aggregate_calculated_measure' };
-export type CustomIndicator = { id:string; name:string; description:string|null; module_key:string; family_key:string; indicator_type:string; value_format:string; base_table:string; operation_key:string; calculation_config:Record<string,unknown>; formula_preview:string; status:CustomIndicatorStatus; available_for_dashboard:boolean; available_for_reports:boolean; created_at:string; updated_at:string };
-export type CustomPreview = { status:'success'|'insufficient_data'|'empty'|'failed'; value:unknown; series:Array<Record<string,unknown>>; table:Array<Record<string,unknown>>; records_considered:number; records_used?:number; records_ignored_missing_data?:number; scope?:IndicatorPreviewScope; formula_preview:string; fields_used:Array<Record<string,unknown>>; filters_used:Array<Record<string,unknown>>; message:string };
-export function listIndicatorFields(tenantId:string){ return api<{data:IndicatorField[]}>(`/tenants/${tenantId}/indicator-fields`); }
-export function listCustomIndicators(tenantId:string){ return api<{data:CustomIndicator[]}>(`/tenants/${tenantId}/custom-indicators`); }
-export function createCustomIndicator(tenantId:string,payload:Record<string,unknown>){ return api<CustomIndicator>(`/tenants/${tenantId}/custom-indicators`,{method:'POST',body:JSON.stringify(payload)}); }
-export function previewCustomIndicator(tenantId:string,payload:Record<string,unknown>){ return api<CustomPreview>(`/tenants/${tenantId}/custom-indicators/preview`,{method:'POST',body:JSON.stringify(payload)}); }
-export function previewSavedCustomIndicator(tenantId:string,id:string,filters:IndicatorPreviewFilters = {}){ return api<CustomPreview>(`/tenants/${tenantId}/custom-indicators/${id}/preview`,{method:'POST',body:JSON.stringify(filters)}); }
-export function setCustomIndicatorStatus(tenantId:string,id:string,status:CustomIndicatorStatus){ return api<CustomIndicator>(`/tenants/${tenantId}/custom-indicators/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}); }
+export type IndicatorField = {
+  id: string;
+  module_key: string;
+  module_label?: string;
+  family_key?: string;
+  family_label?: string;
+  base_label?: string;
+  sort_order?: number;
+  base_table: string;
+  field_key: string;
+  label: string;
+  data_type: string;
+  semantic_type: string;
+  allowed_operations: string[];
+  allowed_filters: string[];
+  is_dimension: boolean;
+  is_measure: boolean;
+  records_in_scope?: number;
+  records_with_data?: number;
+  available_for_calculation?: boolean;
+  field_role?: string;
+  source?: 'native' | 'calculated';
+  calculation_kind?: 'row_calculated_field' | 'aggregate_calculated_measure';
+};
+export type CustomIndicator = {
+  id: string;
+  name: string;
+  description: string | null;
+  module_key: string;
+  family_key: string;
+  indicator_type: string;
+  value_format: string;
+  base_table: string;
+  operation_key: string;
+  calculation_config: Record<string, unknown>;
+  formula_preview: string;
+  status: CustomIndicatorStatus;
+  available_for_dashboard: boolean;
+  available_for_reports: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export type CustomPreview = {
+  status: 'success' | 'insufficient_data' | 'empty' | 'failed';
+  value: unknown;
+  series: Array<Record<string, unknown>>;
+  table: Array<Record<string, unknown>>;
+  records_considered: number;
+  records_used?: number;
+  records_ignored_missing_data?: number;
+  scope?: IndicatorPreviewScope;
+  formula_preview: string;
+  fields_used: Array<Record<string, unknown>>;
+  filters_used: Array<Record<string, unknown>>;
+  message: string;
+};
+export function listIndicatorFields(tenantId: string) {
+  return api<{ data: IndicatorField[] }>(
+    `/tenants/${tenantId}/indicator-fields`,
+  );
+}
+export function listCustomIndicators(tenantId: string) {
+  return api<{ data: CustomIndicator[] }>(
+    `/tenants/${tenantId}/custom-indicators`,
+  );
+}
+export function createCustomIndicator(
+  tenantId: string,
+  payload: Record<string, unknown>,
+) {
+  return api<CustomIndicator>(`/tenants/${tenantId}/custom-indicators`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+export function previewCustomIndicator(
+  tenantId: string,
+  payload: Record<string, unknown>,
+) {
+  return api<CustomPreview>(`/tenants/${tenantId}/custom-indicators/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+export function previewSavedCustomIndicator(
+  tenantId: string,
+  id: string,
+  filters: IndicatorPreviewFilters = {},
+) {
+  return api<CustomPreview>(
+    `/tenants/${tenantId}/custom-indicators/${id}/preview`,
+    { method: 'POST', body: JSON.stringify(filters) },
+  );
+}
+export function setCustomIndicatorStatus(
+  tenantId: string,
+  id: string,
+  status: CustomIndicatorStatus,
+) {
+  return api<CustomIndicator>(
+    `/tenants/${tenantId}/custom-indicators/${id}/status`,
+    { method: 'PATCH', body: JSON.stringify({ status }) },
+  );
+}
 
-export type CalculatedField = { id:string; name:string; description:string|null; module_key:string; field_key:string; calculation_kind:'row_calculated_field'|'aggregate_calculated_measure'; formula_config:Record<string,unknown>; formula_preview:string; value_format:string; decimal_places:number; status:CustomIndicatorStatus; available_for_indicators:boolean; available_for_dashboard:boolean; available_for_reports:boolean; created_at:string; updated_at:string };
-export function listCalculatedFields(tenantId:string){ return api<{data:CalculatedField[]}>(`/tenants/${tenantId}/calculated-fields`); }
-export function previewCalculatedField(tenantId:string,payload:Record<string,unknown>){ return api<CustomPreview>(`/tenants/${tenantId}/calculated-fields/preview`,{method:'POST',body:JSON.stringify(payload)}); }
-export function createCalculatedField(tenantId:string,payload:Record<string,unknown>){ return api<CalculatedField>(`/tenants/${tenantId}/calculated-fields`,{method:'POST',body:JSON.stringify(payload)}); }
-export function setCalculatedFieldStatus(tenantId:string,id:string,status:CustomIndicatorStatus){ return api<CalculatedField>(`/tenants/${tenantId}/calculated-fields/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}); }
+export type CalculatedField = {
+  id: string;
+  name: string;
+  description: string | null;
+  module_key: string;
+  field_key: string;
+  calculation_kind: 'row_calculated_field' | 'aggregate_calculated_measure';
+  formula_config: Record<string, unknown>;
+  formula_preview: string;
+  value_format: string;
+  decimal_places: number;
+  status: CustomIndicatorStatus;
+  available_for_indicators: boolean;
+  available_for_dashboard: boolean;
+  available_for_reports: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export function listCalculatedFields(tenantId: string) {
+  return api<{ data: CalculatedField[] }>(
+    `/tenants/${tenantId}/calculated-fields`,
+  );
+}
+export function previewCalculatedField(
+  tenantId: string,
+  payload: Record<string, unknown>,
+) {
+  return api<CustomPreview>(`/tenants/${tenantId}/calculated-fields/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+export function createCalculatedField(
+  tenantId: string,
+  payload: Record<string, unknown>,
+) {
+  return api<CalculatedField>(`/tenants/${tenantId}/calculated-fields`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+export function setCalculatedFieldStatus(
+  tenantId: string,
+  id: string,
+  status: CustomIndicatorStatus,
+) {
+  return api<CalculatedField>(
+    `/tenants/${tenantId}/calculated-fields/${id}/status`,
+    { method: 'PATCH', body: JSON.stringify({ status }) },
+  );
+}

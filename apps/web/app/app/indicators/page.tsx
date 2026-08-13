@@ -10,6 +10,10 @@ import {
 import { getCurrentUserPermissions, hasPermission } from '../../../lib/rbac';
 import { createBrowserSupabaseClient } from '../../../lib/supabase';
 import {
+  functionalFamilyLabel,
+  sortFunctionalCatalog,
+} from '../../../lib/functional-catalog';
+import {
   createCalculatedField,
   createCustomIndicator,
   listCalculatedFields,
@@ -120,6 +124,7 @@ type FormState = {
   module_key: string;
   family_key: string;
   indicator_type: string;
+  base_table: string;
   row: string;
   column: string;
   value: ValueItem;
@@ -158,6 +163,7 @@ const initialForm: FormState = {
   module_key: 'transport',
   family_key: 'Operacional',
   indicator_type: 'KPI numérico',
+  base_table: 'operation_records',
   row: '',
   column: '',
   value: { field: '', aggregation: 'SOMA', format: 'currency', label: '' },
@@ -240,12 +246,14 @@ export default function IndicatorsPage() {
   }
   const catalog = useMemo(
     () =>
-      fields.filter(
-        (f) =>
-          f.base_table === 'operation_records' &&
-          !technicalBlocked.includes(f.field_key),
+      sortFunctionalCatalog(
+        fields.filter(
+          (f) =>
+            f.base_table === form.base_table &&
+            !technicalBlocked.includes(f.field_key),
+        ),
       ),
-    [fields],
+    [fields, form.base_table],
   );
   useEffect(() => {
     if (!catalog.length) return;
@@ -281,12 +289,15 @@ export default function IndicatorsPage() {
     });
   }, [catalog]);
   const calcPayload = (status: 'draft' | 'active') => {
+    const calcBase =
+      fields.find((field) => field.field_key === calcForm.left_field)
+        ?.base_table ?? 'operation_records';
     const expression =
       calcForm.template === 'date_diff_days'
         ? {
             type: 'date_diff_days',
-            start: { table: 'operation_records', field: calcForm.left_field },
-            end: { table: 'operation_records', field: calcForm.right_field },
+            start: { table: calcBase, field: calcForm.left_field },
+            end: { table: calcBase, field: calcForm.right_field },
           }
         : (() => {
             const rightBase = calcForm.right_field
@@ -294,13 +305,13 @@ export default function IndicatorsPage() {
                 ? {
                     aggregate: 'sum',
                     field: {
-                      table: 'operation_records',
+                      table: calcBase,
                       field: calcForm.right_field,
                     },
                   }
                 : {
                     field: {
-                      table: 'operation_records',
+                      table: calcBase,
                       field: calcForm.right_field,
                     },
                   }
@@ -320,13 +331,13 @@ export default function IndicatorsPage() {
                 ? {
                     aggregate: 'sum',
                     field: {
-                      table: 'operation_records',
+                      table: calcBase,
                       field: calcForm.left_field,
                     },
                   }
                 : {
                     field: {
-                      table: 'operation_records',
+                      table: calcBase,
                       field: calcForm.left_field,
                     },
                   };
@@ -409,7 +420,7 @@ export default function IndicatorsPage() {
     available_for_dashboard: status === 'active',
     available_for_reports: status === 'active',
     calculation_config: {
-      base_table: 'operation_records',
+      base_table: form.base_table || 'operation_records',
       operation_key: 'PIVOT_CONTROLLED',
       rationale: form.rationale,
       values: [
@@ -1193,12 +1204,34 @@ function CreatorModal({
             <h3 className="font-bold">B) Parâmetros do indicador</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <Select
+                label="Base funcional"
+                value={form.base_table}
+                onChange={(base_table) =>
+                  setForm({
+                    ...form,
+                    base_table,
+                    row: '',
+                    column: '',
+                    value: { ...form.value, field: '' },
+                  })
+                }
+                options={[
+                  ...new Map(
+                    fields.map((f) => [
+                      f.base_table,
+                      { value: f.base_table, label: functionalFamilyLabel(f) },
+                    ]),
+                  ).values(),
+                ]}
+              />
+              <div />
+              <Select
                 label="Linha"
                 value={form.row}
                 onChange={(v) => setForm({ ...form, row: v })}
                 options={[
                   { value: '', label: 'Sem linha' },
-                  ...fields.map(fieldOption),
+                  ...fields.filter((f) => f.is_dimension).map(fieldOption),
                 ]}
               />
               <Select
@@ -1207,7 +1240,7 @@ function CreatorModal({
                 onChange={(v) => setForm({ ...form, column: v })}
                 options={[
                   { value: '', label: 'Sem coluna' },
-                  ...fields.map(fieldOption),
+                  ...fields.filter((f) => f.is_dimension).map(fieldOption),
                 ]}
               />
               <div className="md:col-span-2">
@@ -1216,7 +1249,13 @@ function CreatorModal({
                     label="Valor"
                     value={form.value.field}
                     onChange={pickValue}
-                    options={fields.map(fieldOption)}
+                    options={fields
+                      .filter(
+                        (f) =>
+                          f.is_measure ||
+                          f.allowed_operations.includes('CONTAGEM'),
+                      )
+                      .map(fieldOption)}
                   />
                   <button
                     type="button"
