@@ -63,6 +63,8 @@ type Field = {
 type MetricOperation = 'CONTAGEM' | 'SOMA' | 'MÉDIA' | 'MÍNIMO' | 'MÁXIMO';
 type PivotItem = {
   field: string;
+  field_key?: string;
+  base_table?: TableName;
   label?: string;
   source?: 'native' | 'calculated';
   aggregation?: MetricOperation | 'CONTAGEM_DISTINTA' | 'VALOR_CALCULADO';
@@ -84,6 +86,8 @@ type Config = {
   default_date_field?: string;
   filters?: Array<{
     field: string;
+    field_key?: string;
+    base_table?: TableName;
     operator: string;
     value?: unknown;
     value_to?: unknown;
@@ -445,6 +449,19 @@ export class CustomIndicatorsService {
     if (!tables.includes(table as TableName))
       throw new BadRequestException('Base inválida.');
     if (!ops.includes(op)) throw new BadRequestException('Operação inválida.');
+    const pivotItem = (value: unknown): PivotItem => {
+      const item = value as Record<string, unknown>;
+      const base = String(item.base_table || table);
+      if (!tables.includes(base as TableName))
+        throw new BadRequestException('Base inválida.');
+      const field = String(item.field_key || item.field || '');
+      return {
+        ...item,
+        field,
+        field_key: field,
+        base_table: base as TableName,
+      } as PivotItem;
+    };
     return {
       base_table: table as TableName,
       operation_key: op as Operation,
@@ -455,14 +472,12 @@ export class CustomIndicatorsService {
       numerator_operation: this.metricOp(c.numerator_operation),
       denominator_operation: this.metricOp(c.denominator_operation),
       default_date_field: c.default_date_field as string,
-      filters: Array.isArray(c.filters) ? (c.filters as Config['filters']) : [],
-      values: Array.isArray(c.values)
-        ? (c.values as Config['values'])
-        : undefined,
-      rows: Array.isArray(c.rows) ? (c.rows as Config['rows']) : undefined,
-      columns: Array.isArray(c.columns)
-        ? (c.columns as Config['columns'])
-        : undefined,
+      filters: Array.isArray(c.filters)
+        ? (c.filters.map(pivotItem) as Config['filters'])
+        : [],
+      values: Array.isArray(c.values) ? c.values.map(pivotItem) : undefined,
+      rows: Array.isArray(c.rows) ? c.rows.map(pivotItem) : undefined,
+      columns: Array.isArray(c.columns) ? c.columns.map(pivotItem) : undefined,
       rationale: c.rationale as string,
       period: c.period as Config['period'],
       grouping: c.grouping as Config['grouping'],
@@ -475,6 +490,11 @@ export class CustomIndicatorsService {
     const cat = await this.catalog(tenantId);
     const by = new Map(
       cat
+        .filter((f) => !blockedFields.includes(f.field_key))
+        .map((f) => [`${f.base_table}:${f.field_key}`, f]),
+    );
+    const legacy = new Map(
+      cat
         .filter(
           (f) =>
             f.base_table === cfg.base_table &&
@@ -482,10 +502,14 @@ export class CustomIndicatorsService {
         )
         .map((f) => [f.field_key, f]),
     );
+    for (const [key, field] of legacy) by.set(key, field);
+    const pivotItems = [
+      ...(cfg.values ?? []),
+      ...(cfg.rows ?? []),
+      ...(cfg.columns ?? []),
+    ];
     const pivotUsed = [
-      ...(cfg.values ?? []).map((v) => v.field),
-      ...(cfg.rows ?? []).map((v) => v.field),
-      ...(cfg.columns ?? []).map((v) => v.field),
+      ...pivotItems.map((v) => this.itemKey(v, cfg.base_table)),
     ];
     const used = [
       ...pivotUsed,
@@ -505,12 +529,20 @@ export class CustomIndicatorsService {
       if (!by.has(f))
         throw new BadRequestException('Campo fora do catálogo controlado.');
     if (cfg.operation_key === 'PIVOT_CONTROLLED') {
+      if (
+        !this.safeRelation([
+          ...new Set(pivotItems.map((v) => v.base_table ?? cfg.base_table)),
+        ])
+      )
+        throw new BadRequestException(
+          'Essa combinação de campos ainda não possui relação canônica segura.',
+        );
       if ((cfg.columns ?? []).length > 1)
         throw new BadRequestException('Colunas aceitam no máximo um campo.');
       if ((cfg.rows ?? []).length > 1)
         throw new BadRequestException('Linhas aceitam no máximo um campo.');
       for (const v of cfg.values ?? []) {
-        const field = by.get(v.field);
+        const field = by.get(this.itemKey(v, cfg.base_table));
         const agg = String(v.aggregation ?? 'SOMA');
         if (!pivotAggregations.includes(agg))
           throw new BadRequestException('Agregação inválida para indicador.');
@@ -554,7 +586,7 @@ export class CustomIndicatorsService {
           );
       }
       for (const flt of cfg.filters ?? []) {
-        const field = by.get(flt.field);
+        const field = by.get(this.itemKey(flt, cfg.base_table));
         if (flt.operator === 'entre')
           throw new BadRequestException(
             'Operador entre ainda não está disponível nesta tela.',
@@ -655,11 +687,18 @@ export class CustomIndicatorsService {
     try {
       ({ by } = await this.validate(tenantId, cfg));
       failureStage = 'load_rows';
-      const loadedRows = await this.rows(
-        tenantId,
-        cfg.base_table,
-        filters.include_archived === true,
-      );
+      const loadedRows =
+        cfg.operation_key === 'PIVOT_CONTROLLED'
+          ? await this.pivotRows(
+              tenantId,
+              cfg,
+              filters.include_archived === true,
+            )
+          : await this.rows(
+              tenantId,
+              cfg.base_table,
+              filters.include_archived === true,
+            );
       diagnostics.records_before_filter = loadedRows.length;
       failureStage = 'apply_runtime_filters';
       const scope = await this.previewScope(tenantId, loadedRows, filters, by);
@@ -872,8 +911,10 @@ export class CustomIndicatorsService {
     const value = c.values?.[0];
     if (!value)
       return { value: null, series: [], table: [], ignored: 0, used: 0 };
-    const row = c.rows?.[0]?.field;
-    const column = c.columns?.[0]?.field;
+    const row = c.rows?.[0] ? this.itemKey(c.rows[0], c.base_table) : undefined;
+    const column = c.columns?.[0]
+      ? this.itemKey(c.columns[0], c.base_table)
+      : undefined;
     const measure = this.pivotMeasure(rows, value, by);
     if (row && column) {
       const rowMap = new Map<string, Record<string, unknown>[]>();
@@ -936,7 +977,8 @@ export class CustomIndicatorsService {
     value: PivotItem,
     by: Map<string, Field>,
   ) {
-    const field = by.get(value.field);
+    const key = this.itemKey(value, 'operation_records');
+    const field = by.get(key);
     const agg = value.aggregation as
       MetricOperation | 'CONTAGEM_DISTINTA' | 'VALOR_CALCULADO' | undefined;
     if (field?.source === 'calculated' && field.formula_config) {
@@ -954,9 +996,9 @@ export class CustomIndicatorsService {
     if (agg === 'CONTAGEM')
       return { value: rows.length, used: rows.length, ignored: 0 };
     if (agg === 'CONTAGEM_DISTINTA') {
-      const present = rows.filter((r) => this.filled(r[value.field]));
+      const present = rows.filter((r) => this.filled(r[key]));
       return {
-        value: new Set(present.map((r) => r[value.field])).size,
+        value: new Set(present.map((r) => r[key])).size,
         used: present.length,
         ignored: rows.length - present.length,
       };
@@ -967,7 +1009,7 @@ export class CustomIndicatorsService {
       ['MÍNIMO', 'MÁXIMO'].includes(String(agg))
     ) {
       const dates = rows
-        .map((r) => this.dateValue(r[value.field]))
+        .map((r) => this.dateValue(r[key]))
         .filter((v): v is { time: number; iso: string } => v !== null);
       const selected =
         agg === 'MÍNIMO'
@@ -986,7 +1028,7 @@ export class CustomIndicatorsService {
       };
     }
     const nums = rows
-      .map((r) => this.numericValue(r[value.field]))
+      .map((r) => this.numericValue(r[key]))
       .filter((v): v is number => v !== null);
     const result =
       agg === 'MÉDIA'
@@ -1317,7 +1359,7 @@ export class CustomIndicatorsService {
       (current, filter) =>
         current.filter((row) =>
           this.matchesFilter(
-            row[filter.field],
+            row[this.itemKey(filter, cfg.base_table)],
             filter.operator,
             filter.value,
             filter.value_to,
@@ -1697,6 +1739,85 @@ export class CustomIndicatorsService {
         ]),
       ];
     return [];
+  }
+
+  private itemKey(
+    item: Pick<PivotItem, 'field' | 'field_key' | 'base_table'>,
+    fallback: TableName,
+  ) {
+    return `${item.base_table ?? fallback}:${item.field_key ?? item.field}`;
+  }
+  private safeRelation(input: TableName[]) {
+    const names = [...new Set(input)];
+    if (names.length <= 1) return true;
+    return (
+      names.length === 2 &&
+      names.includes('operation_records') &&
+      names.some((name) =>
+        [
+          'finance_records',
+          'transport_records',
+          'occurrence_analytics_view',
+        ].includes(name),
+      )
+    );
+  }
+  private async pivotRows(
+    tenantId: string,
+    cfg: Config,
+    includeArchived: boolean,
+  ) {
+    const items = [
+      ...(cfg.values ?? []),
+      ...(cfg.rows ?? []),
+      ...(cfg.columns ?? []),
+      ...(cfg.filters ?? []),
+    ];
+    const usedTables = [
+      ...new Set(items.map((item) => item.base_table ?? cfg.base_table)),
+    ];
+    if (!this.safeRelation(usedTables))
+      throw new BadRequestException(
+        'Essa combinação de campos ainda não possui relação canônica segura.',
+      );
+    const loaded = new Map<TableName, Record<string, unknown>[]>();
+    for (const table of usedTables)
+      loaded.set(table, await this.rows(tenantId, table, includeArchived));
+    const qualify = (table: TableName, row: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [`${table}:${key}`, value]),
+      );
+    if (usedTables.length === 1) {
+      const table = usedTables[0];
+      return (loaded.get(table) ?? []).map((row) => ({
+        ...row,
+        ...qualify(table, row),
+      }));
+    }
+    const related = usedTables.find((table) => table !== 'operation_records')!;
+    const operations = new Map(
+      (loaded.get('operation_records') ?? []).map((row) => [
+        String(row.id),
+        row,
+      ]),
+    );
+    const relationKey =
+      related === 'occurrence_analytics_view'
+        ? 'primary_operation_record_id'
+        : 'operation_record_id';
+    return (loaded.get(related) ?? []).flatMap((row) => {
+      const operation = operations.get(String(row[relationKey] ?? ''));
+      return operation
+        ? [
+            {
+              ...operation,
+              ...row,
+              ...qualify('operation_records', operation),
+              ...qualify(related, row),
+            },
+          ]
+        : [];
+    });
   }
 
   private async rows(
