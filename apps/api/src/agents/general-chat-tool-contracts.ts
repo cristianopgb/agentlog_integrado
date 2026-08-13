@@ -2,6 +2,7 @@ export const GENERAL_CHAT_TOOL_KEYS = [
   'analytics.map.get','analytics.result.get','analytics.context.analyze','operational.record.find','knowledge.guidance.search',
   'indicators.list_available','indicators.get_result','dashboard.get_snapshot','reports.get_job_snapshot',
   'treated_data.summary.get','treated_data.aggregate_records','treated_data.search_records','treated_data.get_record_detail',
+  'occurrences.analytics.list','occurrences.analytics.detail',
 ] as const;
 
 export type GeneralChatToolKey=(typeof GENERAL_CHAT_TOOL_KEYS)[number];
@@ -13,6 +14,7 @@ export const GENERAL_CHAT_FUNCTION_TO_KEY:Record<string,GeneralChatToolKey>={
   dashboard_get_snapshot:'dashboard.get_snapshot',reports_get_job_snapshot:'reports.get_job_snapshot',
   treated_data_summary_get:'treated_data.summary.get',treated_data_aggregate_records:'treated_data.aggregate_records',
   treated_data_search_records:'treated_data.search_records',treated_data_get_record_detail:'treated_data.get_record_detail',
+  occurrences_analytics_list:'occurrences.analytics.list',occurrences_analytics_detail:'occurrences.analytics.detail',
 };
 
 export const GENERAL_CHAT_FUNCTION_NAMES=Object.keys(GENERAL_CHAT_FUNCTION_TO_KEY);
@@ -22,7 +24,7 @@ export function isOperationalMessage(message:string){return /\b(ocorr[eê]ncias?
 const period={type:'object',properties:{preset:{type:'string',enum:['today','current_week','current_month','previous_month','custom']},start:{type:'string'},end:{type:'string'}},additionalProperties:false};
 const filters={type:'object',properties:{delivery_number:{type:'string'},cte_number:{type:'string'},invoice_number:{type:'string'},manifest_number:{type:'string'},customer_name:{type:'string'},shipper_name:{type:'string'},driver_name:{type:'string'},vehicle_plate:{type:'string'},status:{type:'string'},origin_state:{type:'string'},origin_city:{type:'string'},destination_state:{type:'string'},destination_city:{type:'string'}},additionalProperties:false};
 export const GENERAL_CHAT_FILTER_FIELDS={record:['delivery_number','cte_number','invoice_number','manifest_number','vehicle_plate','status','customer_name','driver_name','shipper_name','origin_state','destination_state'],analytics:['customer_name','shipper_name','driver_name','vehicle_plate','status','origin_state','origin_city','destination_state','destination_city']} as const;
-export const GENERAL_CHAT_ALLOWED_ARGUMENTS:Record<GeneralChatToolKey,readonly string[]>={'analytics.map.get':['search'],'analytics.result.get':['result_key','metric_key','breakdown_by','period','filters'],'analytics.context.analyze':['context_type','context_value','period'],'operational.record.find':['identifier_type','identifier_value','filters','period','limit'],'knowledge.guidance.search':['topic','user_question','limit'],'indicators.list_available':[],'indicators.get_result':['id','name','filters','compare'],'dashboard.get_snapshot':['dashboard_id'],'reports.get_job_snapshot':['report_job_id','report_id','report_name'],'treated_data.summary.get':[],'treated_data.aggregate_records':['metric','group_by','filters'],'treated_data.search_records':['identifier','filters','limit'],'treated_data.get_record_detail':['id']};
+export const GENERAL_CHAT_ALLOWED_ARGUMENTS:Record<GeneralChatToolKey,readonly string[]>={'analytics.map.get':['search'],'analytics.result.get':['result_key','metric_key','breakdown_by','period','filters'],'analytics.context.analyze':['context_type','context_value','period'],'operational.record.find':['identifier_type','identifier_value','filters','period','limit'],'knowledge.guidance.search':['topic','user_question','limit'],'indicators.list_available':[],'indicators.get_result':['id','name','filters','compare'],'dashboard.get_snapshot':['dashboard_id'],'reports.get_job_snapshot':['report_job_id','report_id','report_name'],'treated_data.summary.get':[],'treated_data.aggregate_records':['metric','group_by','filters'],'treated_data.search_records':['identifier','filters','limit'],'treated_data.get_record_detail':['id'],'occurrences.analytics.list':['filters','limit'],'occurrences.analytics.detail':['occurrence_number']};
 const fn=(name:string,description:string,properties:Record<string,unknown>,required:string[]=[])=>( {type:'function',name,description,parameters:{type:'object',properties,...(required.length?{required}:{}),additionalProperties:false}} );
 
 /** Single OpenAI function contract used by typed chat; Realtime mirrors these strict schemas in the web client. */
@@ -40,4 +42,6 @@ export function generalChatToolDefinitions(){return [
   fn('treated_data_aggregate_records','Executa agregação permitida sobre registros canônicos vigentes.',{metric:{type:'string',enum:['deliveries_count','occurrences_count','cte_count','sum_freight','sum_weight','volume_count','avg_freight_informed']},group_by:{type:'string',enum:['driver_name','customer_name','shipper_name','status','origin_city','origin_state','destination_city','destination_state','origin','destination','route','none']},filters},['metric']),
   fn('treated_data_search_records','Busca limitada de registros canônicos vigentes.',{identifier:{type:'string'},filters,limit:{type:'integer',minimum:1,maximum:10}}),
   fn('treated_data_get_record_detail','Obtém detalhe seguro de um registro canônico vigente.',{id:{type:'string'}},['id']),
+  fn('occurrences_analytics_list','Lista até vinte ocorrências na visão analítica tratada.',{filters:{type:'object',properties:{current_status:{type:'string'},current_priority:{type:'string'},source_channel:{type:'string'},sla_status:{type:'string'},has_pending_actions:{type:'boolean'}},additionalProperties:false},limit:{type:'integer',minimum:1,maximum:20}}),
+  fn('occurrences_analytics_detail','Detalha uma ocorrência pelo número na visão analítica tratada.',{occurrence_number:{type:'string',pattern:'^OC\\d+$'}},['occurrence_number']),
 ];}

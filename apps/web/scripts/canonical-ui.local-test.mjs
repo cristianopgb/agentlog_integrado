@@ -12,6 +12,9 @@ const dashboardApi=readFileSync(new URL('../../../apps/api/src/dashboards/dashbo
 const reports=readFileSync(new URL('../../../apps/api/src/reports/reports.service.ts',import.meta.url),'utf8');
 const reportBuilder=readFileSync(new URL('../app/app/setup/reports/[id]/page.tsx',import.meta.url),'utf8');
 const apiConnector=readFileSync(new URL('../lib/api-connector-api.ts',import.meta.url),'utf8');
+const indicatorBuilder=readFileSync(new URL('../app/app/indicators/page.tsx',import.meta.url),'utf8');
+const indicatorClient=readFileSync(new URL('../lib/indicators-api.ts',import.meta.url),'utf8');
+const functionalCatalog=readFileSync(new URL('../lib/functional-catalog.ts',import.meta.url),'utf8');
 const assert=(ok,message)=>{if(!ok)throw new Error(message)};
 for(const field of ['driver_phone','driver_whatsapp','pod_status','billing_status'])assert(labels.includes(`${field}:`),`Label ausente: ${field}`);
 for(const field of ['driver_phone','driver_whatsapp'])assert(migration.includes(`'${field}'`),`Destino de pareamento ausente: ${field}`);
@@ -50,4 +53,17 @@ assert(setup.includes('Reprocessar dados tratados')&&setup.includes('Não busca 
 assert(apiConnector.includes('/staging-batches/${batchId}/reprocess'),'Cliente chama endpoint de reprocessamento incorreto.');
 for(const counter of ['processed_records','created_records','updated_records','ignored_records','error_records','published_records','not_published_records'])assert(setup.includes(`result.${counter}`),`UI não exibe contador ${counter}.`);
 assert(panel.includes('campo(s) ignorado(s) nesta integração')&&panel.includes('não participam do De/Para, formatos ou sincronização'),'UI não informa campos ignorados.');
+const mockFields=[
+  {base_table:'operation_records',base_label:'Operações',field_key:'delivery_number',label:'Entrega',is_dimension:true,is_measure:false,allowed_operations:['CONTAGEM']},
+  {base_table:'occurrence_analytics_view',base_label:'Ocorrências operacionais',field_key:'current_status',label:'Status',is_dimension:true,is_measure:false,allowed_operations:['CONTAGEM']},
+  {base_table:'occurrence_analytics_view',base_label:'Ocorrências operacionais',field_key:'pending_actions_count',label:'Pendências',is_dimension:false,is_measure:true,allowed_operations:['SOMA']},
+];
+const bases=[...new Map(mockFields.map(field=>[field.base_table,field.base_label])).values()];
+const occurrenceFields=mockFields.filter(field=>field.base_table==='occurrence_analytics_view');
+assert(bases.includes('Operações')&&bases.includes('Ocorrências operacionais'),'Mock da API não produz as duas bases funcionais.');
+assert(occurrenceFields.some(field=>field.is_dimension&&field.label==='Status'),'Linha de Ocorrências não oferece Status.');
+assert(occurrenceFields.some(field=>field.is_measure&&field.label==='Pendências'),'Valores de Ocorrências não oferecem Pendências.');
+assert(indicatorClient.includes('base_label?: string')&&indicatorClient.includes('family_label?: string'),'Cliente remove labels funcionais da resposta.');
+assert(indicatorBuilder.includes('field.base_table === form.base_table')&&indicatorBuilder.includes("base_table: form.base_table || 'operation_records'"),'Builder não filtra seletores/salva a base selecionada.');
+assert(functionalCatalog.includes("occurrence_analytics_view: 'Ocorrências operacionais'")&&!indicatorBuilder.includes('label: f.base_table'), 'UI expõe o nome técnico da view.');
 console.log('canonical ui: ok');

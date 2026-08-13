@@ -20,6 +20,11 @@ const valueMappings=readFileSync(join(root,'apps/api/src/api-integrations/value-
 const ignoreMigration=readFileSync(join(root,'supabase/migrations/202608120001_canonical_value_domains_and_ignore_decisions.sql'),'utf8');
 const hotfixMigration=readFileSync(join(root,'supabase/migrations/202608120002_delivery_status_occurrence_indicators_hotfix.sql'),'utf8');
 const runtimeHotfixMigration=readFileSync(join(root,'supabase/migrations/202608120003_occurrence_catalog_runtime_hotfix.sql'),'utf8');
+const customIndicators=readFileSync(join(root,'apps/api/src/custom-indicators/custom-indicators.service.ts'),'utf8');
+const occurrenceTools=readFileSync(join(root,'apps/api/src/agents/agent-tool-executor.service.ts'),'utf8');
+const generalRouter=readFileSync(join(root,'apps/api/src/agents/general-chat-orchestrator.service.ts'),'utf8');
+const controlledAiMigration=readFileSync(join(root,'supabase/migrations/202607200001_sprint_17a_controlled_ai.sql'),'utf8');
+const occurrenceToolsMigration=readFileSync(join(root,'supabase/migrations/202608130001_hotfix_1_occurrence_agent_tools.sql'),'utf8');
 const forbidden=['carga','motorista','telefone'].join('_');
 const forbiddenWhatsapp=['carga','motorista','whatsapp'].join('_');
 
@@ -27,6 +32,16 @@ for(const field of ['delivery_number','driver_phone','driver_whatsapp','pod_stat
   assert(migration.includes(`'${field}'`)||normalization.includes(`'${field}'`),`Campo canônico ausente: ${field}`);
 assert(!migration.toLowerCase().includes('hostgator'),'Catálogo não pode conter destino de cliente.');
 assert(!migration.includes(forbidden)&&!migration.includes(forbiddenWhatsapp),'Campo de origem específico não pode ser nativo.');
+assert(customIndicators.includes("'occurrence_analytics_view'")&&customIndicators.includes("base_label: occurrence")&&customIndicators.includes("'Ocorrências operacionais'"),'fields() não publica a base funcional de ocorrências.');
+for(const field of ['current_status','occurrence_number','pending_actions_count'])assert(hotfixMigration.includes(`'${field}'`),`Catálogo de indicador não contém ${field}.`);
+for(const unsafe of ['raw_payload','storage_path','external_url'])assert(customIndicators.match(new RegExp(`blockedFields[\\s\\S]{0,1200}['\"]${unsafe}['\"]`)),'fields() não bloqueia campo proibido.');
+assert(occurrenceTools.includes("this.db.select<any[]>('occurrence_analytics_view'")&&occurrenceTools.includes('tenant_id=eq.${t}'),'Tools de ocorrência não usam a view com tenant.');
+assert(occurrenceTools.includes("'sql' in input")&&occurrenceTools.includes("'table' in input")&&occurrenceTools.includes("'field' in input"),'Tools aceitam consulta arbitrária.');
+for(const unsafe of ['occurrence_id','operation_record_id','responsible_user_id','created_by','updated_by'])assert(!occurrenceTools.match(new RegExp(`const select=['\"][^'\"]*${unsafe}`)),`Detalhe expõe ${unsafe}.`);
+assert(generalRouter.includes("resolved_tool_key:'occurrences.analytics.detail'")&&generalRouter.includes('/\\bOC\\d+\\b/i'),'Número OC não roteia para detail.');
+assert(generalRouter.includes("resolved_tool_key:'occurrences.analytics.list'")&&generalRouter.includes('quais\\s+ocorr'),'Pedido de números não roteia para list.');
+assert(/create table public\.ai_tools[\s\S]{0,300}tool_key text not null unique/.test(controlledAiMigration),'Migration das tools depende de unicidade ausente em ai_tools.tool_key.');
+assert(occurrenceToolsMigration.includes('on conflict(tool_key) do update'),'Registro idempotente das tools não usa a constraint validada de tool_key.');
 const service=Object.create(NormalizationService.prototype) as any;
 assert(service.resolveTarget('deliveries','delivery_number')?.field==='delivery_number','Alias legado delivery_number deixou de resolver.');
 assert(service.resolveTarget('operation_records','delivery_status')?.field==='delivery_status','delivery_status deve publicar na própria coluna.');
