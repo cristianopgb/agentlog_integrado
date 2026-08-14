@@ -8,6 +8,7 @@ import {
   linkInboxOccurrence,
   listInbox,
   registerInboxMessage,
+  uploadInboxAttachment,
   setInboxStatus,
   type InboxConversation,
   type InboxDetail,
@@ -62,6 +63,15 @@ export default function InboxPage() {
     if (tenant && selected)
       open(tenant, selected).catch((e) => setError((e as Error).message));
   }, [tenant, selected, open]);
+  useEffect(() => {
+    if (!tenant) return;
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      void load(tenant);
+      if (selected) void open(tenant, selected);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [tenant, selected, load, open]);
   const refresh = async () => {
     if (tenant) {
       await load(tenant);
@@ -243,6 +253,17 @@ export default function InboxPage() {
                     </div>
                   ))
                 )}
+                {detail.attachments.map((a) => (
+                  <a
+                    key={a.id}
+                    href={a.download_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block rounded-lg border bg-white p-3 text-sm text-blue-700"
+                  >
+                    📎 {a.original_filename}
+                  </a>
+                ))}
               </div>
               <form
                 className="flex gap-2 border-t bg-white p-4"
@@ -255,6 +276,24 @@ export default function InboxPage() {
                     });
                 }}
               >
+                <label
+                  className="cursor-pointer rounded-lg border p-2"
+                  aria-label="Anexar arquivo"
+                >
+                  📎
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/jpeg,image/png,image/webp,application/pdf,.doc,.docx,.txt"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file && tenant && selected)
+                        void action(() =>
+                          uploadInboxAttachment(tenant, selected, file),
+                        );
+                    }}
+                  />
+                </label>
                 <input
                   aria-label="Mensagem"
                   className="flex-1 rounded-lg border p-2"
@@ -294,7 +333,21 @@ export default function InboxPage() {
                   href={`/app/occurrences/${link.occurrence_id}`}
                   key={link.id}
                 >
-                  Abrir ocorrência
+                  <strong>
+                    {link.occurrence?.occurrence_number || 'Abrir ocorrência'}
+                  </strong>
+                  {link.occurrence && (
+                    <span className="mt-1 block text-xs text-slate-600">
+                      Status: {link.occurrence.current_status} · Prioridade:{' '}
+                      {link.occurrence.current_priority}
+                    </span>
+                  )}
+                  {link.occurrence?.latest_treatment && (
+                    <span className="mt-1 block line-clamp-2 text-xs text-slate-500">
+                      Última tratativa:{' '}
+                      {link.occurrence.latest_treatment.description}
+                    </span>
+                  )}
                 </Link>
               ))}
               {detail && detail.occurrence_links.length === 0 && (

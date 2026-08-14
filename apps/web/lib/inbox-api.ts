@@ -3,11 +3,13 @@ const base = () =>
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ??
   'http://localhost:3001';
 async function api<T>(path: string, init: RequestInit = {}) {
+  const contentHeaders: Record<string, string> =
+    init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' };
   const response = await fetch(`${base()}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${localStorage.getItem(tokenKey) ?? ''}`,
-      'Content-Type': 'application/json',
+      ...contentHeaders,
       ...init.headers,
     },
   });
@@ -53,6 +55,12 @@ export type InboxLink = {
   occurrence_id: string;
   relationship_type: string;
   created_at: string;
+  occurrence?: {
+    occurrence_number: string;
+    current_status: string;
+    current_priority: string;
+    latest_treatment?: { description: string; created_at: string } | null;
+  } | null;
 };
 export type InboxDetail = {
   conversation: Omit<
@@ -63,6 +71,14 @@ export type InboxDetail = {
   messages: InboxMessage[];
   occurrence_links: InboxLink[];
   events: Array<{ id: string; event_title: string | null; created_at: string }>;
+  attachments: Array<{
+    id: string;
+    message_id: string | null;
+    original_filename: string;
+    mime_type: string;
+    download_url: string;
+    created_at: string;
+  }>;
 };
 export const listInbox = (tenant: string, params = new URLSearchParams()) =>
   api<InboxConversation[]>(`/tenants/${tenant}/inbox/conversations?${params}`);
@@ -78,6 +94,18 @@ export const registerInboxMessage = (
     method: 'POST',
     body: JSON.stringify({ body, direction, sender_type: 'user' }),
   });
+export const uploadInboxAttachment = (
+  tenant: string,
+  id: string,
+  file: File,
+) => {
+  const form = new FormData();
+  form.append('file', file);
+  return api<InboxDetail['attachments'][number]>(
+    `/tenants/${tenant}/inbox/conversations/${id}/attachments`,
+    { method: 'POST', body: form },
+  );
+};
 export const assignInbox = (tenant: string, id: string) =>
   api(`/tenants/${tenant}/inbox/conversations/${id}/assign`, {
     method: 'PATCH',

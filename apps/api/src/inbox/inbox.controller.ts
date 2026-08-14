@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,7 +11,10 @@ import {
   Query,
   Req,
   UseGuards,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
@@ -48,6 +52,41 @@ export class InboxController {
     @Body() body: Record<string, unknown>,
   ) {
     return this.inbox.createMessage(tenant, id, req.user.id, body);
+  }
+  @Post(':id/attachments')
+  @RequirePermission([
+    'occurrences.inbox.reply',
+    'occurrences.inbox.create_message',
+  ])
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize:
+          (Number(process.env.INBOX_ATTACHMENT_MAX_MB) || 10) * 1024 * 1024,
+      },
+    }),
+  )
+  attachment(
+    @Param('tenantId') tenant: string,
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+    @UploadedFile()
+    file?: {
+      originalname: string;
+      mimetype: string;
+      size: number;
+      buffer: Buffer;
+    },
+  ) {
+    if (!file) throw new BadRequestException('Selecione um arquivo.');
+    return this.inbox.uploadAttachment(
+      tenant,
+      id,
+      'internal_user',
+      file,
+      undefined,
+      req.user.id,
+    );
   }
   @Patch(':id/assign') @RequirePermission('occurrences.inbox.assign') assign(
     @Param('tenantId') tenant: string,
