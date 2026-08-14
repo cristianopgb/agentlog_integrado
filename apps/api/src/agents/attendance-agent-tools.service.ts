@@ -12,6 +12,26 @@ const text = (v: unknown, n: string, max = 4000) => {
 const phone = (v: unknown) => text(v, 'phone', 30).replace(/\D/g, '');
 const uuid =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const treatmentTypes = new Set([
+  'contact_driver',
+  'contact_customer',
+  'contact_shipper',
+  'contact_recipient',
+  'internal_analysis',
+  'request_document',
+  'request_authorization',
+  'schedule_redelivery',
+  'confirm_return',
+  'financial_validation',
+  'operational_action',
+  'other',
+]);
+const normalized = (value: unknown) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 @Injectable()
 export class AttendanceAgentToolsService {
@@ -257,16 +277,35 @@ export class AttendanceAgentToolsService {
       phones = [transports[0]?.driver_phone, transports[0]?.driver_whatsapp]
         .map((v) => String(v ?? '').replace(/\D/g, ''))
         .filter(Boolean);
-    if (!phones.length)
+    if (!phones.length) {
+      const expectedName = normalized(rows[0].driver_name);
+      const informedName = normalized(a.driver_name);
+      if (expectedName && informedName && expectedName !== informedName)
+        return {
+          matched: 'denied',
+          reason: 'driver_name_mismatch',
+          safe_summary:
+            'Os dados informados divergem do motorista da operação.',
+        };
+      if (expectedName && informedName && expectedName === informedName)
+        return {
+          matched: 'uncertain',
+          reason: 'driver_phone_missing_name_matches',
+          safe_summary:
+            'Nome compatível; telefone da operação indisponível para conferência.',
+        };
       return {
         matched: 'uncertain',
-        reason: 'driver_phone_missing',
+        reason: expectedName
+          ? 'driver_phone_missing'
+          : 'insufficient_driver_data',
         safe_summary:
           'A operação não possui telefone tratado para conferência.',
       };
+    }
     const matched = phones.includes(p);
     return {
-      matched,
+      matched: matched ? 'confirmed' : 'denied',
       reason: matched ? 'phone_matches' : 'phone_mismatch',
       safe_summary: matched
         ? 'Motorista conferido pela operação.'
@@ -466,6 +505,55 @@ export class AttendanceAgentToolsService {
     if (rows.length > 1) return 'needs_clarification';
     return rows[0]?.id ?? null;
   }
+  private async resolveOperationReference(t: string, a: Args) {
+    const raw = [
+      a.operation_record_id,
+      a.operation_document_number,
+      a.operation_identifier,
+      a.document_number,
+      a.delivery_number,
+    ].find((value) => typeof value === 'string' && value.trim());
+    if (!raw)
+      return {
+        operation_record_id: null,
+        operation_resolved: false,
+        operation_document_number: null,
+      };
+    const identifier = text(raw, 'operation_identifier', 120);
+    if (uuid.test(identifier)) {
+      const rows = await this.db.select<any[]>(
+        'operation_records',
+        `select=id,document_number,delivery_number&tenant_id=eq.${t}&id=eq.${identifier}&deleted_at=is.null&limit=1`,
+      );
+      if (!rows[0]) return { operation_not_found: true };
+      return {
+        operation_record_id: rows[0].id,
+        operation_resolved: false,
+        operation_document_number:
+          rows[0].document_number ?? rows[0].delivery_number ?? null,
+      };
+    }
+    const encoded = encodeURIComponent(identifier);
+    const fields = [
+      'delivery_number',
+      'document_number',
+      'invoice_number',
+      'cte_number',
+      'manifest_number',
+    ];
+    const rows = await this.db.select<any[]>(
+      'operation_records',
+      `select=id,document_number,delivery_number&tenant_id=eq.${t}&or=(${fields.map((field) => `${field}.eq.${encoded}`).join(',')})&deleted_at=is.null&limit=2`,
+    );
+    if (rows.length > 1) return { needs_clarification: true };
+    if (!rows[0]) return { operation_not_found: true };
+    return {
+      operation_record_id: rows[0].id,
+      operation_resolved: true,
+      operation_document_number:
+        rows[0].document_number ?? rows[0].delivery_number ?? identifier,
+    };
+  }
   private async createOccurrence(t: string, a: Args, u: string) {
     const conversationId = text(a.conversation_id, 'conversation_id', 80),
       conversations = await this.db.select<any[]>(
@@ -474,38 +562,80 @@ export class AttendanceAgentToolsService {
       );
     if (!conversations[0])
       throw new BadRequestException('Conversa pública não encontrada.');
+    const operation = await this.resolveOperationReference(t, a);
+    if ('needs_clarification' in operation)
+      return { created: false, needs_clarification: true };
+    if ('operation_not_found' in operation)
+      return { created: false, operation_not_found: true };
     const linked = (
       await this.db.select<any[]>(
         'conversation_occurrence_links',
         `select=occurrence_id&tenant_id=eq.${t}&conversation_id=eq.${conversationId}&deleted_at=is.null&limit=1`,
       )
     )[0];
-    if (linked && a.explicit_new_problem !== true) {
+    if (linked) {
       const existing = (
         await this.db.select<any[]>(
           'occurrences',
           `select=id,occurrence_number&tenant_id=eq.${t}&id=eq.${linked.occurrence_id}&deleted_at=is.null&limit=1`,
         )
       )[0];
-      return {
-        created: false,
-        duplicate_blocked: true,
-        reason: 'existing_occurrence',
-        existing_occurrence: existing
-          ? {
-              occurrence_id: existing.id,
-              occurrence_number: existing.occurrence_number,
-            }
-          : { occurrence_id: linked.occurrence_id },
-        recommended_tool: 'attendance.occurrence.add_treatment',
-      };
+      const existingOperations = operation.operation_record_id
+        ? await this.db.select<any[]>(
+            'occurrence_operation_links',
+            `select=operation_record_id&tenant_id=eq.${t}&occurrence_id=eq.${linked.occurrence_id}&deleted_at=is.null&order=is_primary.desc&limit=10`,
+          )
+        : [];
+      if (
+        !operation.operation_record_id ||
+        existingOperations.some(
+          (link) => link.operation_record_id === operation.operation_record_id,
+        )
+      )
+        return {
+          created: false,
+          duplicate_blocked: true,
+          reason: 'existing_occurrence',
+          existing_occurrence: existing
+            ? {
+                occurrence_id: existing.id,
+                occurrence_number: existing.occurrence_number,
+              }
+            : { occurrence_id: linked.occurrence_id },
+          recommended_tool: 'attendance.occurrence.add_treatment',
+        };
     }
     if (a.operation_record_id === conversationId)
       throw new BadRequestException(
         'conversation_id não pode ser operation_record_id.',
       );
-    if (a.verification_result === false || a.verification_result === 'denied')
-      return { created: false, blocked: true, reason: 'driver_mismatch' };
+    let verificationResult = a.verification_result;
+    let verificationReason = a.verification_reason;
+    if (operation.operation_record_id && conversations[0].contact_id) {
+      const contact = (
+        await this.db.select<any[]>(
+          'contacts',
+          `select=name,phone&tenant_id=eq.${t}&id=eq.${conversations[0].contact_id}&deleted_at=is.null&limit=1`,
+        )
+      )[0];
+      if (contact?.phone) {
+        const verified: any = await this.verifyDriver(t, {
+          operation_record_id: operation.operation_record_id,
+          phone: contact.phone,
+          driver_name: contact.name,
+        });
+        verificationResult = verified.matched;
+        verificationReason = verified.reason;
+      }
+    }
+    if (verificationResult === false || verificationResult === 'denied')
+      return {
+        created: false,
+        blocked: true,
+        reason: 'driver_mismatch',
+        safe_message:
+          'Encontrei divergência entre seus dados e a entrega informada. Sua mensagem ficou registrada para validação da equipe operacional.',
+      };
     const reason = await this.resolveReason(t, a);
     if (reason === 'needs_clarification')
       return { created: false, needs_clarification: true };
@@ -516,8 +646,10 @@ export class AttendanceAgentToolsService {
         needs_more_data: ['reason_code'],
       };
     const uncertain =
-        a.verification_result === 'uncertain' &&
-        a.verification_reason === 'driver_phone_missing',
+        verificationResult === 'uncertain' &&
+        ['driver_phone_missing', 'driver_phone_missing_name_matches'].includes(
+          String(verificationReason),
+        ),
       audit = uncertain
         ? 'Vínculo motorista/operação não confirmado automaticamente porque a operação não possui telefone tratado.'
         : 'Ocorrência criada pelo agente de atendimento.';
@@ -528,10 +660,10 @@ export class AttendanceAgentToolsService {
       source_channel: 'public_chat',
       source_reference: conversationId,
       reason_id: reason,
-      operation_record_ids: a.operation_record_id
-        ? [a.operation_record_id]
+      operation_record_ids: operation.operation_record_id
+        ? [operation.operation_record_id]
         : [],
-      primary_operation_record_id: a.operation_record_id,
+      primary_operation_record_id: operation.operation_record_id,
       event_description: audit,
       metadata: {
         contact_id: a.contact_id ?? conversations[0].contact_id,
@@ -557,13 +689,32 @@ export class AttendanceAgentToolsService {
       occurrence_id: occurrence.id,
       occurrence_number: occurrence.occurrence_number,
       status: occurrence.current_status,
+      requires_human_review: Boolean(a.requires_human_review) || uncertain,
+      operation_resolved: operation.operation_resolved,
+      operation_record_id: operation.operation_record_id,
+      operation_document_number: operation.operation_document_number,
       needs_more_data: [],
     };
   }
   private async addTreatment(t: string, a: Args, u: string) {
     const resolved = await this.resolveOccurrenceId(t, a);
+    const originalType =
+      typeof a.treatment_type === 'string' ? a.treatment_type : 'other';
+    const aliases = new Set([
+      'registro',
+      'atualizacao',
+      'update',
+      'informacao',
+      'confirmacao',
+      'observacao',
+    ]);
+    const treatmentType = treatmentTypes.has(originalType)
+      ? originalType
+      : aliases.has(normalized(originalType))
+        ? 'other'
+        : 'other';
     const row = await this.occurrences.createTreatment(t, resolved.id, u, {
-      treatment_type: a.treatment_type ?? 'other',
+      treatment_type: treatmentType,
       description: a.description,
       status: 'open',
     });
@@ -584,7 +735,7 @@ export class AttendanceAgentToolsService {
             conversation?.channel === 'public_chat' ? 'public_chat' : 'inbox',
           conversation_id: conversationId,
           original_message: a.description,
-          classification: 'driver_update',
+          classification: `driver_update:${normalized(originalType).slice(0, 60) || 'other'}`,
           requires_human_review: true,
         },
       );
@@ -593,6 +744,7 @@ export class AttendanceAgentToolsService {
       created: true,
       treatment_id: (row as any).id,
       occurrence_number: resolved.occurrence_number,
+      status: (row as any).status ?? 'open',
       requires_human_review: true,
     };
   }

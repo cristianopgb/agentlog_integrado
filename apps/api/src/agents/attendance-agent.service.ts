@@ -56,11 +56,15 @@ const definitions: Record<
   },
   'attendance.occurrence.create': {
     description:
-      'Cria ocorrência local. conversation_id é sempre a conversa atual. reason_id, se usado, deve ser UUID; para classificação textual prefira reason_code, ou use reason_name. Nunca invente UUID.',
+      'Cria ocorrência local. operation_record_id deve ser o UUID interno retornado pela busca; para DOC/NF/CT-e/manifesto use operation_document_number ou operation_identifier. reason_id, se usado, deve ser UUID; para classificação textual prefira reason_code. Nunca invente UUID.',
     properties: {
       conversation_id: { type: 'string' },
       contact_id: { type: 'string' },
       operation_record_id: { type: 'string' },
+      operation_document_number: { type: 'string' },
+      operation_identifier: { type: 'string' },
+      document_number: { type: 'string' },
+      delivery_number: { type: 'string' },
       title: { type: 'string' },
       description: { type: 'string' },
       reason_id: { type: 'string' },
@@ -85,7 +89,23 @@ const definitions: Record<
       identifier: { type: 'string' },
       conversation_id: { type: 'string' },
       description: { type: 'string' },
-      treatment_type: { type: 'string' },
+      treatment_type: {
+        type: 'string',
+        enum: [
+          'contact_driver',
+          'contact_customer',
+          'contact_shipper',
+          'contact_recipient',
+          'internal_analysis',
+          'request_document',
+          'request_authorization',
+          'schedule_redelivery',
+          'confirm_return',
+          'financial_validation',
+          'operational_action',
+          'other',
+        ],
+      },
     },
     required: ['description'],
   },
@@ -156,10 +176,6 @@ export class AttendanceAgentService {
         `select=occurrence_id&tenant_id=eq.${tenantId}&conversation_id=eq.${conversationId}&deleted_at=is.null&limit=1`,
       )
     )[0];
-    if (occurrenceLink)
-      allowed = allowed.filter(
-        (key: string) => key !== 'attendance.occurrence.create',
-      );
     const messages = await this.db.select<any[]>(
       'inbox_messages',
       `select=direction,body&tenant_id=eq.${tenantId}&conversation_id=eq.${conversationId}&direction=in.(inbound,outbound)&deleted_at=is.null&order=created_at.asc&limit=30`,
@@ -176,7 +192,7 @@ export class AttendanceAgentService {
     try {
       let turn = await this.gateway.attendanceTurn({
         agent,
-        instructions: `${ATTENDANCE_SECURITY_GUARDRAILS}${occurrenceLink ? `\nContexto obrigatório: esta conversa já possui a ocorrência ${occurrenceLink.occurrence_id}. Trate a nova mensagem como atualização dessa ocorrência e use add_treatment; occurrence.create foi removida desta execução.` : ''}`,
+        instructions: `${ATTENDANCE_SECURITY_GUARDRAILS}${occurrenceLink ? `\nContexto: esta conversa já possui a ocorrência ${occurrenceLink.occurrence_id}. Sem novo documento, use add_treatment. Se a mensagem informar outro documento ou outra ocorrência explicitamente, compare a operação antes de decidir e só crie após validar a identidade.` : ''}`,
         messages: messages.map((x) => ({
           role: x.direction === 'inbound' ? 'user' : 'assistant',
           content: String(x.body ?? ''),

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -51,6 +52,7 @@ const openStatuses = [
 
 @Injectable()
 export class InboxService {
+  private readonly logger = new Logger(InboxService.name);
   constructor(private readonly db: SupabaseService) {}
   private text(value: unknown, name: string, required = false, max = 4000) {
     if (value == null && !required) return undefined;
@@ -118,7 +120,7 @@ export class InboxService {
       'inbox_message_attachments',
       `select=id,message_id,occurrence_id,original_filename,mime_type,size_bytes,storage_bucket,storage_path,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${conversation}&deleted_at=is.null&order=created_at.asc`,
     );
-    return Promise.all(
+    const signed = await Promise.allSettled(
       rows.map(async ({ storage_bucket, storage_path, ...row }) => ({
         ...row,
         download_url: await this.db.signedObjectUrl(
@@ -126,6 +128,9 @@ export class InboxService {
           String(storage_path),
         ),
       })),
+    );
+    return signed.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : [],
     );
   }
   async uploadAttachment(
@@ -290,41 +295,80 @@ export class InboxService {
   }
   async detail(tenant: string, id: string) {
     const conversation = await this.conversation(tenant, id);
+    const optional = async <T>(
+      label: string,
+      fallback: T,
+      query: Promise<T>,
+    ) => {
+      try {
+        return await query;
+      } catch (error) {
+        this.logger.error(
+          `inbox_detail_optional_failed tenant=${tenant} conversation=${id} part=${label}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        return fallback;
+      }
+    };
     const [contact, messages, links, events, attachments] = await Promise.all([
       conversation.contact_id
-        ? this.db.select<Row[]>(
-            'contacts',
-            `select=id,name,phone,email,contact_type,external_ref,is_active,created_at&tenant_id=eq.${tenant}&id=eq.${conversation.contact_id}&deleted_at=is.null&limit=1`,
+        ? optional(
+            'contact',
+            [],
+            this.db.select<Row[]>(
+              'contacts',
+              `select=id,name,phone,email,contact_type,external_ref,is_active,created_at&tenant_id=eq.${tenant}&id=eq.${conversation.contact_id}&deleted_at=is.null&limit=1`,
+            ),
           )
         : Promise.resolve([]),
-      this.db.select<Row[]>(
-        'inbox_messages',
-        `select=id,direction,sender_type,body,media_url,media_type,status,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.asc`,
+      optional(
+        'messages',
+        [],
+        this.db.select<Row[]>(
+          'inbox_messages',
+          `select=id,direction,sender_type,body,media_url,media_type,status,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.asc`,
+        ),
       ),
-      this.db.select<Row[]>(
-        'conversation_occurrence_links',
-        `select=id,occurrence_id,relationship_type,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.asc`,
+      optional(
+        'occurrence_links',
+        [],
+        this.db.select<Row[]>(
+          'conversation_occurrence_links',
+          `select=id,occurrence_id,relationship_type,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.asc`,
+        ),
       ),
-      this.db.select<Row[]>(
-        'inbox_events',
-        `select=id,event_type,event_title,event_description,created_by,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&order=created_at.asc`,
+      optional(
+        'events',
+        [],
+        this.db.select<Row[]>(
+          'inbox_events',
+          `select=id,event_type,event_title,event_description,created_by,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&order=created_at.asc`,
+        ),
       ),
-      this.attachments(tenant, id),
+      optional('attachments', [], this.attachments(tenant, id)),
     ]);
     const occurrenceLinks = await Promise.all(
       links.map(async (link) => {
         const occurrence =
           (
-            await this.db.select<Row[]>(
-              'occurrences',
-              `select=occurrence_number,current_status,current_priority,reason_id,updated_at&tenant_id=eq.${tenant}&id=eq.${link.occurrence_id}&deleted_at=is.null&limit=1`,
+            await optional(
+              'occurrence',
+              [],
+              this.db.select<Row[]>(
+                'occurrences',
+                `select=occurrence_number,current_status,current_priority,reason_id,updated_at&tenant_id=eq.${tenant}&id=eq.${link.occurrence_id}&deleted_at=is.null&limit=1`,
+              ),
             )
           )[0] ?? null;
         const treatment =
           (
-            await this.db.select<Row[]>(
-              'occurrence_treatments',
-              `select=description,created_at&tenant_id=eq.${tenant}&occurrence_id=eq.${link.occurrence_id}&deleted_at=is.null&order=created_at.desc&limit=1`,
+            await optional(
+              'treatments',
+              [],
+              this.db.select<Row[]>(
+                'occurrence_treatments',
+                `select=description,created_at&tenant_id=eq.${tenant}&occurrence_id=eq.${link.occurrence_id}&deleted_at=is.null&order=created_at.desc&limit=1`,
+              ),
             )
           )[0] ?? null;
         return {
