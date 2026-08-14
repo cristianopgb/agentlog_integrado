@@ -409,7 +409,19 @@ export default function InboxPage() {
               >
                 Ver detalhes
               </Link>
-            ) : null}
+            ) : (
+              <div>
+                <button
+                  disabled
+                  className="block w-full cursor-not-allowed rounded-lg border p-2 text-center text-sm font-semibold text-slate-400"
+                >
+                  Ver detalhes
+                </button>
+                <p className="mt-1 text-center text-xs text-slate-500">
+                  Nenhuma ocorrência vinculada.
+                </p>
+              </div>
+            )}
           </section>
         </aside>
       </div>

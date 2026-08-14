@@ -984,6 +984,10 @@ export class NormalizationService {
   }
   private resolveTarget(entityKey: string, fieldKey: string) {
     const aliased = aliases[fieldKey] ?? fieldKey;
+    // Driver contact data belongs exclusively to the treated transport
+    // extension, even when an older active mapping retained a core entity.
+    if (fieldKey === 'driver_phone' || fieldKey === 'driver_whatsapp')
+      return { entity: 'transport_records', field: fieldKey };
     if (legacyEntities.has(entityKey) || entityKey === 'operation_records') {
       return operationColumns.has(aliased)
         ? { entity: 'operation_records', field: aliased }

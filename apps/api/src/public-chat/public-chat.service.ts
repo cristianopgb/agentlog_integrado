@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { SupabaseService } from '../supabase/supabase.service';
@@ -11,6 +12,7 @@ import { InboxService } from '../inbox/inbox.service';
 
 @Injectable()
 export class PublicChatService {
+  private readonly logger = new Logger(PublicChatService.name);
   constructor(
     private readonly db: SupabaseService,
     private readonly attendance: AttendanceAgentService,
@@ -72,7 +74,7 @@ export class PublicChatService {
         `select=id,message_id,original_filename,mime_type,size_bytes,storage_bucket,storage_path,created_at&tenant_id=eq.${t}&conversation_id=eq.${c}&deleted_at=is.null&order=created_at.asc`,
       ),
     ]);
-    const safe = await Promise.all(
+    const signed = await Promise.allSettled(
       attachments.map(async ({ storage_bucket, storage_path, ...a }) => ({
         ...a,
         download_url: await this.db.signedObjectUrl(
@@ -81,6 +83,14 @@ export class PublicChatService {
         ),
       })),
     );
+    const safe = signed.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [result.value];
+      this.logger.error(
+        `Falha ao assinar anexo público ${attachments[index]?.id ?? 'desconhecido'}`,
+        result.reason,
+      );
+      return [];
+    });
     return messages
       .map((m) => ({
         ...m,

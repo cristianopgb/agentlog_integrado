@@ -173,6 +173,64 @@ async function main() {
     duplicate.recommended_tool,
     'attendance.occurrence.add_treatment',
   );
+
+  const searchQueries: string[] = [];
+  const operationalTools = new AttendanceAgentToolsService(
+    {
+      select: async (table: string, query: string) => {
+        if (table === 'contacts') return [];
+        if (
+          table === 'transport_records' &&
+          query.includes('driver_phone.eq.61982757782')
+        )
+          return [
+            {
+              operation_record_id: occurrenceId,
+              driver_phone: '61982757782',
+              driver_whatsapp: null,
+            },
+          ];
+        if (
+          table === 'operation_records' &&
+          query.includes(`id=eq.${occurrenceId}`)
+        )
+          return [{ driver_name: 'Marcos' }];
+        if (table === 'operation_records') {
+          searchQueries.push(query);
+          if (query.includes('delivery_number=eq.DOC-2026-000051'))
+            return [
+              {
+                id: occurrenceId,
+                delivery_number: 'DOC-2026-000051',
+                driver_name: 'Marcos',
+              },
+            ];
+        }
+        return [];
+      },
+    } as any,
+    occurrenceService,
+    { ensurePermission: async () => undefined } as any,
+  );
+  const found: any = await operationalTools.execute(
+    'tenant-a',
+    'attendance.operation.find_by_document',
+    { document_number: 'DOC-2026-000051' },
+    'actor-a',
+  );
+  assert.equal(found.document_number_received, 'DOC-2026-000051');
+  assert.equal(found.document_number_used, 'DOC-2026-000051');
+  assert.equal(found.matched_field, 'delivery_number');
+  assert(searchQueries[0].includes('DOC-2026-000051'));
+  const operationalContact: any = await operationalTools.execute(
+    'tenant-a',
+    'attendance.contacts.find_by_phone',
+    { phone: '61982757782' },
+    'actor-a',
+  );
+  assert.equal(operationalContact.contact_type, 'driver_operational');
+  assert.equal(operationalContact.contact_id, null);
+  assert.equal(operationalContact.source, 'treated_transport_records');
   console.log('attendance-agent.local-test: ok');
 }
 void main();
