@@ -42,10 +42,7 @@ export class AttendanceAgentToolsService {
   ) {}
   async execute(tenantId: string, key: string, args: Args, actorId: string) {
     const permission: Record<string, string[]> = {
-      'attendance.occurrence.create': [
-        'occurrences.ai.create_draft',
-        'occurrences.ai.create_confirmed',
-      ],
+      'attendance.occurrence.create': ['occurrences.ai.create_draft','occurrences.ai.create_confirmed'],
       'attendance.occurrence.add_treatment': [
         'occurrence_treatments.create',
         'occurrences.ai.add_treatment',
@@ -108,6 +105,26 @@ export class AttendanceAgentToolsService {
             contact_name: rows[0].name,
           },
         );
+      }
+    }
+    if (!rows[0]) {
+      const transports = await this.db.select<any[]>(
+        'transport_records',
+        `select=operation_record_id,driver_phone,driver_whatsapp&tenant_id=eq.${t}&or=(driver_phone.eq.${encodeURIComponent(p)},driver_whatsapp.eq.${encodeURIComponent(p)})&deleted_at=is.null&order=updated_at.desc&limit=1`,
+      );
+      if (transports[0]) {
+        const operations = await this.db.select<any[]>(
+          'operation_records',
+          `select=driver_name&tenant_id=eq.${t}&id=eq.${transports[0].operation_record_id}&deleted_at=is.null&limit=1`,
+        );
+        return {
+          found: true,
+          contact_id: null,
+          contact_type: 'driver_operational',
+          name: operations[0]?.driver_name ?? null,
+          phone: transports[0].driver_phone ?? transports[0].driver_whatsapp,
+          source: 'treated_transport_records',
+        };
       }
     }
     return rows[0]
@@ -226,24 +243,96 @@ export class AttendanceAgentToolsService {
     }
     throw new BadRequestException('occurrence_not_found');
   }
-  private async findOperation(t: string, a: Args) {
-    const n = encodeURIComponent(
-        text(a.document_number, 'document_number', 100),
-      ),
-      fields = [
-        'document_number',
+  private searchFields(input: string) {
+    if (/^NF(?:-|\s)/i.test(input))
+      return [
         'invoice_number',
-        'cte_number',
+        'document_number',
+        'external_reference',
+        'operation_number',
+      ];
+    if (/^(?:ROM|ROMANEIO)(?:-|\s)/i.test(input))
+      return [
         'manifest_number',
+        'operation_number',
+        'external_reference',
+        'document_number',
         'delivery_number',
-      ],
-      or = fields.map((f) => `${f}.eq.${n}`).join(','),
-      rows = await this.db.select<any[]>(
-        'operation_records',
-        `select=id,document_number,invoice_number,cte_number,manifest_number,delivery_number,customer_name,driver_name,vehicle_plate,status,delivery_status,carrier_name,cargo_type,priority,volume_m3&tenant_id=eq.${t}&or=(${or})&deleted_at=is.null&limit=1`,
+      ];
+    if (/^DOC(?:-|\s)/i.test(input))
+      return [
+        'delivery_number',
+        'document_number',
+        'operation_number',
+        'external_reference',
+      ];
+    return [
+      'document_number',
+      'delivery_number',
+      'invoice_number',
+      'invoice_key',
+      'cte_number',
+      'cte_key',
+      'manifest_number',
+      'order_number',
+      'operation_number',
+      'external_reference',
+      'vehicle_plate',
+    ];
+  }
+  private async resolveOperationSearch(t: string, input: unknown) {
+    const received = text(input, 'operation_identifier', 120);
+    const variants = [
+      ...new Set(
+        [
+          received,
+          received.toUpperCase(),
+          received.replace(/\s+/g, ''),
+          received.replace(/-/g, ''),
+          received.replace(/\D/g, ''),
+        ].filter(Boolean),
       ),
-      r = rows[0];
-    if (!r) return { found: false };
+    ];
+    const fields = this.searchFields(received);
+    for (const variant of variants)
+      for (const field of fields) {
+        const rows = await this.db.select<any[]>(
+          'operation_records',
+          `select=id,document_number,invoice_number,invoice_key,cte_number,cte_key,manifest_number,delivery_number,order_number,operation_number,external_reference,driver_name,vehicle_plate,is_current,canonical_validity_status,updated_at&tenant_id=eq.${t}&${field}=eq.${encodeURIComponent(variant)}&deleted_at=is.null&order=is_current.desc,canonical_validity_status.asc,updated_at.desc&limit=1`,
+        );
+        if (rows[0])
+          return {
+            record: rows[0],
+            received,
+            used: variant,
+            matchedField: field,
+            normalized: variant !== received,
+            searchedFields: fields,
+          };
+      }
+    return {
+      record: null,
+      received,
+      used: null,
+      matchedField: null,
+      normalized: false,
+      searchedFields: fields,
+    };
+  }
+  private async findOperation(t: string, a: Args) {
+    const resolved = await this.resolveOperationSearch(
+        t,
+        a.document_number ?? a.operation_identifier ?? a.delivery_number,
+      ),
+      r = resolved.record;
+    if (!r)
+      return {
+        found: false,
+        document_number_received: resolved.received,
+        searched_fields: resolved.searchedFields,
+        safe_message:
+          'Não localizei esse documento na base operacional tratada. Confira se o número está completo, incluindo prefixos como DOC-, NF-, CT-e, ROM ou manifesto.',
+      };
     const transports = await this.db.select<any[]>(
       'transport_records',
       `select=driver_phone,driver_whatsapp,vehicle_type&tenant_id=eq.${t}&operation_record_id=eq.${r.id}&deleted_at=is.null&limit=1`,
@@ -251,7 +340,17 @@ export class AttendanceAgentToolsService {
     return {
       found: true,
       operation_record_id: r.id,
-      ...r,
+      document_number_received: resolved.received,
+      document_number_used: resolved.used,
+      matched_field: resolved.matchedField,
+      matched_by_normalized_variant: resolved.normalized,
+      delivery_number: r.delivery_number ?? null,
+      document_number: r.document_number ?? null,
+      invoice_number: r.invoice_number ?? null,
+      cte_number: r.cte_number ?? null,
+      manifest_number: r.manifest_number ?? null,
+      vehicle_plate: r.vehicle_plate ?? null,
+      driver_name: r.driver_name ?? null,
       driver_phone: transports[0]?.driver_phone ?? null,
       driver_whatsapp: transports[0]?.driver_whatsapp ?? null,
       vehicle_type: transports[0]?.vehicle_type ?? null,
@@ -533,25 +632,14 @@ export class AttendanceAgentToolsService {
           rows[0].document_number ?? rows[0].delivery_number ?? null,
       };
     }
-    const encoded = encodeURIComponent(identifier);
-    const fields = [
-      'delivery_number',
-      'document_number',
-      'invoice_number',
-      'cte_number',
-      'manifest_number',
-    ];
-    const rows = await this.db.select<any[]>(
-      'operation_records',
-      `select=id,document_number,delivery_number&tenant_id=eq.${t}&or=(${fields.map((field) => `${field}.eq.${encoded}`).join(',')})&deleted_at=is.null&limit=2`,
-    );
-    if (rows.length > 1) return { needs_clarification: true };
-    if (!rows[0]) return { operation_not_found: true };
+    const resolved = await this.resolveOperationSearch(t, identifier),
+      row = resolved.record;
+    if (!row) return { operation_not_found: true };
     return {
-      operation_record_id: rows[0].id,
+      operation_record_id: row.id,
       operation_resolved: true,
       operation_document_number:
-        rows[0].document_number ?? rows[0].delivery_number ?? identifier,
+        row.document_number ?? row.delivery_number ?? identifier,
     };
   }
   private async createOccurrence(t: string, a: Args, u: string) {
@@ -611,13 +699,28 @@ export class AttendanceAgentToolsService {
       );
     let verificationResult = a.verification_result;
     let verificationReason = a.verification_reason;
-    if (operation.operation_record_id && conversations[0].contact_id) {
-      const contact = (
-        await this.db.select<any[]>(
-          'contacts',
-          `select=name,phone&tenant_id=eq.${t}&id=eq.${conversations[0].contact_id}&deleted_at=is.null&limit=1`,
-        )
-      )[0];
+    if (operation.operation_record_id) {
+      let contact = conversations[0].contact_id
+        ? (
+            await this.db.select<any[]>(
+              'contacts',
+              `select=name,phone&tenant_id=eq.${t}&id=eq.${conversations[0].contact_id}&deleted_at=is.null&limit=1`,
+            )
+          )[0]
+        : null;
+      if (!contact) {
+        const session = (
+          await this.db.select<any[]>(
+            'public_chat_sessions',
+            `select=contact_name,contact_phone&tenant_id=eq.${t}&conversation_id=eq.${conversationId}&limit=1`,
+          )
+        )[0];
+        if (session?.contact_phone)
+          contact = {
+            name: session.contact_name,
+            phone: session.contact_phone,
+          };
+      }
       if (contact?.phone) {
         const verified: any = await this.verifyDriver(t, {
           operation_record_id: operation.operation_record_id,
