@@ -67,8 +67,19 @@ export default function InboxPage() {
     if (!tenant) return;
     const timer = setInterval(() => {
       if (document.hidden) return;
-      void load(tenant);
-      if (selected) void open(tenant, selected);
+      void load(tenant).catch(() =>
+        setError(
+          'Não foi possível atualizar o Inbox agora. Mantivemos os últimos dados carregados.',
+        ),
+      );
+      if (selected)
+        void inboxDetail(tenant, selected)
+          .then(setDetail)
+          .catch(() =>
+            setError(
+              'Não foi possível atualizar a conversa agora. Mantivemos a última versão carregada.',
+            ),
+          );
     }, 4000);
     return () => clearInterval(timer);
   }, [tenant, selected, load, open]);
@@ -391,6 +402,14 @@ export default function InboxPage() {
             >
               Criar ocorrência manual
             </Link>
+            {detail?.occurrence_links.length ? (
+              <Link
+                href={`/app/occurrences/${detail.occurrence_links[detail.occurrence_links.length - 1].occurrence_id}`}
+                className="block w-full rounded-lg border border-blue-600 p-2 text-center text-sm font-semibold text-blue-700"
+              >
+                Ver detalhes
+              </Link>
+            ) : null}
           </section>
         </aside>
       </div>
