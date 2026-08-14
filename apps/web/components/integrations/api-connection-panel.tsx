@@ -27,6 +27,13 @@ import {
 import type { DataContractField } from '../../lib/data-contracts-api';
 import { listCanonicalMappingTargets, type CanonicalMappingTarget } from '../../lib/canonical-api';
 import type { TenantModuleOption } from '../../lib/modules-api';
+import {
+  CANONICAL_FIELD_GROUP_ORDER,
+  formatCanonicalFieldLabel,
+  getCanonicalFieldGroup,
+  normalizeCanonicalFieldQuery,
+  normalizeCanonicalFieldSearchText,
+} from '../../lib/canonical-field-display';
 import { updateIntegrationConnection } from '../../lib/integrations-api';
 import {
   listNormalizationErrors,
@@ -73,15 +80,6 @@ const dateFormats = [
   ['dd_mm_yyyy', 'DD/MM/AAAA'],
   ['dd_mm_yyyy_hh_mm_ss', 'DD/MM/AAAA HH:mm:ss'],
 ] as const;
-const entityOrder = [
-  'operation_records', 'transport_records', 'occurrences', 'attendance_records',
-  'finance_records', 'warehouse_records', 'team_records', 'deliveries',
-];
-const entityLabels: Record<string, string> = {
-  operation_records: 'Operações', transport_records: 'Transporte', occurrences: 'Ocorrências operacionais',
-  attendance_records: 'Atendimento / Tickets e conversas', finance_records: 'Financeiro operacional', warehouse_records: 'Armazém',
-  team_records: 'Equipes', deliveries: 'Entregas legado',
-};
 const essentialTargets = [
   { label: 'Operações / Número da entrega', legacy: ['numero_entrega', 'delivery_number'], canonical: ['operation_records.delivery_number', 'deliveries.delivery_number'] },
   { label: 'Operações / Documento do cliente', legacy: ['documento_cliente'], canonical: ['operation_records.customer_document'] },
@@ -135,18 +133,32 @@ function TargetCombobox({ value, targets, legacyFields, onChange }: { value: str
   const root = useRef<HTMLDivElement>(null);
   const selected = targets.find((target) => canonicalValue(target) === value);
   const legacy = legacyFields.find((field) => field.id === value);
-  const filtered = targets.filter((target) => normalizeSearch(`${target.label} ${target.field_key}`).includes(normalizeSearch(query)));
-  const groups = entityOrder.map((key) => ({ key, items: filtered.filter((target) => target.canonical_entity_key === key).sort((a, b) => rankTarget(a) - rankTarget(b)) })).filter((group) => group.items.length);
+  const queryTokens = normalizeCanonicalFieldQuery(query).split(' ').filter(Boolean);
+  const filtered = targets.filter((target) => {
+    const searchText = normalizeCanonicalFieldSearchText(
+      target.field_key,
+      formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key),
+      getCanonicalFieldGroup(target.field_key, target.canonical_entity_key),
+    );
+    return queryTokens.every((token) => searchText.includes(token));
+  });
+  const groups = CANONICAL_FIELD_GROUP_ORDER.map((label) => ({
+    label,
+    items: filtered
+      .filter((target) => getCanonicalFieldGroup(target.field_key, target.canonical_entity_key) === label)
+      .sort((a, b) => rankTarget(a) - rankTarget(b)),
+  })).filter((group) => group.items.length);
+  const selectedLabel = selected ? formatCanonicalFieldLabel(selected.field_key, selected.canonical_entity_key) : null;
   return <div ref={root} className="relative mt-3">
     <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between rounded-xl border bg-white p-2 text-left text-sm">
-      <span>{selected?.label ?? (legacy ? `Mapeamento anterior / ${legacy.field_key}` : 'Não parear')}</span><span aria-hidden>⌄</span>
+      <span>{selected ? <><span className="block font-medium">{selectedLabel}</span><span className="block font-mono text-xs text-slate-500">{selected.field_key}</span></> : (legacy ? `Mapeamento anterior / ${legacy.field_key}` : 'Não parear')}</span><span aria-hidden>⌄</span>
     </button>
     {open ? <div className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-xl border bg-white p-2 shadow-xl">
       <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar destino por nome ou chave..." aria-label="Buscar destino canônico" className="mb-2 w-full rounded-lg border p-2 text-sm" />
       <button type="button" role="option" onClick={() => { onChange(''); setOpen(false); }} className="w-full rounded-lg px-2 py-2 text-left text-sm font-semibold hover:bg-slate-100">Não parear</button>
-      {groups.map((group) => <div key={group.key} className="mt-2 border-t pt-2">
-        <p className="px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{entityLabels[group.key] ?? group.items[0].canonical_entity_name}</p>
-        {group.items.map((target) => <button type="button" role="option" aria-selected={value === canonicalValue(target)} key={target.canonical_field_id} onClick={() => { onChange(canonicalValue(target)); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="font-medium">{target.label}</span></button>)}
+      {groups.map((group) => <div key={group.label} className="mt-2 border-t pt-2">
+        <p className="px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{group.label}</p>
+        {group.items.map((target) => <button type="button" role="option" aria-selected={value === canonicalValue(target)} key={target.canonical_field_id} onClick={() => { onChange(canonicalValue(target)); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="block font-medium">{formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key)}</span><span className="block font-mono text-xs text-slate-500">{target.field_key}</span></button>)}
       </div>)}
       {!groups.length ? <p className="p-3 text-sm text-slate-500">Nenhum destino encontrado.</p> : null}
       {legacy ? <button type="button" role="option" onClick={() => setOpen(false)} className="mt-2 w-full border-t px-2 py-2 text-left text-sm text-slate-600">Mapeamento anterior / {legacy.field_key}</button> : null}
