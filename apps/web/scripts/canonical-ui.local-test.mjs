@@ -4,6 +4,7 @@ const migration=readFileSync(new URL('../../../supabase/migrations/202608110001_
 const setup=readFileSync(new URL('../app/app/integrations/[id]/setup/page.tsx',import.meta.url),'utf8');
 const api=readFileSync(new URL('../lib/canonical-api.ts',import.meta.url),'utf8');
 const panel=readFileSync(new URL('../components/integrations/api-connection-panel.tsx',import.meta.url),'utf8');
+const canonicalFieldDisplay=readFileSync(new URL('../lib/canonical-field-display.ts',import.meta.url),'utf8');
 const occurrenceMigration=readFileSync(new URL('../../../supabase/migrations/202608110002_sprint_10r_g_occurrence_canonical_analytics.sql',import.meta.url),'utf8');
 const hardening=readFileSync(new URL('../../../supabase/migrations/202608110003_sprint_10r_g_hardening.sql',import.meta.url),'utf8');
 const hotfix=readFileSync(new URL('../../../supabase/migrations/202608120002_delivery_status_occurrence_indicators_hotfix.sql',import.meta.url),'utf8');
@@ -26,8 +27,9 @@ assert(api.includes('/canonical-entities/mapping-targets'),'Cliente não consult
 assert(panel.includes('listCanonicalMappingTargets(tenantId)'),'Painel API não carrega destinos canônicos.');
 assert(panel.includes('mapping.canonical_entity_id&&mapping.canonical_field_id'),'Painel não restaura mapping canônico após reload.');
 assert(panel.includes('canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}'),'Valor canônico restaurado incorretamente.');
-for(const text of ['TargetCombobox','Buscar destino por nome ou chave','Não parear','Filtrar campos pendentes','Aplicar sugestão','Operações / Número da entrega','Ocorrências'])assert(panel.includes(text),`Hardening UX ausente: ${text}`);
-assert(panel.includes("'operation_records', 'transport_records', 'occurrences', 'attendance_records'")&&panel.includes("'finance_records', 'warehouse_records', 'team_records', 'deliveries'"),'Grupos não têm ordem funcional explícita.');
+for(const text of ['TargetCombobox','Buscar destino por nome ou chave','Não parear','Filtrar campos pendentes','Aplicar sugestão','Operações / Número da entrega'])assert(panel.includes(text),`Hardening UX ausente: ${text}`);
+assert(canonicalFieldDisplay.includes("'Ocorrência'"),'Grupo visual de Ocorrência ausente.');
+for(const group of ['Carga', 'Entrega', 'Transporte', 'Cliente', 'Contato', 'Ocorrência', 'Financeiro', 'Canhoto', 'Atendimento', 'Armazém', 'Equipes', 'Empresa', 'Usuários', 'Geral'])assert(canonicalFieldDisplay.includes(`'${group}'`),`Ordem funcional ausente: ${group}`);
 assert(panel.includes("['operation_records.delivery_number', 'deliveries.delivery_number']"),'Número da entrega canônico não satisfaz a pendência.');
 assert(!panel.includes('campo(s) nativo(s) obrigatório(s) ainda não pareado(s)'),'Alerta ainda expõe terminologia técnica antiga.');
 assert(occurrenceMigration.includes("'occurrence_number','Número da ocorrência'")&&hardening.includes("'occurrence_number','title','description'"),'Grupo Ocorrências não publica número importável.');
@@ -40,7 +42,7 @@ assert(!setup.includes('.filter((entity) => visibleEntityOrder.includes(entity.e
 for(const text of ['Ignorar valor','Ignorar campo nesta integração','Automático','Este campo é controlado, mas ainda não possui domínio nativo cadastrado no AgentLog.','Campo obrigatório mínimo não pode ser ignorado.'])assert(panel.includes(text),`UX de De/Para ausente: ${text}`);
 assert(panel.includes("item.status === 'exact_match'")&&panel.includes("disabled={item.status === 'exact_match'}"),'Correspondência automática passou a exigir ação manual.');
 assert(panel.includes('item.canonical_label ?? item.field_key'),'Label canônico amigável não é prioritário.');
-assert(setup.includes("attendance_records: 'Atendimento / Tickets e conversas'")||panel.includes("attendance_records: 'Atendimento / Tickets e conversas'"),'Atendimento não está separado de Ocorrências operacionais.');
+assert(canonicalFieldDisplay.includes("attendance_records: 'Atendimento'")&&canonicalFieldDisplay.includes("occurrences: 'Ocorrência'"),'Atendimento não está separado de Ocorrências operacionais.');
 assert(panel.includes("item.status !== 'ignored_value'"),'Salvar De/Para geral revoga ignored_value após reload.');
 for(const name of ['Ocorrências abertas','Ocorrências vencidas','Ocorrências por status','Ocorrências por SLA','Ocorrências por prioridade','Ocorrências por categoria de motivo','Ocorrências por motivo','Tempo médio de resolução','Ocorrências com pendências','Pendências vencidas','Ocorrências sem vínculo operacional','Ocorrências por canal de origem'])assert(hotfix.includes(`'${name}'`),`Indicador não aparece no catálogo: ${name}`);
 assert(dashboardEditor.includes('item.family_label')&&dashboardApi.includes("'Ocorrências operacionais'"),'Widget builder não identifica a família Ocorrências operacionais.');
