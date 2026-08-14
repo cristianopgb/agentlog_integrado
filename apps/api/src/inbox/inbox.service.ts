@@ -7,10 +7,24 @@ import {
 } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { SupabaseService } from '../supabase/supabase.service';
+import { randomUUID } from 'node:crypto';
 
 type Row = Record<string, unknown> & { id: string; tenant_id?: string };
-const channels = new Set(['manual', 'api', 'whatsapp', 'email', 'system', 'public_chat']);
-const externalChannels = new Set(['manual', 'api', 'whatsapp', 'email', 'public_chat']);
+const channels = new Set([
+  'manual',
+  'api',
+  'whatsapp',
+  'email',
+  'system',
+  'public_chat',
+]);
+const externalChannels = new Set([
+  'manual',
+  'api',
+  'whatsapp',
+  'email',
+  'public_chat',
+]);
 const statuses = new Set([
   'open',
   'waiting_contact',
@@ -55,6 +69,141 @@ export class InboxService {
     );
     if (!rows[0]) throw new NotFoundException('Conversa não encontrada.');
     return rows[0];
+  }
+  async refreshSummary(tenant: string, id: string) {
+    try {
+      const [messages, links] = await Promise.all([
+        this.db.select<Row[]>(
+          'inbox_messages',
+          `select=sender_type,body&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.desc&limit=6`,
+        ),
+        this.db.select<Row[]>(
+          'conversation_occurrence_links',
+          `select=occurrence_id&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&limit=1`,
+        ),
+      ]);
+      let occurrence = '';
+      if (links[0])
+        occurrence = String(
+          (
+            await this.db.select<Row[]>(
+              'occurrences',
+              `select=occurrence_number,current_status&tenant_id=eq.${tenant}&id=eq.${links[0].occurrence_id}&deleted_at=is.null&limit=1`,
+            )
+          )[0]?.occurrence_number ?? '',
+        );
+      const excerpt = messages
+        .reverse()
+        .map(
+          (m) =>
+            `${m.sender_type === 'contact' ? 'Motorista' : 'Operador/AgentLog'}: ${String(m.body ?? '').slice(0, 180)}`,
+        )
+        .filter(Boolean)
+        .join(' · ')
+        .slice(0, 900);
+      await this.db.update(
+        'inbox_conversations',
+        `tenant_id=eq.${tenant}&id=eq.${id}`,
+        {
+          summary: `${excerpt}${occurrence ? ` · Ocorrência ${occurrence} vinculada.` : ' · Atendimento em andamento.'}`,
+          summary_updated_at: new Date().toISOString(),
+        },
+      );
+    } catch {
+      /* Resumo é auxiliar e nunca bloqueia o atendimento. */
+    }
+  }
+  private async attachments(tenant: string, conversation: string) {
+    const rows = await this.db.select<Row[]>(
+      'inbox_message_attachments',
+      `select=id,message_id,occurrence_id,original_filename,mime_type,size_bytes,storage_bucket,storage_path,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${conversation}&deleted_at=is.null&order=created_at.asc`,
+    );
+    return Promise.all(
+      rows.map(async ({ storage_bucket, storage_path, ...row }) => ({
+        ...row,
+        download_url: await this.db.signedObjectUrl(
+          String(storage_bucket),
+          String(storage_path),
+        ),
+      })),
+    );
+  }
+  async uploadAttachment(
+    tenant: string,
+    id: string,
+    uploader: 'public_user' | 'internal_user',
+    file: {
+      originalname: string;
+      mimetype: string;
+      size: number;
+      buffer: Buffer;
+    },
+    messageId?: string,
+    createdBy?: string,
+  ) {
+    await this.conversation(tenant, id);
+    const max =
+      Math.max(1, Number(process.env.INBOX_ATTACHMENT_MAX_MB) || 10) *
+      1024 *
+      1024;
+    const allowed = new Set([
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ]);
+    if (!file?.buffer || !allowed.has(file.mimetype))
+      throw new BadRequestException(
+        'Tipo de arquivo não permitido. Envie imagem, PDF ou documento compatível.',
+      );
+    if (file.size > max)
+      throw new BadRequestException(
+        `Arquivo excede o limite de ${Math.round(max / 1024 / 1024)} MB.`,
+      );
+    const link = (
+      await this.db.select<Row[]>(
+        'conversation_occurrence_links',
+        `select=occurrence_id&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&limit=1`,
+      )
+    )[0];
+    const safeName = file.originalname
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .slice(-180),
+      bucket = process.env.INBOX_ATTACHMENT_BUCKET || 'inbox-attachments';
+    const path = `${tenant}/${id}/${randomUUID()}-${safeName}`;
+    try {
+      await this.db.uploadObject(bucket, path, file.buffer, file.mimetype);
+    } catch {
+      throw new BadRequestException(
+        'Não foi possível enviar o arquivo agora. Tente novamente.',
+      );
+    }
+    const [row] = await this.db.insert<Row[]>('inbox_message_attachments', {
+      tenant_id: tenant,
+      conversation_id: id,
+      message_id: messageId ?? null,
+      occurrence_id: link?.occurrence_id ?? null,
+      storage_bucket: bucket,
+      storage_path: path,
+      original_filename: file.originalname.slice(0, 255),
+      mime_type: file.mimetype,
+      size_bytes: file.size,
+      uploaded_by_type: uploader,
+      created_by: createdBy ?? null,
+    });
+    return {
+      id: row.id,
+      message_id: row.message_id,
+      occurrence_id: row.occurrence_id,
+      original_filename: row.original_filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      created_at: row.created_at,
+      download_url: await this.db.signedObjectUrl(bucket, path),
+    };
   }
   private event(
     tenant: string,
@@ -129,14 +278,19 @@ export class InboxService {
     return compact.filter((row) => {
       const conversation = row as Row;
       const contact = row.contact as Row | null;
-      return [conversation.title, conversation.summary, contact?.name, contact?.phone]
+      return [
+        conversation.title,
+        conversation.summary,
+        contact?.name,
+        contact?.phone,
+      ]
         .filter((value): value is string => typeof value === 'string')
         .some((value) => value.toLocaleLowerCase('pt-BR').includes(search));
     });
   }
   async detail(tenant: string, id: string) {
     const conversation = await this.conversation(tenant, id);
-    const [contact, messages, links, events] = await Promise.all([
+    const [contact, messages, links, events, attachments] = await Promise.all([
       conversation.contact_id
         ? this.db.select<Row[]>(
             'contacts',
@@ -155,13 +309,39 @@ export class InboxService {
         'inbox_events',
         `select=id,event_type,event_title,event_description,created_by,created_at&tenant_id=eq.${tenant}&conversation_id=eq.${id}&order=created_at.asc`,
       ),
+      this.attachments(tenant, id),
     ]);
+    const occurrenceLinks = await Promise.all(
+      links.map(async (link) => {
+        const occurrence =
+          (
+            await this.db.select<Row[]>(
+              'occurrences',
+              `select=occurrence_number,current_status,current_priority,reason_id,updated_at&tenant_id=eq.${tenant}&id=eq.${link.occurrence_id}&deleted_at=is.null&limit=1`,
+            )
+          )[0] ?? null;
+        const treatment =
+          (
+            await this.db.select<Row[]>(
+              'occurrence_treatments',
+              `select=description,created_at&tenant_id=eq.${tenant}&occurrence_id=eq.${link.occurrence_id}&deleted_at=is.null&order=created_at.desc&limit=1`,
+            )
+          )[0] ?? null;
+        return {
+          ...link,
+          occurrence: occurrence
+            ? { ...occurrence, latest_treatment: treatment }
+            : null,
+        };
+      }),
+    );
     return {
       conversation,
       contact: contact[0] ?? null,
       messages,
-      occurrence_links: links,
+      occurrence_links: occurrenceLinks,
       events,
+      attachments,
     };
   }
   async createMessage(
@@ -202,6 +382,7 @@ export class InboxService {
       'Mensagem registrada',
       user,
     );
+    await this.refreshSummary(tenant, id);
     return rows[0];
   }
   async assign(
@@ -249,6 +430,7 @@ export class InboxService {
       user,
       status,
     );
+    await this.refreshSummary(tenant, id);
     return rows[0];
   }
   async linkOccurrence(
@@ -287,6 +469,12 @@ export class InboxService {
       user,
       occurrence,
     );
+    await this.db.update(
+      'inbox_message_attachments',
+      `tenant_id=eq.${tenant}&conversation_id=eq.${id}&occurrence_id=is.null&deleted_at=is.null`,
+      { occurrence_id: occurrence },
+    );
+    await this.refreshSummary(tenant, id);
     return rows[0];
   }
   async unlinkOccurrence(
