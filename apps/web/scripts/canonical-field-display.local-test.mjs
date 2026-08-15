@@ -16,6 +16,26 @@ assert.equal(helpers.formatCanonicalFieldLabel('carga_filial_romaneio'), 'Númer
 assert.equal(helpers.formatCanonicalFieldLabel('carga_data_desc'), 'Data da descarga');
 assert.equal(helpers.formatCanonicalFieldLabel('carga_codigo_rota'), 'Código rota');
 
+assert.deepEqual(
+  [...helpers.MAPPING_SOURCE_FIELD_GROUP_ORDER],
+  ['Carga', 'Entrega', 'Transporte', 'Cliente', 'Contato', 'Ocorrência', 'Eventos de Ocorrência', 'Financeiro', 'Canhoto', 'Geral'],
+);
+assert.equal(helpers.getMappingSourceFieldGroup('ocorrencia_evento_tipo'), 'Eventos de Ocorrência');
+assert.equal(helpers.getMappingSourceFieldGroup('campo_avulso'), 'Geral');
+for (const [key, label] of [
+  ['carga_id', 'Código da carga'],
+  ['carga_filial_romaneio', 'Número do romaneio'],
+  ['carga_data_desc', 'Data da descarga'],
+  ['financeiro_valor_frete', 'Valor do frete'],
+  ['transporte_nro_doc', 'Número documento'],
+]) assert.equal(helpers.formatMappingSourceFieldLabel(key), label);
+
+const sourceSearch = helpers.normalizeMappingSourceFieldSearchText('carga_filial_romaneio');
+for (const query of ['romaneio', 'carga_filial_romaneio', 'carga']) {
+  const tokens = helpers.normalizeCanonicalFieldQuery(query).split(' ');
+  assert(tokens.every((token) => sourceSearch.includes(token)), `Busca da fonte não encontrou: ${query}`);
+}
+
 const search = helpers.normalizeCanonicalFieldSearchText(
   'carga_motorista_telefone',
   helpers.formatCanonicalFieldLabel('carga_motorista_telefone'),

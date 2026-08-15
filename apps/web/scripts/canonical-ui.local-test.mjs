@@ -28,6 +28,8 @@ assert(panel.includes('listCanonicalMappingTargets(tenantId)'),'Painel API não 
 assert(panel.includes('mapping.canonical_entity_id&&mapping.canonical_field_id'),'Painel não restaura mapping canônico após reload.');
 assert(panel.includes('canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}'),'Valor canônico restaurado incorretamente.');
 for(const text of ['TargetCombobox','Buscar destino por nome ou chave','Não parear','Filtrar campos pendentes','Aplicar sugestão','Operações / Número da entrega'])assert(panel.includes(text),`Hardening UX ausente: ${text}`);
+for(const text of ['MAPPING_SOURCE_FIELD_GROUP_ORDER','formatMappingSourceFieldLabel(source)','getMappingSourceFieldGroup(source)'])assert(panel.includes(text),`Hotfix dos cards de origem ausente: ${text}`);
+assert(panel.includes('{target.label}')&&panel.includes('const selectedLabel = selected?.label ?? null'),'Select não prioriza mais o label canônico persistido em português.');
 assert(canonicalFieldDisplay.includes("'Ocorrência'"),'Grupo visual de Ocorrência ausente.');
 for(const group of ['Carga', 'Entrega', 'Transporte', 'Cliente', 'Contato', 'Ocorrência', 'Financeiro', 'Canhoto', 'Atendimento', 'Armazém', 'Equipes', 'Empresa', 'Usuários', 'Geral'])assert(canonicalFieldDisplay.includes(`'${group}'`),`Ordem funcional ausente: ${group}`);
 assert(panel.includes("['operation_records.delivery_number', 'deliveries.delivery_number']"),'Número da entrega canônico não satisfaz a pendência.');
