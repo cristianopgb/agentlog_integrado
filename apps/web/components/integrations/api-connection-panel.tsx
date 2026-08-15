@@ -29,8 +29,11 @@ import { listCanonicalMappingTargets, type CanonicalMappingTarget } from '../../
 import type { TenantModuleOption } from '../../lib/modules-api';
 import {
   CANONICAL_FIELD_GROUP_ORDER,
+  MAPPING_SOURCE_FIELD_GROUP_ORDER,
   formatCanonicalFieldLabel,
+  formatMappingSourceFieldLabel,
   getCanonicalFieldGroup,
+  getMappingSourceFieldGroup,
   normalizeCanonicalFieldQuery,
   normalizeCanonicalFieldSearchText,
 } from '../../lib/canonical-field-display';
@@ -95,10 +98,6 @@ const preferredFieldOrder: Record<string, string[]> = {
 function normalizeSearch(value: string) {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
-function sourceGroup(source: string) {
-  const prefix = source.split('_', 1)[0]?.toLowerCase();
-  return prefix === 'carga' ? 'Carga' : prefix === 'entrega' ? 'Entrega' : prefix === 'financeiro' ? 'Financeiro' : 'Outros';
-}
 function canonicalValue(target: CanonicalMappingTarget) {
   return `canonical:${target.canonical_entity_id}:${target.canonical_field_id}`;
 }
@@ -148,7 +147,7 @@ function TargetCombobox({ value, targets, legacyFields, onChange }: { value: str
       .filter((target) => getCanonicalFieldGroup(target.field_key, target.canonical_entity_key) === label)
       .sort((a, b) => rankTarget(a) - rankTarget(b)),
   })).filter((group) => group.items.length);
-  const selectedLabel = selected ? formatCanonicalFieldLabel(selected.field_key, selected.canonical_entity_key) : null;
+  const selectedLabel = selected?.label ?? null;
   return <div ref={root} className="relative mt-3">
     <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between rounded-xl border bg-white p-2 text-left text-sm">
       <span>{selected ? <><span className="block font-medium">{selectedLabel}</span><span className="block font-mono text-xs text-slate-500">{selected.field_key}</span></> : (legacy ? `Mapeamento anterior / ${legacy.field_key}` : 'Não parear')}</span><span aria-hidden>⌄</span>
@@ -158,7 +157,7 @@ function TargetCombobox({ value, targets, legacyFields, onChange }: { value: str
       <button type="button" role="option" onClick={() => { onChange(''); setOpen(false); }} className="w-full rounded-lg px-2 py-2 text-left text-sm font-semibold hover:bg-slate-100">Não parear</button>
       {groups.map((group) => <div key={group.label} className="mt-2 border-t pt-2">
         <p className="px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{group.label}</p>
-        {group.items.map((target) => <button type="button" role="option" aria-selected={value === canonicalValue(target)} key={target.canonical_field_id} onClick={() => { onChange(canonicalValue(target)); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="block font-medium">{formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key)}</span><span className="block font-mono text-xs text-slate-500">{target.field_key}</span></button>)}
+        {group.items.map((target) => <button type="button" role="option" aria-selected={value === canonicalValue(target)} key={target.canonical_field_id} onClick={() => { onChange(canonicalValue(target)); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="block font-medium">{target.label}</span><span className="block font-mono text-xs text-slate-500">{target.field_key}</span></button>)}
       </div>)}
       {!groups.length ? <p className="p-3 text-sm text-slate-500">Nenhum destino encontrado.</p> : null}
       {legacy ? <button type="button" role="option" onClick={() => setOpen(false)} className="mt-2 w-full border-t px-2 py-2 text-left text-sm text-slate-600">Mapeamento anterior / {legacy.field_key}</button> : null}
@@ -412,9 +411,9 @@ export function ApiConnectionPanel({
       field.field_key === 'delivery_number',
   );
   const missingDeliveryOperationalKey = Boolean(deliveryOperationalField) && missingEssential[0]?.label === essentialTargets[0].label;
-  const groupedDetected = ['Carga', 'Entrega', 'Financeiro', 'Outros'].map((label) => ({
+  const groupedDetected = MAPPING_SOURCE_FIELD_GROUP_ORDER.map((label) => ({
     label,
-    fields: detected.filter((source) => sourceGroup(source) === label).filter((source) => {
+    fields: detected.filter((source) => getMappingSourceFieldGroup(source) === label).filter((source) => {
       const suggestion = suggestTarget(source, canonicalTargets);
       return mappingFilter === 'all' || (mappingFilter === 'pending' ? !draft[source] : !draft[source] && Boolean(suggestion));
     }),
@@ -881,8 +880,8 @@ export function ApiConnectionPanel({
                         {inferredType(value)}
                       </span>
                     </div>
-                    <p className="mt-2 break-all font-mono text-sm font-semibold">
-                      {source}
+                    <p className="mt-2 text-sm font-semibold">
+                      {formatMappingSourceFieldLabel(source)}
                     </p>
                     <p className="mt-2 break-all text-xs text-slate-600">
                       Exemplo: {valuePreview(value)}
@@ -902,7 +901,9 @@ export function ApiConnectionPanel({
               forem pareados, mais recursos ficarão disponíveis.
             </p>
             <div className="mt-4 space-y-3">
-              {groupedDetected.flatMap((group) => group.fields).map((source) => {
+              {groupedDetected.map((group) => <section key={group.label}>
+                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{group.label} · {group.fields.length}</h3>
+                <div className="space-y-3">{group.fields.map((source) => {
                 const duplicate = Boolean(
                   draft[source] && duplicates.has(draft[source]),
                 );
@@ -913,8 +914,8 @@ export function ApiConnectionPanel({
                     className={`block rounded-2xl border p-3 ${duplicate ? 'border-rose-400 bg-rose-50' : ''}`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="break-all font-mono text-sm">
-                        {source}
+                      <span className="text-sm font-semibold">
+                        {formatMappingSourceFieldLabel(source)}
                       </span>
                       <StatusBadge
                         tone={
@@ -951,7 +952,7 @@ export function ApiConnectionPanel({
                     ) : null}
                   </div>
                 );
-              })}
+              })}</div></section>)}
             </div>
           </Card>
           <Card>

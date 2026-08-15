@@ -43,6 +43,92 @@ export const CANONICAL_FIELD_GROUP_ORDER = [
   'Usuários', 'Faturamento', 'Geral',
 ] as const;
 
+export const MAPPING_SOURCE_FIELD_GROUP_ORDER = [
+  'Carga', 'Entrega', 'Transporte', 'Cliente', 'Contato', 'Ocorrência',
+  'Eventos de Ocorrência', 'Financeiro', 'Canhoto', 'Geral',
+] as const;
+
+const MAPPING_SOURCE_PREFIXES = [
+  ['ocorrencia_evento', 'Eventos de Ocorrência'],
+  ['ocorrencias', 'Ocorrência'],
+  ['ocorrencia', 'Ocorrência'],
+  ['financeiro', 'Financeiro'],
+  ['transporte', 'Transporte'],
+  ['entrega', 'Entrega'],
+  ['contato', 'Contato'],
+  ['cliente', 'Cliente'],
+  ['canhoto', 'Canhoto'],
+  ['carga', 'Carga'],
+] as const;
+
+const MAPPING_SOURCE_LABELS: Record<string, string> = {
+  nro_doc: 'Documento',
+  carga_id: 'Código da carga', carga_filial_romaneio: 'Número do romaneio', carga_romaneio: 'Romaneio',
+  carga_filial_doc: 'Filial do documento', carga_serie_doc: 'Série do documento', carga_nro_doc: 'Documento da carga',
+  carga_data_desc: 'Data da descarga', carga_data_nf: 'Data da NF', carga_dle: 'DLE', carga_agendamento: 'Agendamento',
+  carga_conf: 'Conferência', carga_peso: 'Peso', carga_valor_mercadoria: 'Valor da mercadoria', carga_qtd: 'Quantidade',
+  carga_peso_cubado: 'Peso cubado', carga_classificacao: 'Classificação', carga_tomador: 'Tomador',
+  carga_destinatario: 'Destinatário', carga_bairro: 'Bairro', carga_cidade: 'Cidade', carga_uf: 'UF',
+  carga_nf_s: 'Número da NF', carga_tipo_carga: 'Tipo de carga', carga_qtd_nf: 'Quantidade de NFs',
+  carga_mesoregiao: 'Mesorregião', carga_sub_regiao: 'Sub-região', carga_ocorrencias: 'Ocorrências',
+  carga_remetente: 'Remetente', carga_observacao: 'Observação', carga_ref_cliente: 'Referência do cliente',
+  carga_cidade_destino: 'Cidade de destino', carga_agenda: 'Agenda', carga_tipo_carga_operacional: 'Tipo de carga operacional',
+  carga_ultima_ocorrencia: 'Última ocorrência', carga_latitude: 'Latitude', carga_longitude: 'Longitude',
+  carga_peso_calculo: 'Peso de cálculo', carga_prioridade: 'Prioridade', carga_restricao_veiculo: 'Restrição de veículo',
+  carga_carro_dedicado: 'Carro dedicado', carga_restricao_horario: 'Restrição de horário', carga_redespacho: 'Redespacho',
+  carga_erp_cliente_id: 'Código do cliente no legado', carga_erp_transportadora_id: 'Código da transportadora no legado',
+  carga_transportadora_nome: 'Transportadora', carga_erp_motorista_id: 'Código do motorista no legado',
+  carga_motorista_nome: 'Motorista', carga_motorista_telefone: 'Telefone do motorista',
+  carga_motorista_whatsapp: 'WhatsApp do motorista', carga_veiculo_placa: 'Placa do veículo',
+  carga_cidade_origem: 'Cidade de origem', carga_uf_origem: 'UF de origem', carga_volume_m3: 'Volume em m³',
+  entrega_id: 'Código da entrega', entrega_nro_doc_tomador: 'Documento do tomador', entrega_destinatario: 'Destinatário',
+  entrega_data_entrega: 'Data da entrega', entrega_status_entrega: 'Status da entrega', entrega_ocorrencia: 'Ocorrência da entrega',
+  financeiro_id: 'Código financeiro', financeiro_nro_doc_tomador: 'Documento do tomador', financeiro_destinatario: 'Destinatário',
+  financeiro_data_entrega: 'Data da entrega', financeiro_status_entrega: 'Status financeiro da entrega',
+  financeiro_valor_frete: 'Valor do frete', financeiro_cte: 'CT-e', financeiro_data_emissao: 'Data de emissão',
+  financeiro_custo_frete: 'Custo de frete', financeiro_custos_extras: 'Custos extras',
+  ocorrencia_id: 'Código da ocorrência', ocorrencia_numero_legado: 'Número da ocorrência no legado',
+  ocorrencia_nro_doc: 'Documento da ocorrência', ocorrencia_nf: 'NF da ocorrência', ocorrencia_romaneio: 'Romaneio da ocorrência',
+  ocorrencia_motivo_codigo: 'Código do motivo', ocorrencia_motivo_descricao: 'Motivo', ocorrencia_titulo: 'Título',
+  ocorrencia_descricao: 'Descrição', ocorrencia_status: 'Status da ocorrência', ocorrencia_prioridade: 'Prioridade',
+  ocorrencia_severidade: 'Severidade', ocorrencia_canal_origem: 'Canal de origem', ocorrencia_motorista_nome: 'Motorista',
+  ocorrencia_motorista_telefone: 'Telefone do motorista', ocorrencia_veiculo_placa: 'Placa do veículo',
+  ocorrencia_criado_em: 'Data de abertura', ocorrencia_atualizado_em: 'Data de atualização', ocorrencia_encerrado_em: 'Data de encerramento',
+  ocorrencia_evento_id: 'Código do evento', ocorrencia_evento_id_ocorrencia: 'Código da ocorrência',
+  ocorrencia_evento_numero_ocorrencia: 'Número da ocorrência', ocorrencia_evento_tipo: 'Tipo do evento',
+  ocorrencia_evento_titulo: 'Título do evento', ocorrencia_evento_descricao: 'Descrição do evento',
+  ocorrencia_evento_status_anterior: 'Status anterior', ocorrencia_evento_status_novo: 'Novo status',
+  ocorrencia_evento_autor_tipo: 'Tipo do autor', ocorrencia_evento_autor_nome: 'Autor', ocorrencia_evento_canal: 'Canal',
+  ocorrencia_evento_criado_em: 'Data do evento',
+};
+
+export function getMappingSourceFieldGroup(fieldKey: string) {
+  const key = fieldKey.trim().toLowerCase();
+  return MAPPING_SOURCE_PREFIXES.find(([prefix]) => key.startsWith(`${prefix}_`))?.[1] ?? 'Geral';
+}
+
+export function formatMappingSourceFieldLabel(fieldKey: string) {
+  const key = fieldKey.trim().toLowerCase();
+  const known = MAPPING_SOURCE_LABELS[key];
+  if (known) return known;
+  const prefix = MAPPING_SOURCE_PREFIXES.find(([candidate]) => key.startsWith(`${candidate}_`))?.[0];
+  const displayKey = prefix ? key.slice(prefix.length + 1) : key;
+  const abbreviations: Record<string, string> = {
+    nf: 'NF', cte: 'CT-e', uf: 'UF', doc: 'documento', nro: 'número', qtd: 'quantidade',
+    dt: 'data', desc: 'descrição', id: 'ID', erp: 'ERP',
+  };
+  const label = displayKey.split('_').filter(Boolean).map((word) => abbreviations[word] ?? word).join(' ');
+  return label ? label.charAt(0).toLocaleUpperCase('pt-BR') + label.slice(1) : fieldKey;
+}
+
+export function normalizeMappingSourceFieldSearchText(fieldKey: string) {
+  return normalizeCanonicalFieldSearchText(
+    fieldKey,
+    formatMappingSourceFieldLabel(fieldKey),
+    getMappingSourceFieldGroup(fieldKey),
+  );
+}
+
 const LABELS: Record<string, string> = {
   carga_filial_romaneio: 'Número do romaneio', romaneio: 'Romaneio', codigo_carga: 'Código da carga',
   carga_data_desc: 'Data da descarga', data_desc: 'Data da descarga', data_descarga: 'Data da descarga',
