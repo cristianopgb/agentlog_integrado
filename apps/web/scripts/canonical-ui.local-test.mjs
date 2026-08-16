@@ -27,9 +27,11 @@ assert(api.includes('/canonical-entities/mapping-targets'),'Cliente não consult
 assert(panel.includes('listCanonicalMappingTargets(tenantId)'),'Painel API não carrega destinos canônicos.');
 assert(panel.includes('mapping.canonical_entity_id&&mapping.canonical_field_id'),'Painel não restaura mapping canônico após reload.');
 assert(panel.includes('canonical:${mapping.canonical_entity_id}:${mapping.canonical_field_id}'),'Valor canônico restaurado incorretamente.');
-for(const text of ['TargetCombobox','Buscar destino por nome ou chave','Não parear','Filtrar campos pendentes','Aplicar sugestão','Operações / Número da entrega'])assert(panel.includes(text),`Hardening UX ausente: ${text}`);
-for(const text of ['MAPPING_SOURCE_FIELD_GROUP_ORDER','formatMappingSourceFieldLabel(source)','getMappingSourceFieldGroup(source)'])assert(panel.includes(text),`Hotfix dos cards de origem ausente: ${text}`);
-assert(panel.includes('{target.label}')&&panel.includes('const selectedLabel = selected?.label ?? null'),'Select não prioriza mais o label canônico persistido em português.');
+for(const text of ['ApiFieldCombobox','Buscar campo da API, interpretação ou exemplo','Não preencher este campo','Campos canônicos do AgentLog','Campo recebido da API'])assert(panel.includes(text),`Hotfix de pareamento invertido ausente: ${text}`);
+for(const text of ['MAPPING_SOURCE_FIELD_GROUP_ORDER','formatMappingSourceFieldLabel(source)','getMappingSourceFieldGroup(source)','valuePreview(sampleValue(source))'])assert(panel.includes(text),`Opção de origem incompleta: ${text}`);
+assert(panel.includes('target.label || formatCanonicalFieldLabel'),'Linha canônica não prioriza o label persistido em português.');
+assert(panel.includes('draft[source] === targetValue')&&panel.includes('next[source] = targetValue'),'UI não converte entre a visão canônico → API e o draft source → canônico.');
+for(const text of ['Documento da entrega informado pela ocorrência','Número da ocorrência no legado','Motivo informado pelo legado','Documento da carga informado pela API'])assert(canonicalFieldDisplay.includes(text),`Interpretação de origem ausente: ${text}`);
 assert(canonicalFieldDisplay.includes("'Ocorrência'"),'Grupo visual de Ocorrência ausente.');
 for(const group of ['Carga', 'Entrega', 'Transporte', 'Cliente', 'Contato', 'Ocorrência', 'Financeiro', 'Canhoto', 'Atendimento', 'Armazém', 'Equipes', 'Empresa', 'Usuários', 'Geral'])assert(canonicalFieldDisplay.includes(`'${group}'`),`Ordem funcional ausente: ${group}`);
 assert(panel.includes("['operation_records.delivery_number', 'deliveries.delivery_number']"),'Número da entrega canônico não satisfaz a pendência.');

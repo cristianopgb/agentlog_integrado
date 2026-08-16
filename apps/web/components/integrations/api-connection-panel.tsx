@@ -28,7 +28,6 @@ import type { DataContractField } from '../../lib/data-contracts-api';
 import { listCanonicalMappingTargets, type CanonicalMappingTarget } from '../../lib/canonical-api';
 import type { TenantModuleOption } from '../../lib/modules-api';
 import {
-  CANONICAL_FIELD_GROUP_ORDER,
   MAPPING_SOURCE_FIELD_GROUP_ORDER,
   formatCanonicalFieldLabel,
   formatMappingSourceFieldLabel,
@@ -95,9 +94,6 @@ const preferredFieldOrder: Record<string, string[]> = {
   occurrences: ['occurrence_number', 'title', 'description', 'priority', 'origin_channel', 'opened_at', 'due_at', 'linked_document_number', 'linked_invoice_number', 'linked_cte_number', 'linked_delivery_number'],
   finance_records: ['freight_value', 'total_value', 'cte_number', 'billing_status', 'payment_status', 'billing_block_status'],
 };
-function normalizeSearch(value: string) {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-}
 function canonicalValue(target: CanonicalMappingTarget) {
   return `canonical:${target.canonical_entity_id}:${target.canonical_field_id}`;
 }
@@ -106,61 +102,32 @@ function rankTarget(target: CanonicalMappingTarget) {
   const index = preferred.indexOf(target.field_key);
   return index < 0 ? 1000 + target.field_sort_order : index;
 }
-function suggestTarget(source: string, targets: CanonicalMappingTarget[]) {
-  const tokens = new Set(normalizeSearch(source).split(/[^a-z0-9]+/).filter((token) => token.length > 1));
-  const aliases: Record<string, string[]> = { nro: ['numero', 'documento'], doc: ['documento'], motorista: ['driver'], telefone: ['phone'], veiculo: ['vehicle'], placa: ['plate'], transportadora: ['carrier'], volume: ['volume'], frete: ['freight'], cte: ['cte'], entrega: ['delivery'], status: ['status'], whatsapp: ['whatsapp'] };
-  let best: { target: CanonicalMappingTarget; score: number } | null = null;
-  for (const target of targets) {
-    const haystack = normalizeSearch(`${target.canonical_entity_key} ${target.field_key} ${target.label}`);
-    let score = 0;
-    for (const token of tokens) {
-      if (haystack.includes(token)) score += token.length + 2;
-      for (const alias of aliases[token] ?? []) if (haystack.includes(alias)) score += token.length + 1;
-    }
-    if (tokens.has('telefone') && target.field_key === 'driver_phone') score += 20;
-    if (tokens.has('whatsapp') && target.field_key === 'driver_whatsapp') score += 25;
-    if (tokens.has('frete') && target.field_key === 'freight_value') score += 20;
-    if (tokens.has('status') && tokens.has('entrega') && target.field_key === 'delivery_status') score += 20;
-    if (!best || score > best.score) best = { target, score };
-  }
-  return best && best.score >= 8 ? best.target : null;
-}
-
-function TargetCombobox({ value, targets, legacyFields, onChange }: { value: string; targets: CanonicalMappingTarget[]; legacyFields: DataContractField[]; onChange: (value: string) => void }) {
+function ApiFieldCombobox({ value, sources, sampleValue, onChange }: { value: string; sources: string[]; sampleValue: (source: string) => unknown; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null);
-  const selected = targets.find((target) => canonicalValue(target) === value);
-  const legacy = legacyFields.find((field) => field.id === value);
   const queryTokens = normalizeCanonicalFieldQuery(query).split(' ').filter(Boolean);
-  const filtered = targets.filter((target) => {
-    const searchText = normalizeCanonicalFieldSearchText(
-      target.field_key,
-      formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key),
-      getCanonicalFieldGroup(target.field_key, target.canonical_entity_key),
-    );
+  const filtered = sources.filter((source) => {
+    const searchText = normalizeCanonicalFieldSearchText(source, formatMappingSourceFieldLabel(source), `${getMappingSourceFieldGroup(source)} ${valuePreview(sampleValue(source))}`);
     return queryTokens.every((token) => searchText.includes(token));
   });
-  const groups = CANONICAL_FIELD_GROUP_ORDER.map((label) => ({
+  const groups = MAPPING_SOURCE_FIELD_GROUP_ORDER.map((label) => ({
     label,
     items: filtered
-      .filter((target) => getCanonicalFieldGroup(target.field_key, target.canonical_entity_key) === label)
-      .sort((a, b) => rankTarget(a) - rankTarget(b)),
+      .filter((source) => getMappingSourceFieldGroup(source) === label),
   })).filter((group) => group.items.length);
-  const selectedLabel = selected?.label ?? null;
   return <div ref={root} className="relative mt-3">
     <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between rounded-xl border bg-white p-2 text-left text-sm">
-      <span>{selected ? <><span className="block font-medium">{selectedLabel}</span><span className="block font-mono text-xs text-slate-500">{selected.field_key}</span></> : (legacy ? `Mapeamento anterior / ${legacy.field_key}` : 'Não parear')}</span><span aria-hidden>⌄</span>
+      <span>{value ? <><span className="block font-medium">{formatMappingSourceFieldLabel(value)}</span><span className="block font-mono text-xs text-slate-500">{value} · {valuePreview(sampleValue(value))}</span></> : 'Não preencher este campo'}</span><span aria-hidden>⌄</span>
     </button>
     {open ? <div className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-xl border bg-white p-2 shadow-xl">
-      <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar destino por nome ou chave..." aria-label="Buscar destino canônico" className="mb-2 w-full rounded-lg border p-2 text-sm" />
-      <button type="button" role="option" onClick={() => { onChange(''); setOpen(false); }} className="w-full rounded-lg px-2 py-2 text-left text-sm font-semibold hover:bg-slate-100">Não parear</button>
+      <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar campo da API, interpretação ou exemplo..." aria-label="Buscar campo recebido da API" className="mb-2 w-full rounded-lg border p-2 text-sm" />
+      <button type="button" role="option" onClick={() => { onChange(''); setOpen(false); }} className="w-full rounded-lg px-2 py-2 text-left text-sm font-semibold hover:bg-slate-100">Não preencher este campo</button>
       {groups.map((group) => <div key={group.label} className="mt-2 border-t pt-2">
         <p className="px-2 text-xs font-bold uppercase tracking-wide text-slate-500">{group.label}</p>
-        {group.items.map((target) => <button type="button" role="option" aria-selected={value === canonicalValue(target)} key={target.canonical_field_id} onClick={() => { onChange(canonicalValue(target)); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="block font-medium">{target.label}</span><span className="block font-mono text-xs text-slate-500">{target.field_key}</span></button>)}
+        {group.items.map((source) => <button type="button" role="option" aria-selected={value === source} key={source} onClick={() => { onChange(source); setOpen(false); setQuery(''); }} className="w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-blue-50"><span className="block font-semibold">{formatMappingSourceFieldLabel(source)}</span><span className="block font-mono text-xs text-slate-600">{source}</span><span className="block text-xs text-slate-500">Exemplo: {valuePreview(sampleValue(source))}</span></button>)}
       </div>)}
-      {!groups.length ? <p className="p-3 text-sm text-slate-500">Nenhum destino encontrado.</p> : null}
-      {legacy ? <button type="button" role="option" onClick={() => setOpen(false)} className="mt-2 w-full border-t px-2 py-2 text-left text-sm text-slate-600">Mapeamento anterior / {legacy.field_key}</button> : null}
+      {!groups.length ? <p className="p-3 text-sm text-slate-500">Nenhum campo da API encontrado.</p> : null}
     </div> : null}
   </div>;
 }
@@ -169,13 +136,6 @@ function valuePreview(value: unknown) {
   return typeof value === 'object'
     ? JSON.stringify(value).slice(0, 90)
     : String(value).slice(0, 90);
-}
-function inferredType(value: unknown) {
-  if (value == null) return 'desconhecido';
-  if (Array.isArray(value)) return 'lista';
-  if (typeof value === 'number')
-    return Number.isInteger(value) ? 'inteiro' : 'decimal';
-  return typeof value;
 }
 function numericPreview(
   value: unknown,
@@ -255,7 +215,7 @@ export function ApiConnectionPanel({
     sample?: Record<string, unknown>[];
   } | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const [mappingFilter, setMappingFilter] = useState<'all' | 'pending' | 'suggestions'>('all');
+  const [mappingQuery, setMappingQuery] = useState('');
   const [msg, setMsg] = useState('');
   const [messageTone, setMessageTone] = useState<'success' | 'error'>(
     'success',
@@ -381,6 +341,8 @@ export function ApiConnectionPanel({
     });
   const detected = result?.fields ?? config?.detected_fields ?? [];
   const sampleRows = result?.sample ?? config?.sample_preview ?? [];
+  const sampleValue = (source: string) =>
+    sampleRows.find((row) => Object.hasOwn(row, source))?.[source];
   const duplicates = useMemo(() => {
     const counts = Object.values(draft)
       .filter(Boolean)
@@ -411,13 +373,27 @@ export function ApiConnectionPanel({
       field.field_key === 'delivery_number',
   );
   const missingDeliveryOperationalKey = Boolean(deliveryOperationalField) && missingEssential[0]?.label === essentialTargets[0].label;
-  const groupedDetected = MAPPING_SOURCE_FIELD_GROUP_ORDER.map((label) => ({
+  const canonicalGroupLabel = (target: CanonicalMappingTarget) => {
+    const labels: Record<string, string> = {
+      operation_records: 'Operações', deliveries: 'Operações', transport_records: 'Transporte',
+      finance_records: 'Financeiro', occurrences: 'Ocorrências',
+      occurrence_events: 'Eventos de Ocorrência', attendance_records: 'Atendimento',
+      receipt_records: 'Canhoto',
+    };
+    return labels[target.canonical_entity_key] ?? getCanonicalFieldGroup(target.field_key, target.canonical_entity_key);
+  };
+  const canonicalGroupOrder = ['Operações', 'Transporte', 'Financeiro', 'Ocorrências', 'Eventos de Ocorrência', 'Atendimento', 'Canhoto', 'Geral'];
+  const mappingQueryTokens = normalizeCanonicalFieldQuery(mappingQuery).split(' ').filter(Boolean);
+  const sourceSearchText = detected.map((source) => normalizeCanonicalFieldSearchText(
+    source, formatMappingSourceFieldLabel(source), `${getMappingSourceFieldGroup(source)} ${valuePreview(sampleValue(source))}`,
+  )).join(' ');
+  const groupedCanonicalTargets = canonicalGroupOrder.map((label) => ({
     label,
-    fields: detected.filter((source) => getMappingSourceFieldGroup(source) === label).filter((source) => {
-      const suggestion = suggestTarget(source, canonicalTargets);
-      return mappingFilter === 'all' || (mappingFilter === 'pending' ? !draft[source] : !draft[source] && Boolean(suggestion));
-    }),
-  })).filter((group) => group.fields.length);
+    targets: canonicalTargets.filter((target) => canonicalGroupLabel(target) === label).filter((target) => {
+      const ownText = normalizeCanonicalFieldSearchText(target.field_key, target.label || formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key), label);
+      return mappingQueryTokens.every((token) => ownText.includes(token) || sourceSearchText.includes(token));
+    }).sort((a, b) => rankTarget(a) - rankTarget(b)),
+  })).filter((group) => group.targets.length);
   const confirmMappings = () =>
     act('mapping', async () => {
       await saveApiFieldMappings(
@@ -633,8 +609,6 @@ export function ApiConnectionPanel({
       setProcessing(false);
     }
   };
-  const sampleValue = (source: string) =>
-    sampleRows.find((row) => Object.hasOwn(row, source))?.[source];
   return (
     <div className="space-y-4">
       <div className="grid gap-2 md:grid-cols-7">
@@ -859,102 +833,31 @@ export function ApiConnectionPanel({
       ) : null}
       {phase === 'mapping' ? (
         <div className="grid gap-4 xl:grid-cols-3">
-          <Card>
-            <h2 className="text-lg font-bold">Campos da API</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Campos brutos detectados, organizados pelo prefixo da origem.
-            </p>
-            <div className="mt-4 space-y-3">
-              {groupedDetected.map((group) => <section key={group.label}>
-                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{group.label} · {group.fields.length}</h3>
-                <div className="space-y-3">{group.fields.map((source) => {
-                  const value = sampleValue(source);
-                  const target = canonicalTargets.find((item) => canonicalValue(item) === draft[source]);
-                  const suggestion = !draft[source] ? suggestTarget(source, canonicalTargets) : null;
-                  return <div key={source} className="rounded-2xl border p-3">
-                    <div className="flex justify-between gap-2">
-                      <StatusBadge tone={draft[source] ? 'success' : 'neutral'}>
-                        {draft[source] ? 'pareado' : 'não pareado'}
-                      </StatusBadge>
-                      <span className="text-xs text-slate-500">
-                        {inferredType(value)}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm font-semibold">
-                      {formatMappingSourceFieldLabel(source)}
-                    </p>
-                    <p className="mt-2 break-all text-xs text-slate-600">
-                      Exemplo: {valuePreview(value)}
-                    </p>
-                    <p className="mt-2 text-xs"><span className="text-slate-500">Destino atual:</span> <b>{target?.label ?? (draft[source] ? 'Mapeamento anterior preservado' : 'Não pareado')}</b></p>
-                    {suggestion ? <p className="mt-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-800">Sugestão: <b>{suggestion.label}</b></p> : null}
+          <div className="xl:col-span-2"><Card>
+            <h2 className="text-lg font-bold">Campos canônicos do AgentLog</h2>
+            <p className="mt-1 text-sm text-slate-600">Escolha qual campo recebido da API alimenta cada destino canônico. Campos sem origem selecionada não serão preenchidos.</p>
+            <input value={mappingQuery} onChange={(event) => setMappingQuery(event.target.value)} placeholder="Buscar canônico, módulo, campo da API, interpretação ou exemplo..." aria-label="Buscar pareamento" className="mt-4 w-full rounded-xl border p-3 text-sm" />
+            <div className="mt-5 space-y-6">
+              {groupedCanonicalTargets.map((group) => <section key={group.label}>
+                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{group.label} · {group.targets.length}</h3>
+                <div className="grid gap-3 md:grid-cols-2">{group.targets.map((target) => {
+                  const targetValue = canonicalValue(target);
+                  const selectedSource = detected.find((source) => draft[source] === targetValue) ?? '';
+                  return <div key={target.canonical_field_id} className="rounded-2xl border p-3">
+                    <div className="flex items-center justify-between gap-2"><div><p className="text-xs text-slate-500">Canônico</p><p className="font-semibold">{target.label || formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key)}</p></div><StatusBadge tone={selectedSource ? 'success' : 'neutral'}>{selectedSource ? 'preenchido pela API' : 'não preenchido'}</StatusBadge></div>
+                    <p className="mt-3 text-xs font-semibold text-slate-500">Campo recebido da API</p>
+                    <ApiFieldCombobox value={selectedSource} sources={detected} sampleValue={sampleValue} onChange={(source) => setDraft((current) => {
+                      const next = { ...current };
+                      for (const [key, value] of Object.entries(next)) if (value === targetValue || key === source) delete next[key];
+                      if (source) next[source] = targetValue;
+                      return next;
+                    })} />
                   </div>;
                 })}</div>
               </section>)}
+              {!groupedCanonicalTargets.length ? <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Nenhum campo canônico encontrado para esta busca.</p> : null}
             </div>
-          </Card>
-          <Card>
-            <h2 className="text-lg font-bold">Pareamento</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Você não precisa parear todos os campos recebidos da API. Campos
-              não pareados serão ignorados operacionalmente. Quanto mais campos
-              forem pareados, mais recursos ficarão disponíveis.
-            </p>
-            <div className="mt-4 space-y-3">
-              {groupedDetected.map((group) => <section key={group.label}>
-                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{group.label} · {group.fields.length}</h3>
-                <div className="space-y-3">{group.fields.map((source) => {
-                const duplicate = Boolean(
-                  draft[source] && duplicates.has(draft[source]),
-                );
-                const suggestion = !draft[source] ? suggestTarget(source, canonicalTargets) : null;
-                return (
-                  <div
-                    key={source}
-                    className={`block rounded-2xl border p-3 ${duplicate ? 'border-rose-400 bg-rose-50' : ''}`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">
-                        {formatMappingSourceFieldLabel(source)}
-                      </span>
-                      <StatusBadge
-                        tone={
-                          duplicate
-                            ? 'warning'
-                            : draft[source]
-                              ? 'success'
-                              : 'neutral'
-                        }
-                      >
-                        {duplicate
-                          ? 'duplicado'
-                          : draft[source]
-                            ? 'pareado'
-                            : 'não pareado'}
-                      </StatusBadge>
-                    </div>
-                    <TargetCombobox
-                      value={draft[source] ?? ''}
-                      targets={canonicalTargets}
-                      legacyFields={fields.filter((field) => Object.values(draft).includes(field.id))}
-                      onChange={(value) =>
-                        setDraft((current) => ({
-                          ...current,
-                          [source]: value,
-                        }))
-                      }
-                    />
-                    {suggestion ? <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-800"><span>Sugestão: <b>{suggestion.label}</b></span><button type="button" onClick={() => setDraft((current) => current[source] ? current : ({ ...current, [source]: canonicalValue(suggestion) }))} className="shrink-0 rounded-lg bg-blue-600 px-2 py-1 font-bold text-white">Aplicar sugestão</button></div> : null}
-                    {duplicate ? (
-                      <p className="mt-2 text-xs font-semibold text-rose-700">
-                        Erro: este campo nativo já recebe outro campo da API.
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })}</div></section>)}
-            </div>
-          </Card>
+          </Card></div>
           <Card>
             <h2 className="text-lg font-bold">Plano / Normalização</h2>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
@@ -982,7 +885,6 @@ export function ApiConnectionPanel({
               <p className="font-semibold">Pendências de qualidade</p>
               {missingEssential.length ? <><p className="mt-1">Alguns campos essenciais ainda não foram pareados. Isso não bloqueia o avanço, mas pode reduzir indicadores e validações.</p><ul className="mt-2 list-disc pl-5">{missingEssential.map((item) => <li key={item.label}>{item.label} <span className="font-normal">· recomendado para qualidade de dados</span></li>)}</ul></> : <p className="mt-1">Todos os campos essenciais estão pareados.</p>}
             </div>
-            {missingEssential.length ? <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => setMappingFilter('pending')} className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold">Filtrar campos pendentes</button><button type="button" onClick={() => setMappingFilter('suggestions')} className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold">Ver sugestões</button>{mappingFilter !== 'all' ? <button type="button" onClick={() => setMappingFilter('all')} className="rounded-xl px-3 py-2 text-sm text-slate-600">Mostrar todos</button> : null}</div> : null}
             <div className="mt-3 rounded-2xl border p-3 text-sm"><p className="font-semibold">Próximos passos</p><p className="mt-1 text-slate-600">Revise as sugestões, confirme os pareamentos e prossiga para configurar valores e formatos.</p></div>
             {duplicates.size ? (
               <p className="mt-3 text-sm font-semibold text-rose-700">
