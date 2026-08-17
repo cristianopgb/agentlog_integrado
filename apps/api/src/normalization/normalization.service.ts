@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
+import { TenantLogisticKeyService } from './tenant-logistic-key.service';
 
 type Batch = {
   id: string;
@@ -313,7 +314,7 @@ const extensionColumns: Record<string, Set<string>> = {
 };
 const occurrenceColumns = new Set([
   'occurrence_number','title','description','current_priority','source_channel',
-  'opened_at','due_at','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number',
+  'source_reference','current_status','closed_at','opened_at','due_at','linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number','linked_manifest_number','linked_order_number',
 ]);
 const aliases: Record<string, string> = {
   expected_delivery_date: 'expected_date',
@@ -324,7 +325,7 @@ const aliases: Record<string, string> = {
 export class NormalizationService {
   private readonly logger = new Logger(NormalizationService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: SupabaseService, private readonly logisticKeys: TenantLogisticKeyService) {}
 
   listRuns(tenantId: string) {
     return this.supabase.select(
@@ -540,6 +541,21 @@ export class NormalizationService {
       const signatureMappings =
         dataSource.source_type === 'api' ? loaded.mappings : recordMappings;
       const datasetRole = this.datasetRole(signatureMappings);
+      if(dataSource.source_type==='api') {
+        try { await this.logisticKeys.validateSourceMapping(tenantId,contract.id,contract.entity_key); }
+        catch(error) {
+          const message=error instanceof Error?error.message:'Chave logística principal inválida.';
+          await addError('PRIMARY_LOGISTIC_KEY_REQUIRED',message,{data_source_id:dataSource.id,data_contract_id:contract.id,action:'Mapeie o campo recebido para a chave logística principal da empresa.'});
+          return this.finish(run.id,'failed',counters,errorSummary);
+        }
+      }
+      if(contract.entity_key==='occurrences'&&recordMappings.some(mapping=>{
+        const entity=mapping.canonical_entity?.entity_key;
+        return entity==='operation_records'||legacyEntities.has(entity??'');
+      })){
+        await addError('OCCURRENCE_OPERATION_TARGET_FORBIDDEN','Fontes de Ocorrências não podem publicar operation_records. Mapeie a chave logística em Ocorrências / vínculo.',{data_source_id:dataSource.id,action:'Remova destinos de Operações e use o campo de vínculo correspondente à chave principal.'});
+        return this.finish(run.id,'failed',counters,errorSummary);
+      }
       const schemaSignature = this.schemaSignature(signatureMappings);
       const integration = await this.resolveCanonicalIntegration(
         tenantId,
@@ -576,6 +592,10 @@ export class NormalizationService {
         );
         return this.finish(run.id, 'failed', counters, errorSummary);
       }
+      // Reject only a real same-module/same-entity collision, before any
+      // canonical record is written. Complementary entities remain allowed.
+      if(dataSource.source_type==='api'&&batch.data_source_id)
+        await this.assertApiSourceActivationAllowed(tenantId,batch.data_source_id,contract.module_key,contract.entity_key);
       const enabledModules = await this.getEnabledModules(tenantId);
       let hasPendingActivation = false;
       for (const record of recordsWithPayload) {
@@ -653,6 +673,10 @@ export class NormalizationService {
               record.id,
               mapping,
             );
+            continue;
+          }
+          if(contract.entity_key==='occurrences'&&resolved.entity==='operation_records'){
+            await addError('OCCURRENCE_OPERATION_TARGET_FORBIDDEN','Fonte de Ocorrências não pode criar ou atualizar Operações.',{field_key:fieldKey,action:'Mapeie este valor para Ocorrências / vínculo.'},record.id,mapping);
             continue;
           }
           if (
@@ -819,13 +843,6 @@ export class NormalizationService {
         counters.processed_records &&
         hasPendingActivation
       ) {
-        if (dataSource.source_type === 'api' && batch.data_source_id)
-          await this.assertApiSourceActivationAllowed(
-            tenantId,
-            batch.data_source_id,
-            contract.module_key,
-            contract.entity_key,
-          );
         await this.activateBatch(
           tenantId,
           integration.id,
@@ -1393,17 +1410,19 @@ export class NormalizationService {
     return { id: row.id, created: true };
   }
   private async upsertOccurrence(tenantId:string,values:Record<string,unknown>,record:RecordRow,userId:string,operationRecordId?:string){
-    const number=typeof values.occurrence_number==='string'&&/^OC\d{7}$/.test(values.occurrence_number)?values.occurrence_number:null;
+    // Imported identifiers are references, never AgentLog occurrence numbers.
+    const number=null;
     const channel=String(values.source_channel||'external');
     const resolvedOperationId=operationRecordId??await this.resolveOccurrenceOperation(tenantId,values);
-    if(!number&&!resolvedOperationId)return null;
+    const sourceReference=values.source_reference==null?'':String(values.source_reference).trim();
+    if(!sourceReference&&!resolvedOperationId&&!values.title)return null;
     let existing:Array<Record<string,unknown>>=[];
-    if(number)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type&tenant_id=eq.${tenantId}&occurrence_number=eq.${encodeURIComponent(number)}&deleted_at=is.null&limit=1`);
+    if(sourceReference)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type,source_reference&tenant_id=eq.${tenantId}&source_reference=eq.${encodeURIComponent(sourceReference)}&source_channel=eq.${encodeURIComponent(channel)}&deleted_at=is.null&limit=1`);
     else if(values.title&&values.opened_at){
       const links=await this.supabase.select<Array<{occurrence_id:string}>>('occurrence_operation_links',`select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${resolvedOperationId}&limit=100`);
       if(links.length)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type&tenant_id=eq.${tenantId}&id=in.(${links.map(link=>link.occurrence_id).join(',')})&source_channel=eq.${encodeURIComponent(channel)}&title=eq.${encodeURIComponent(String(values.title))}&opened_at=eq.${encodeURIComponent(String(values.opened_at))}&deleted_at=is.null&limit=1`);
     }else return null;
-    const safeValues=Object.fromEntries(Object.entries(values).filter(([key,value])=>value!==null&&value!==''&&!['linked_document_number','linked_invoice_number','linked_cte_number','linked_delivery_number'].includes(key)));
+    const safeValues=Object.fromEntries(Object.entries(values).filter(([key,value])=>value!==null&&value!==''&&!key.startsWith('linked_')));
     let id:string,created=false;
     if(existing[0]){
       id=String(existing[0].id);
@@ -1411,7 +1430,7 @@ export class NormalizationService {
       if(Object.keys(gaps).length)await this.supabase.update('occurrences',`tenant_id=eq.${tenantId}&id=eq.${id}`,{...gaps,updated_by:userId});
     }else{
       const allocated=number??String(await this.supabase.rpc('next_tenant_occurrence_number',{p_tenant_id:tenantId}));
-      const [row]=await this.supabase.insert<Array<{id:string}>>('occurrences',{tenant_id:tenantId,occurrence_number:allocated,title:String(values.title||`Ocorrência ${allocated}`),description:values.description??null,current_priority:values.current_priority??'medium',source_channel:channel,opened_at:values.opened_at??new Date().toISOString(),due_at:values.due_at??null,created_by:userId,updated_by:userId,created_by_type:'normalization'});
+      const [row]=await this.supabase.insert<Array<{id:string}>>('occurrences',{tenant_id:tenantId,occurrence_number:allocated,source_reference:values.source_reference??null,title:String(values.title||`Ocorrência ${allocated}`),description:values.description??null,current_status:values.current_status??'open',current_priority:values.current_priority??'medium',source_channel:channel,opened_at:values.opened_at??new Date().toISOString(),closed_at:values.closed_at??null,due_at:values.due_at??null,created_by:userId,updated_by:userId,created_by_type:'normalization'});
       id=row.id;created=true;
     }
     if(resolvedOperationId)await this.supabase.insert('occurrence_operation_links',{tenant_id:tenantId,occurrence_id:id,operation_record_id:resolvedOperationId,relationship_type:'source',is_primary:true,linked_by:userId}).catch(()=>undefined);
@@ -1419,14 +1438,9 @@ export class NormalizationService {
     return{id,created};
   }
   private async resolveOccurrenceOperation(tenantId:string,values:Record<string,unknown>){
-    const candidates:[string,string][]=[['linked_document_number','document_number'],['linked_invoice_number','invoice_number'],['linked_cte_number','cte_number'],['linked_delivery_number','delivery_number']];
-    for(const [source,target] of candidates){
-      if(!this.hasOperationalIdentifier(values[source]))continue;
-      const rows=await this.supabase.select<Array<{id:string}>>('operation_records',`select=id&tenant_id=eq.${tenantId}&${target}=eq.${encodeURIComponent(String(values[source]))}&deleted_at=is.null&is_current=eq.true&canonical_validity_status=eq.valid&limit=2`);
-      if(rows.length===1)return rows[0].id;
-      if(rows.length>1)return null;
-    }
-    return null;
+    const setting=await this.logisticKeys.get(tenantId);
+    if(!setting)return null;
+    return this.logisticKeys.resolveOperation(tenantId,setting.primary_logistic_key,values[this.logisticKeys.expectedCanonicalField(setting.primary_logistic_key,'occurrences')]);
   }
   private event(
     tenantId: string,

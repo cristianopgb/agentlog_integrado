@@ -19,6 +19,7 @@ import { ApiConnectorConfigService } from './api-connector-config.service';
 import { ApiConnectorSyncService } from './api-connector-sync.service';
 import { ValueMappingsService } from './value-mappings.service';
 import { FieldParseRulesService } from './field-parse-rules.service';
+import { TenantLogisticKeyService } from '../normalization/tenant-logistic-key.service';
 @Controller('tenants/:tenantId/integrations/:sourceId')
 @UseGuards(AuthGuard, PermissionsGuard)
 export class ApiIntegrationsController {
@@ -28,7 +29,10 @@ export class ApiIntegrationsController {
     private readonly values: ValueMappingsService,
     private readonly formats: FieldParseRulesService,
     private readonly rbac: RbacService,
+    private readonly logisticKeys: TenantLogisticKeyService,
   ) {}
+  @Get('primary-logistic-key') @RequirePermission('integrations.api.configure')
+  primaryLogisticKey(@Param('tenantId') t:string) { return this.logisticKeys.get(t); }
   @Get('api-config') @RequirePermission('integrations.api.configure') get(
     @Param('tenantId') t: string,
     @Param('sourceId') s: string,
@@ -77,6 +81,7 @@ export class ApiIntegrationsController {
     @Req() req: AuthenticatedRequest,
     @Body()
     body: {
+      primary_logistic_key?: string;
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;

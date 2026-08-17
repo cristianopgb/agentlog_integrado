@@ -17,7 +17,8 @@
     "test:attendance-agent": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/agents/attendance-agent.local-test.js",
     "test:agents": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/agents/agents.local-test.js",
     "test:public-chat": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/public-chat/public-chat.local-test.js",
-    "test:canonical-coverage": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/canonical/canonical-coverage.local-test.js"
+    "test:canonical-coverage": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/canonical/canonical-coverage.local-test.js",
+    "test:tenant-logistic-key": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/normalization/tenant-logistic-key.local-test.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

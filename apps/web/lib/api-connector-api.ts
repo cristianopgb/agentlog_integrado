@@ -157,6 +157,9 @@ export type ApiFieldMapping = {
 };
 export const listApiFieldMappings = (t: string, s: string) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`);
+export type PrimaryLogisticKey='delivery_number'|'document_number'|'invoice_number'|'cte_number'|'manifest_number'|'order_number';
+export type TenantLogisticKeySetting={tenant_id:string;primary_logistic_key:PrimaryLogisticKey;established_by_data_source_id:string|null;established_at:string};
+export const getPrimaryLogisticKey=(t:string,s:string)=>call<TenantLogisticKeySetting|null>(`${route(t,s)}/primary-logistic-key`);
 export type IgnoredApiField = {
   source_field_name: string;
   data_contract_field_id: string;
@@ -172,11 +175,11 @@ export const saveApiFieldMappings = (
     data_contract_field_id: string;
     canonical_entity_id?: string;
     canonical_field_id?: string;
-  }>,
+  }>, primary_logistic_key?:PrimaryLogisticKey,
 ) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`, {
     method: 'PUT',
-    body: JSON.stringify({ mappings }),
+    body: JSON.stringify({ mappings, primary_logistic_key }),
   });
 export type ValueMappingItem = {
   source_field_name: string;
