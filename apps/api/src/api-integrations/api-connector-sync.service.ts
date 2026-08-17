@@ -192,8 +192,8 @@ export class ApiConnectorSyncService {
       throw new BadRequestException('Fontes de Ocorrências não podem mapear destinos de Operações. Use apenas campos Ocorrências / vínculo para localizar uma operação existente.');
     const selectedKey=currentLogisticKey?.primary_logistic_key??body.primary_logistic_key!;
     const expectedField=this.logisticKeys.expectedCanonicalField(selectedKey as PrimaryLogisticKey,contract.entity_key);
-    if(!proposedTargets.some(target=>target.field_key===expectedField))
-      throw new BadRequestException(`Esta empresa usa ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} como chave logística principal. Esta fonte precisa mapear um campo da API para ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} antes de publicar dados canônicos.`);
+    if(!proposedTargets.some(target=>target.entity_key===contract.entity_key&&target.field_key===expectedField))
+      throw new BadRequestException(`Esta empresa usa ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} como chave logística principal. Mapeie um campo da API para ${this.logisticKeys.expectedCanonicalLabel(selectedKey as PrimaryLogisticKey,contract.entity_key)}.`);
     for(const item of requested.filter(item=>!item.data_contract_field_id)){
       const canonical=await this.db.select<Array<{id:string;canonical_entity_id:string;field_key:string;data_type:string;is_required:boolean}>>('canonical_fields',`select=id,canonical_entity_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
       if(!canonical[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
