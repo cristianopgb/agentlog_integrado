@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 export const PRIMARY_LOGISTIC_KEYS = ['delivery_number','document_number','invoice_number','cte_number','manifest_number','order_number'] as const;
 export type PrimaryLogisticKey = typeof PRIMARY_LOGISTIC_KEYS[number];
+export type TenantLogisticKeySetting = {tenant_id:string;primary_logistic_key:PrimaryLogisticKey;established_by_data_source_id:string|null;established_at:string};
 
 const labels: Record<PrimaryLogisticKey,string> = {
   delivery_number:'Documento da entrega', document_number:'Documento operacional',
@@ -19,8 +20,8 @@ export class TenantLogisticKeyService {
   constructor(private readonly db: SupabaseService) {}
 
   label(key: PrimaryLogisticKey) { return labels[key]; }
-  async get(tenantId:string) {
-    const rows=await this.db.select<Array<{tenant_id:string;primary_logistic_key:PrimaryLogisticKey;established_by_data_source_id:string|null;established_at:string}>>('tenant_integration_settings',`select=tenant_id,primary_logistic_key,established_by_data_source_id,established_at&tenant_id=eq.${tenantId}&limit=1`);
+  async get(tenantId:string):Promise<TenantLogisticKeySetting|null> {
+    const rows=await this.db.select<TenantLogisticKeySetting[]>('tenant_integration_settings',`select=tenant_id,primary_logistic_key,established_by_data_source_id,established_at&tenant_id=eq.${tenantId}&limit=1`);
     return rows[0]??null;
   }
   async establish(tenantId:string, sourceId:string, key:string, userId:string) {

@@ -10,6 +10,7 @@ async function run(){
     insert:async(table:string,payload:any)=>{if(table==='tenant_integration_settings')settings.push(payload);return[payload];},
   };
   const service=new TenantLogisticKeyService(db);
+  assert.equal(await service.get('tenant-without-setting'),null,'tenant sem configuração retorna null, nunca array vazio');
   await service.establish('tenant-a','source-operations','invoice_number','user-a');
   assert.equal((await service.get('tenant-a'))?.primary_logistic_key,'invoice_number','a primeira fonte define a chave');
   await assert.rejects(()=>service.establish('tenant-a','source-2','cte_number','user-a'),/já usa NF/);
