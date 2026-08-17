@@ -23,6 +23,9 @@ import {
   type ApiFieldMapping,
   type IgnoredApiField,
   normalizeFieldParseRule,
+  getPrimaryLogisticKey,
+  type PrimaryLogisticKey,
+  type TenantLogisticKeySetting,
 } from '../../lib/api-connector-api';
 import type { DataContractField } from '../../lib/data-contracts-api';
 import { listCanonicalMappingTargets, type CanonicalMappingTarget } from '../../lib/canonical-api';
@@ -94,6 +97,11 @@ const preferredFieldOrder: Record<string, string[]> = {
   occurrences: ['occurrence_number', 'title', 'description', 'priority', 'origin_channel', 'opened_at', 'due_at', 'linked_document_number', 'linked_invoice_number', 'linked_cte_number', 'linked_delivery_number'],
   finance_records: ['freight_value', 'total_value', 'cte_number', 'billing_status', 'payment_status', 'billing_block_status'],
 };
+const logisticKeyOptions: Array<{value:PrimaryLogisticKey;label:string}>=[
+  {value:'delivery_number',label:'Documento da entrega'},{value:'document_number',label:'Documento operacional'},
+  {value:'invoice_number',label:'NF'},{value:'cte_number',label:'CT-e'},
+  {value:'manifest_number',label:'Manifesto / Romaneio'},{value:'order_number',label:'Pedido'},
+];
 function canonicalValue(target: CanonicalMappingTarget) {
   return `canonical:${target.canonical_entity_id}:${target.canonical_field_id}`;
 }
@@ -204,6 +212,8 @@ export function ApiConnectionPanel({
   const [valueMappings, setValueMappings] = useState<ValueMappingItem[]>([]);
   const [apiMappings, setApiMappings] = useState<ApiFieldMapping[]>([]);
   const [ignoredFields, setIgnoredFields] = useState<IgnoredApiField[]>([]);
+  const [logisticSetting,setLogisticSetting]=useState<TenantLogisticKeySetting|null>(null);
+  const [logisticKey,setLogisticKey]=useState<PrimaryLogisticKey|''>('');
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
     Record<string, FieldParseRule>
@@ -226,7 +236,7 @@ export function ApiConnectionPanel({
     NormalizationError[]
   >([]);
   async function load() {
-    const [current, history, mappings, ignored, values, formats, targets] = await Promise.all([
+    const [current, history, mappings, ignored, values, formats, targets,setting] = await Promise.all([
       getApiConfig(tenantId, sourceId),
       listApiRuns(tenantId, sourceId),
       listApiFieldMappings(tenantId, sourceId),
@@ -234,7 +244,9 @@ export function ApiConnectionPanel({
       listValueMappings(tenantId, sourceId),
       listFieldParseRules(tenantId, sourceId),
       listCanonicalMappingTargets(tenantId),
+      getPrimaryLogisticKey(tenantId,sourceId),
     ]);
+    setLogisticSetting(setting); if(setting)setLogisticKey(setting.primary_logistic_key);
     setCanonicalTargets(targets);
     setApiMappings(mappings);
     setIgnoredFields(ignored);
@@ -407,7 +419,7 @@ export function ApiConnectionPanel({
               return {source_field_name,data_contract_field_id:'',canonical_entity_id,canonical_field_id};
             }
             return {source_field_name,data_contract_field_id:target};
-          }),
+          }), logisticSetting?undefined:logisticKey||undefined,
       );
       await load();
       setMsg(
@@ -836,6 +848,14 @@ export function ApiConnectionPanel({
           <div className="xl:col-span-2"><Card>
             <h2 className="text-lg font-bold">Campos canônicos do AgentLog</h2>
             <p className="mt-1 text-sm text-slate-600">Escolha qual campo recebido da API alimenta cada destino canônico. Campos sem origem selecionada não serão preenchidos.</p>
+            <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+              <label className="text-sm font-bold" htmlFor="primary-logistic-key">Chave logística principal da empresa</label>
+              <select id="primary-logistic-key" value={logisticKey} disabled={Boolean(logisticSetting)} onChange={(event)=>setLogisticKey(event.target.value as PrimaryLogisticKey)} className="mt-2 w-full rounded-xl border bg-white p-3 disabled:bg-slate-100">
+                {!logisticSetting?<option value="">Selecione uma chave logística</option>:null}
+                {logisticKeyOptions.map((option)=><option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <p className="mt-2 text-xs text-slate-600">{logisticSetting?'Esta chave está definida para a empresa e não pode variar entre integrações. Mapeie abaixo o campo recebido por esta API para a mesma chave.':'A primeira escolha será usada obrigatoriamente por todas as próximas integrações desta empresa.'}</p>
+            </div>
             <input value={mappingQuery} onChange={(event) => setMappingQuery(event.target.value)} placeholder="Buscar canônico, módulo, campo da API, interpretação ou exemplo..." aria-label="Buscar pareamento" className="mt-4 w-full rounded-xl border p-3 text-sm" />
             <div className="mt-5 space-y-6">
               {groupedCanonicalTargets.map((group) => <section key={group.label}>
@@ -902,7 +922,8 @@ export function ApiConnectionPanel({
                 busy={busy}
                 disabled={
                   !detected.length ||
-                  duplicates.size > 0
+                  duplicates.size > 0 ||
+                  (!logisticSetting&&!logisticKey)
                 }
                 onClick={confirmMappings}
               />

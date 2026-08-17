@@ -8,6 +8,7 @@ import { FieldParseRulesService } from './field-parse-rules.service';
 import { parseFieldValue, ParseRule } from './field-value-parser';
 import { CanonicalValueDomainsService } from '../canonical/canonical-value-domains.service';
 import { NormalizationService } from '../normalization/normalization.service';
+import { PrimaryLogisticKey, TenantLogisticKeyService } from '../normalization/tenant-logistic-key.service';
 
 type JsonRecord = Record<string, unknown>;
 type FetchResult = {
@@ -51,6 +52,7 @@ export class ApiConnectorSyncService {
     private readonly fieldFormats: FieldParseRulesService,
     private readonly canonicalDomains: CanonicalValueDomainsService,
     private readonly normalization: NormalizationService,
+    private readonly logisticKeys: TenantLogisticKeyService,
   ) {}
 
   async reprocessValidatedBatch(tenantId: string, sourceId: string, batchId: string, userId: string) {
@@ -142,6 +144,7 @@ export class ApiConnectorSyncService {
     sourceId: string,
     userId: string,
     body: {
+      primary_logistic_key?: string;
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;
@@ -151,6 +154,10 @@ export class ApiConnectorSyncService {
     },
   ) {
     const contract = await this.contract(tenantId, sourceId);
+    const currentLogisticKey=await this.logisticKeys.get(tenantId);
+    if(!currentLogisticKey&&!body.primary_logistic_key) throw new BadRequestException('Escolha a chave logística principal da empresa antes de confirmar o pareamento.');
+    if(currentLogisticKey&&body.primary_logistic_key&&currentLogisticKey.primary_logistic_key!==body.primary_logistic_key)
+      throw new BadRequestException(`Esta empresa já usa ${this.logisticKeys.label(currentLogisticKey.primary_logistic_key)} como chave logística principal. A chave não pode ser alterada por outra integração.`);
     const config = await this.requiredConfig(tenantId, sourceId);
     const detected = new Set(config.detected_fields ?? []);
     const fields = await this.db.select<ContractField[]>(
@@ -167,13 +174,31 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Pareamento contém campo não detectado ou fora do contrato nativo.',
       );
-    const requestedCanonicalKeys = new Set<string>();
+    const proposedTargets:Array<{entity_key:string;field_key:string}>=[];
+    for(const item of requested){
+      if(item.canonical_entity_id&&item.canonical_field_id){
+        const canonical=await this.db.select<Array<{field_key:string}>>('canonical_fields',`select=field_key&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
+        const entity=await this.db.select<Array<{entity_key:string}>>('canonical_entities',`select=entity_key&tenant_id=eq.${tenantId}&id=eq.${item.canonical_entity_id}&limit=1`);
+        if(!canonical[0]||!entity[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
+        proposedTargets.push({entity_key:entity[0].entity_key,field_key:canonical[0].field_key});
+      }else{
+        if(!fieldIds.has(String(item.data_contract_field_id)))throw new BadRequestException('Pareamento contém campo fora do contrato atual.');
+        const existing=await this.db.select<Array<{canonical_entity:{entity_key:string}|null;canonical_field:{field_key:string}|null}>>('field_mappings',`select=canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(entity_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(field_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&data_contract_field_id=eq.${item.data_contract_field_id}&status=eq.active&limit=1`);
+        if(!existing[0]?.canonical_entity||!existing[0]?.canonical_field)throw new BadRequestException('Destino canônico do campo não existe ou está inativo.');
+        proposedTargets.push({entity_key:existing[0].canonical_entity.entity_key,field_key:existing[0].canonical_field.field_key});
+      }
+    }
+    if(contract.entity_key==='occurrences'&&proposedTargets.some(target=>target.entity_key==='operation_records'||target.entity_key==='deliveries'))
+      throw new BadRequestException('Fontes de Ocorrências não podem mapear destinos de Operações. Use apenas campos Ocorrências / vínculo para localizar uma operação existente.');
+    const selectedKey=currentLogisticKey?.primary_logistic_key??body.primary_logistic_key!;
+    const expectedField=this.logisticKeys.expectedCanonicalField(selectedKey as PrimaryLogisticKey,contract.entity_key);
+    if(!proposedTargets.some(target=>target.field_key===expectedField))
+      throw new BadRequestException(`Esta empresa usa ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} como chave logística principal. Esta fonte precisa mapear um campo da API para ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} antes de publicar dados canônicos.`);
     for(const item of requested.filter(item=>!item.data_contract_field_id)){
       const canonical=await this.db.select<Array<{id:string;canonical_entity_id:string;field_key:string;data_type:string;is_required:boolean}>>('canonical_fields',`select=id,canonical_entity_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
       if(!canonical[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
       const entities=await this.db.select<Array<{id:string;entity_key:string}>>('canonical_entities',`select=id,entity_key&tenant_id=eq.${tenantId}&id=eq.${item.canonical_entity_id}&limit=1`);
       if(!entities[0])throw new BadRequestException('Entidade canônica inválida ou fora do tenant.');
-      requestedCanonicalKeys.add(`${entities[0].entity_key}.${canonical[0].field_key}`);
       const deterministicFieldKey=`${entities[0].entity_key}__${canonical[0].field_key}`;
       let contractField=fields.find(field=>field.field_key===deterministicFieldKey);
       if(!contractField){
@@ -195,25 +220,6 @@ export class ApiConnectorSyncService {
       throw new BadRequestException(
         'Cada campo nativo pode receber somente um campo da API.',
       );
-    if (contract.entity_key === 'deliveries') {
-      const deliveryNumber = fields.find(
-        (field) =>
-          field.field_key === 'numero_entrega' ||
-          field.field_key === 'delivery_number',
-      );
-      const canonicalDelivery = requestedCanonicalKeys.has('operation_records.delivery_number') ||
-        requestedCanonicalKeys.has('deliveries.delivery_number') ||
-        requested.some((item) => ['operation_records__delivery_number', 'deliveries__delivery_number'].includes(fields.find((field) => field.id === item.data_contract_field_id)?.field_key ?? ''));
-      if (
-        !canonicalDelivery&&(!deliveryNumber ||
-        !requested.some(
-          (item) => item.data_contract_field_id === deliveryNumber.id,
-        ))
-      )
-        throw new BadRequestException(
-          'Pareie um campo da API com Operações / Número da entrega antes de avançar.',
-        );
-    }
     await this.db.delete(
       'data_source_api_field_mappings',
       `tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&status=neq.ignored_field`,
@@ -231,7 +237,11 @@ export class ApiConnectorSyncService {
           created_by: userId,
         })) as JsonRecord[],
       );
-    return this.listApiMappings(tenantId, sourceId);
+    const savedMappings=await this.listApiMappings(tenantId,sourceId);
+    // Establish only after every payload, target, persistence and response
+    // projection step succeeds, so a rejected pairing never leaves a setting.
+    if(!currentLogisticKey)await this.logisticKeys.establish(tenantId,sourceId,selectedKey,userId);
+    return savedMappings;
   }
 
   async sync(
