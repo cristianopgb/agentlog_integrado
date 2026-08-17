@@ -85,12 +85,20 @@ const dateFormats = [
   ['dd_mm_yyyy', 'DD/MM/AAAA'],
   ['dd_mm_yyyy_hh_mm_ss', 'DD/MM/AAAA HH:mm:ss'],
 ] as const;
-const essentialTargets = [
+const deliveryEssentialTargets = [
   { label: 'Operações / Número da entrega', legacy: ['numero_entrega', 'delivery_number'], canonical: ['operation_records.delivery_number', 'deliveries.delivery_number'] },
   { label: 'Operações / Documento do cliente', legacy: ['documento_cliente'], canonical: ['operation_records.customer_document'] },
   { label: 'Operações / Nome do cliente', legacy: ['nome_cliente'], canonical: ['operation_records.customer_name'] },
   { label: 'Operações / Status da entrega', legacy: ['status_entrega'], canonical: ['operation_records.delivery_status', 'operation_records.status'] },
 ];
+const occurrenceLinkedFields: Record<PrimaryLogisticKey, string> = {
+  delivery_number: 'linked_delivery_number',
+  document_number: 'linked_document_number',
+  invoice_number: 'linked_invoice_number',
+  cte_number: 'linked_cte_number',
+  manifest_number: 'linked_manifest_number',
+  order_number: 'linked_order_number',
+};
 const preferredFieldOrder: Record<string, string[]> = {
   operation_records: ['delivery_number', 'document_number', 'customer_document', 'customer_name', 'delivery_status', 'carrier_name', 'driver_name', 'vehicle', 'origin_city', 'origin_state', 'destination_city', 'destination_state', 'gross_weight', 'volume_m3', 'volume_count', 'total_value'],
   transport_records: ['driver_name', 'driver_phone', 'driver_whatsapp', 'vehicle', 'vehicle_plate', 'vehicle_type', 'pod_status'],
@@ -376,6 +384,18 @@ export function ApiConnectionPanel({
     return target ? [`${target.canonical_entity_key}.${target.field_key}`] : [];
   }));
   const selectedLegacyKeys = new Set(fields.filter((field) => Object.values(draft).includes(field.id)).map((field) => field.field_key));
+  const normalizedSourceModule = source.module_key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const isOccurrenceSource = ['atendimento', 'ocorrencia', 'ocorrencias'].includes(normalizedSourceModule);
+  const selectedLogisticKey = logisticSetting?.primary_logistic_key || logisticKey || null;
+  const essentialTargets = isOccurrenceSource
+    ? selectedLogisticKey
+      ? [{
+          label: `Ocorrências / vínculo da chave logística (${logisticKeyOptions.find((item) => item.value === selectedLogisticKey)?.label ?? selectedLogisticKey})`,
+          legacy: [occurrenceLinkedFields[selectedLogisticKey]],
+          canonical: [`occurrences.${occurrenceLinkedFields[selectedLogisticKey]}`],
+        }]
+      : []
+    : deliveryEssentialTargets;
   const missingEssential = essentialTargets.filter((essential) =>
     !essential.legacy.some((key) => selectedLegacyKeys.has(key)) &&
     !essential.canonical.some((key) => selectedCanonicalKeys.has(key)),
@@ -386,7 +406,7 @@ export function ApiConnectionPanel({
       field.field_key === 'numero_entrega' ||
       field.field_key === 'delivery_number',
   );
-  const missingDeliveryOperationalKey = Boolean(deliveryOperationalField) && missingEssential[0]?.label === essentialTargets[0].label;
+  const missingDeliveryOperationalKey = !isOccurrenceSource && Boolean(deliveryOperationalField) && missingEssential[0]?.label === essentialTargets[0]?.label;
   const canonicalGroupLabel = (target: CanonicalMappingTarget) => {
     const labels: Record<string, string> = {
       operation_records: 'Operações', deliveries: 'Operações', transport_records: 'Transporte',
