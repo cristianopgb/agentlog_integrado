@@ -28,7 +28,7 @@ export type IntegrationSummary = {
     | 'integração configurada';
 };
 
-type NormalizedInitialDeliveryField = {
+type NormalizedInitialContractField = {
   tenant_id: string;
   data_contract_id: string;
   field_key: string;
@@ -47,12 +47,12 @@ type NormalizedInitialDeliveryField = {
   sort_order: number;
 };
 
-type InitialDeliveryFieldDefinition = Omit<
-  NormalizedInitialDeliveryField,
+type InitialContractFieldDefinition = Omit<
+  NormalizedInitialContractField,
   'tenant_id' | 'data_contract_id'
 >;
 
-const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
+const initialDeliveryFields: InitialContractFieldDefinition[] = [
   {
     field_key: 'numero_entrega',
     source_field_name: 'numero_entrega',
@@ -373,6 +373,43 @@ const initialDeliveryFields: InitialDeliveryFieldDefinition[] = [
   })),
 ];
 
+const initialOccurrenceFields: InitialContractFieldDefinition[] = (
+  [
+    ['ocorrencia_titulo', 'text', true],
+    ['ocorrencia_descricao', 'text', false],
+    ['ocorrencia_status', 'text', false],
+    ['ocorrencia_prioridade', 'text', false],
+    ['ocorrencia_canal_origem', 'text', false],
+    ['ocorrencia_criado_em', 'datetime', false],
+    ['ocorrencia_encerrado_em', 'datetime', false],
+    ['ocorrencia_numero_legado', 'text', false],
+  ] as const
+).map(([field_key, data_type, is_required], index) => ({
+  field_key,
+  source_field_name: field_key,
+  description: null,
+  data_type,
+  is_required,
+  is_unique: false,
+  allow_null: !is_required,
+  min_length: null,
+  max_length: null,
+  min_value: null,
+  max_value: null,
+  regex_pattern: null,
+  date_format: null,
+  sort_order: (index + 1) * 10,
+}));
+
+const occurrenceLinkedFields: Record<string, string> = {
+  delivery_number: 'linked_delivery_number',
+  document_number: 'linked_document_number',
+  invoice_number: 'linked_invoice_number',
+  cte_number: 'linked_cte_number',
+  manifest_number: 'linked_manifest_number',
+  order_number: 'linked_order_number',
+};
+
 const deliveryStatusValues = [
   'pending',
   'in_transit',
@@ -391,11 +428,11 @@ function isDuplicateContractError(
   );
 }
 
-function normalizeInitialDeliveryField(
+function normalizeInitialContractField(
   tenantId: string,
   contractId: string,
-  field: InitialDeliveryFieldDefinition,
-): NormalizedInitialDeliveryField {
+  field: InitialContractFieldDefinition,
+): NormalizedInitialContractField {
   return {
     tenant_id: tenantId,
     data_contract_id: contractId,
@@ -545,7 +582,7 @@ export async function createIntegrationSource(
   if (error) throw error;
   const id = (data as { id: string }[])[0].id;
   if (input.source_type === 'api') {
-    await createInitialDeliveryContract(tenantId, {
+    await createInitialApiContractForSource(tenantId, {
       id,
       tenant_id: tenantId,
       name: input.name,
@@ -685,7 +722,7 @@ export async function createInitialDeliveryContract(
     .from('data_contract_fields')
     .upsert(
       initialDeliveryFields.map((field) =>
-        normalizeInitialDeliveryField(tenantId, contractId, field),
+        normalizeInitialContractField(tenantId, contractId, field),
       ),
       { onConflict: 'data_contract_id,field_key' },
     );
@@ -730,6 +767,102 @@ export async function createInitialDeliveryContract(
     if (allowedError) throw allowedError;
   }
 
+  return contract;
+}
+
+function normalizedModuleKey(moduleKey: string) {
+  return moduleKey
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+export async function createInitialApiContractForSource(
+  tenantId: string,
+  source: IntegrationSource,
+) {
+  const moduleKey = normalizedModuleKey(source.module_key);
+  const isOccurrenceSource = ['atendimento', 'ocorrencia', 'ocorrencias'].includes(moduleKey);
+  if (!isOccurrenceSource) {
+    return createInitialDeliveryContract(tenantId, {
+      ...source,
+      module_key: 'transporte',
+    });
+  }
+
+  const supabase = createBrowserSupabaseClient();
+  const fetchExistingContract = async () => {
+    const { data, error } = await supabase
+      .from('data_contracts')
+      .select(contractSelect)
+      .eq('tenant_id', tenantId)
+      .eq('data_source_id', source.id)
+      .eq('entity_key', 'occurrences')
+      .eq('contract_version', '1')
+      .maybeSingle();
+    if (error) throw error;
+    return data as DataContract | null;
+  };
+
+  let contract = await fetchExistingContract();
+  if (!contract) {
+    const { data, error } = await supabase
+      .from('data_contracts')
+      .insert({
+        tenant_id: tenantId,
+        data_source_id: source.id,
+        name: 'Estrutura inicial de ocorrências',
+        description: 'Contrato declarativo inicial de ocorrências para uma fonte API de atendimento.',
+        module_key: 'atendimento',
+        entity_key: 'occurrences',
+        contract_version: 1,
+        format: 'api_json',
+        direction: 'inbound',
+        status: 'active',
+        periodicity: 'on_demand',
+      })
+      .select(contractSelect);
+    if (error) {
+      if (!isDuplicateContractError(error)) throw error;
+      contract = await fetchExistingContract();
+    } else {
+      contract = (data as DataContract[])[0];
+    }
+  }
+  if (!contract) throw new Error('Não foi possível localizar o contrato declarativo inicial de ocorrências.');
+
+  const { data: settings, error: settingError } = await supabase
+    .from('tenant_integration_settings')
+    .select('primary_logistic_key')
+    .eq('tenant_id', tenantId)
+    .limit(1);
+  if (settingError) throw settingError;
+  const primaryKey = (settings as Array<{ primary_logistic_key: string }> | null)?.[0]?.primary_logistic_key;
+  const linkedFieldKey = primaryKey ? occurrenceLinkedFields[primaryKey] : undefined;
+  const fields = [...initialOccurrenceFields];
+  if (linkedFieldKey) {
+    fields.push({
+      field_key: linkedFieldKey,
+      source_field_name: linkedFieldKey,
+      description: 'Vínculo com a chave logística principal da empresa.',
+      data_type: 'text',
+      is_required: true,
+      is_unique: false,
+      allow_null: false,
+      min_length: null,
+      max_length: null,
+      min_value: null,
+      max_value: null,
+      regex_pattern: null,
+      date_format: null,
+      sort_order: 90,
+    });
+  }
+  const { error: fieldError } = await supabase.from('data_contract_fields').upsert(
+    fields.map((field) => normalizeInitialContractField(tenantId, contract!.id, field)),
+    { onConflict: 'data_contract_id,field_key' },
+  );
+  if (fieldError) throw fieldError;
   return contract;
 }
 
