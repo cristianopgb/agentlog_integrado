@@ -32,7 +32,9 @@ export class ApiIntegrationsController {
     private readonly logisticKeys: TenantLogisticKeyService,
   ) {}
   @Get('primary-logistic-key') @RequirePermission('integrations.api.configure')
-  primaryLogisticKey(@Param('tenantId') t:string) { return this.logisticKeys.get(t); }
+  async primaryLogisticKey(@Param('tenantId') t:string) {
+    return (await this.logisticKeys.get(t)) ?? null;
+  }
   @Get('api-config') @RequirePermission('integrations.api.configure') get(
     @Param('tenantId') t: string,
     @Param('sourceId') s: string,

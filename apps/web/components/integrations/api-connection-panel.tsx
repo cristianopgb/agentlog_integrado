@@ -246,7 +246,9 @@ export function ApiConnectionPanel({
       listCanonicalMappingTargets(tenantId),
       getPrimaryLogisticKey(tenantId,sourceId),
     ]);
-    setLogisticSetting(setting); if(setting)setLogisticKey(setting.primary_logistic_key);
+    const currentLogisticSetting=setting?.primary_logistic_key?setting:null;
+    setLogisticSetting(currentLogisticSetting);
+    setLogisticKey(currentLogisticSetting?.primary_logistic_key??'');
     setCanonicalTargets(targets);
     setApiMappings(mappings);
     setIgnoredFields(ignored);
@@ -850,7 +852,7 @@ export function ApiConnectionPanel({
             <p className="mt-1 text-sm text-slate-600">Escolha qual campo recebido da API alimenta cada destino canônico. Campos sem origem selecionada não serão preenchidos.</p>
             <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
               <label className="text-sm font-bold" htmlFor="primary-logistic-key">Chave logística principal da empresa</label>
-              <select id="primary-logistic-key" value={logisticKey} disabled={Boolean(logisticSetting)} onChange={(event)=>setLogisticKey(event.target.value as PrimaryLogisticKey)} className="mt-2 w-full rounded-xl border bg-white p-3 disabled:bg-slate-100">
+              <select id="primary-logistic-key" value={logisticKey} disabled={Boolean(logisticSetting?.primary_logistic_key)} onChange={(event)=>setLogisticKey(event.target.value as PrimaryLogisticKey)} className="mt-2 w-full rounded-xl border bg-white p-3 disabled:bg-slate-100">
                 {!logisticSetting?<option value="">Selecione uma chave logística</option>:null}
                 {logisticKeyOptions.map((option)=><option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
