@@ -221,6 +221,27 @@ export class StagingService {
     if (batches.length) throw new BadRequestException('Integração com lotes vinculados só pode ser inativada.');
     return this.supabase.delete('data_sources', `tenant_id=eq.${tenantId}&id=eq.${sourceId}`);
   }
+  async removeIncompatibleApiContracts(tenantId: string, sourceId: string, body: Record<string, unknown>) {
+    const moduleKey = String(body.module_key ?? '');
+    const entityKey = String(body.entity_key ?? '');
+    const validPair = (moduleKey === 'atendimento' && entityKey === 'occurrences') || (moduleKey === 'transporte' && entityKey === 'deliveries');
+    if (!validPair) throw new BadRequestException('Módulo ou entidade inválida para o contrato inicial da API.');
+    const sources = await this.supabase.select<Array<{ id: string; source_type: string }>>('data_sources', `select=id,source_type&tenant_id=eq.${tenantId}&id=eq.${sourceId}&limit=1`);
+    if (!sources[0]) throw new NotFoundException('Integração não encontrada para este tenant.');
+    if (sources[0].source_type !== 'api') throw new BadRequestException('A fonte informada não é uma integração API.');
+    const contracts = await this.supabase.select<Array<{ id: string; module_key: string; entity_key: string }>>('data_contracts', `select=id,module_key,entity_key&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}`);
+    const incompatible = contracts.filter((contract) => contract.module_key !== moduleKey || contract.entity_key !== entityKey);
+    if (!incompatible.length) return { removed: 0 };
+    const contractFilter = incompatible.map((contract) => `"${contract.id}"`).join(',');
+    const [batches, apiMappings, fieldMappings] = await Promise.all([
+      this.supabase.select<unknown[]>('staging_batches', `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&limit=1`),
+      this.supabase.select<unknown[]>('data_source_api_field_mappings', `select=id&tenant_id=eq.${tenantId}&data_source_id=eq.${sourceId}&limit=1`),
+      this.supabase.select<unknown[]>('field_mappings', `select=id&tenant_id=eq.${tenantId}&data_contract_id=in.(${contractFilter})&limit=1`),
+    ]);
+    if (batches.length || apiMappings.length || fieldMappings.length) throw new BadRequestException('Esta integração possui contrato incompatível criado anteriormente. Arquive esta fonte e crie uma nova integração.');
+    await this.supabase.delete('data_contracts', `tenant_id=eq.${tenantId}&id=in.(${contractFilter})`);
+    return { removed: incompatible.length };
+  }
 
   private async syncSetupContractFields(tenantId: string, contractId: string, headers: string[]) {
     await this.supabase.delete('data_contract_allowed_values', `tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}`);

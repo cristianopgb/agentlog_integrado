@@ -35,6 +35,12 @@ export class DataSourceUploadsController {
     return this.service.configureDataSource(tenantId, sourceId, req.user.id, body);
   }
 
+  @Post(':sourceId/incompatible-api-contracts')
+  @RequirePermission('integrations.manage')
+  removeIncompatibleApiContracts(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string, @Body() body: Record<string, unknown>) {
+    return this.service.removeIncompatibleApiContracts(tenantId, sourceId, body);
+  }
+
   @Delete(':sourceId')
   @RequirePermission('integrations.manage')
   remove(@Param('tenantId') tenantId: string, @Param('sourceId') sourceId: string) {
