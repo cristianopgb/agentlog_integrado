@@ -102,7 +102,7 @@ const occurrenceLinkedFields: Record<PrimaryLogisticKey, string> = {
 const preferredFieldOrder: Record<string, string[]> = {
   operation_records: ['delivery_number', 'document_number', 'customer_document', 'customer_name', 'delivery_status', 'carrier_name', 'driver_name', 'vehicle', 'origin_city', 'origin_state', 'destination_city', 'destination_state', 'gross_weight', 'volume_m3', 'volume_count', 'total_value'],
   transport_records: ['driver_name', 'driver_phone', 'driver_whatsapp', 'vehicle', 'vehicle_plate', 'vehicle_type', 'pod_status'],
-  occurrences: ['occurrence_number', 'title', 'description', 'priority', 'origin_channel', 'opened_at', 'due_at', 'linked_document_number', 'linked_invoice_number', 'linked_cte_number', 'linked_delivery_number'],
+  occurrences: ['occurrence_number', 'title', 'description', 'priority', 'origin_channel', 'opened_at', 'due_at', 'linked_delivery_number', 'linked_document_number', 'linked_invoice_number', 'linked_cte_number', 'linked_manifest_number', 'linked_order_number'],
   finance_records: ['freight_value', 'total_value', 'cte_number', 'billing_status', 'payment_status', 'billing_block_status'],
 };
 const logisticKeyOptions: Array<{value:PrimaryLogisticKey;label:string}>=[
@@ -390,7 +390,7 @@ export function ApiConnectionPanel({
   const essentialTargets = isOccurrenceSource
     ? selectedLogisticKey
       ? [{
-          label: `Ocorrências / vínculo da chave logística (${logisticKeyOptions.find((item) => item.value === selectedLogisticKey)?.label ?? selectedLogisticKey})`,
+          label: canonicalTargets.find((target) => target.canonical_entity_key === 'occurrences' && target.field_key === occurrenceLinkedFields[selectedLogisticKey])?.label ?? `Ocorrências / ${logisticKeyOptions.find((item) => item.value === selectedLogisticKey)?.label ?? selectedLogisticKey} vinculada`,
           legacy: [occurrenceLinkedFields[selectedLogisticKey]],
           canonical: [`occurrences.${occurrenceLinkedFields[selectedLogisticKey]}`],
         }]
@@ -423,7 +423,7 @@ export function ApiConnectionPanel({
   )).join(' ');
   const groupedCanonicalTargets = canonicalGroupOrder.map((label) => ({
     label,
-    targets: canonicalTargets.filter((target) => canonicalGroupLabel(target) === label).filter((target) => {
+    targets: canonicalTargets.filter((target) => (!isOccurrenceSource || target.canonical_entity_key === 'occurrences') && canonicalGroupLabel(target) === label).filter((target) => {
       const ownText = normalizeCanonicalFieldSearchText(target.field_key, target.label || formatCanonicalFieldLabel(target.field_key, target.canonical_entity_key), label);
       return mappingQueryTokens.every((token) => ownText.includes(token) || sourceSearchText.includes(token));
     }).sort((a, b) => rankTarget(a) - rankTarget(b)),

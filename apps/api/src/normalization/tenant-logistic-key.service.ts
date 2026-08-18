@@ -14,6 +14,11 @@ const occurrenceFields: Record<PrimaryLogisticKey,string> = {
   invoice_number:'linked_invoice_number', cte_number:'linked_cte_number',
   manifest_number:'linked_manifest_number', order_number:'linked_order_number',
 };
+const occurrenceLabels: Record<PrimaryLogisticKey,string> = {
+  delivery_number:'Documento da entrega vinculada', document_number:'Documento operacional vinculado',
+  invoice_number:'NF vinculada', cte_number:'CT-e vinculada',
+  manifest_number:'Manifesto / Romaneio vinculado', order_number:'Pedido vinculado',
+};
 
 @Injectable()
 export class TenantLogisticKeyService {
@@ -34,13 +39,17 @@ export class TenantLogisticKeyService {
   expectedCanonicalField(key:PrimaryLogisticKey, entityKey:string) {
     return entityKey==='occurrences' ? occurrenceFields[key] : key;
   }
+  expectedCanonicalLabel(key:PrimaryLogisticKey, entityKey:string) {
+    return entityKey==='occurrences' ? `Ocorrências / ${occurrenceLabels[key]}` : this.label(key);
+  }
   async validateSourceMapping(tenantId:string, contractId:string, entityKey:string) {
     const setting=await this.get(tenantId);
     if(!setting) throw new BadRequestException('Defina a chave logística principal da empresa antes de publicar dados canônicos.');
     const expected=this.expectedCanonicalField(setting.primary_logistic_key,entityKey);
-    const fields=await this.db.select<Array<{id:string}>>('canonical_fields',`select=id&tenant_id=eq.${tenantId}&field_key=eq.${expected}&limit=20`);
+    const entities=await this.db.select<Array<{id:string}>>('canonical_entities',`select=id&tenant_id=eq.${tenantId}&entity_key=eq.${entityKey}&limit=1`);
+    const fields=entities[0]?await this.db.select<Array<{id:string}>>('canonical_fields',`select=id&tenant_id=eq.${tenantId}&canonical_entity_id=eq.${entities[0].id}&field_key=eq.${expected}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`):[];
     const rows=fields.length?await this.db.select<Array<{id:string}>>('field_mappings',`select=id&tenant_id=eq.${tenantId}&data_contract_id=eq.${contractId}&status=eq.active&canonical_field_id=in.(${fields.map(field=>field.id).join(',')})&limit=1`):[];
-    if(!rows.length) throw new BadRequestException(`Esta empresa usa ${this.label(setting.primary_logistic_key)} como chave logística principal. Esta fonte precisa mapear um campo da API para ${this.label(setting.primary_logistic_key)} antes de publicar dados canônicos.`);
+    if(!rows.length) throw new BadRequestException(`Esta empresa usa ${this.label(setting.primary_logistic_key)} como chave logística principal. Mapeie um campo da API para ${this.expectedCanonicalLabel(setting.primary_logistic_key,entityKey)}.`);
     return { ...setting, expected_field: expected };
   }
   async resolveOperation(tenantId:string,key:PrimaryLogisticKey,value:unknown) {
