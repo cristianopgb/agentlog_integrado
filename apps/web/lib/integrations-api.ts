@@ -581,16 +581,6 @@ export async function createIntegrationSource(
     .select('id');
   if (error) throw error;
   const id = (data as { id: string }[])[0].id;
-  if (input.source_type === 'api') {
-    await createInitialApiContractForSource(tenantId, {
-      id,
-      tenant_id: tenantId,
-      name: input.name,
-      source_type: input.source_type,
-      module_key: input.module_key,
-      status: 'configuring',
-    } as IntegrationSource);
-  }
   return id;
 }
 
@@ -783,6 +773,13 @@ export async function createInitialApiContractForSource(
 ) {
   const moduleKey = normalizedModuleKey(source.module_key);
   const isOccurrenceSource = ['atendimento', 'ocorrencia', 'ocorrencias'].includes(moduleKey);
+  const expectedModuleKey = isOccurrenceSource ? 'atendimento' : 'transporte';
+  const expectedEntityKey = isOccurrenceSource ? 'occurrences' : 'deliveries';
+  await api(`/tenants/${tenantId}/data-sources/${source.id}/incompatible-api-contracts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ module_key: expectedModuleKey, entity_key: expectedEntityKey }),
+  });
   if (!isOccurrenceSource) {
     return createInitialDeliveryContract(tenantId, {
       ...source,

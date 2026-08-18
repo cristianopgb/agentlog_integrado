@@ -39,7 +39,7 @@ import {
   normalizeCanonicalFieldQuery,
   normalizeCanonicalFieldSearchText,
 } from '../../lib/canonical-field-display';
-import { updateIntegrationConnection } from '../../lib/integrations-api';
+import { createInitialApiContractForSource, updateIntegrationConnection } from '../../lib/integrations-api';
 import {
   listNormalizationErrors,
   processNormalization,
@@ -328,6 +328,11 @@ export function ApiConnectionPanel({
         name: source.name,
         source_type: 'api',
         module_key: moduleKeys[0],
+        metadata: { ...(source.metadata ?? {}), module_keys: moduleKeys },
+      });
+      await createInitialApiContractForSource(tenantId, {
+        id: sourceId, tenant_id: tenantId, name: source.name, description: null,
+        source_type: 'api', module_key: moduleKeys[0], status: 'configuring', owner_user_id: null,
         metadata: { ...(source.metadata ?? {}), module_keys: moduleKeys },
       });
       await saveApiConfig(
