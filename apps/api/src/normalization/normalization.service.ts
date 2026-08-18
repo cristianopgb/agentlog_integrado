@@ -1414,14 +1414,20 @@ export class NormalizationService {
     const channel=String(values.source_channel||'external');
     const operationId=operationRecordId??await this.resolveOccurrenceOperation(tenantId,values);
     const resolvedOperationId=typeof operationId==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId.trim())?operationId.trim():null;
-    const sourceReference=String(values.source_reference??values.occurrence_number??'').trim();
+    const sourceReference=String(values.source_reference??'').trim()||String(values.occurrence_number??'').trim();
     if(!sourceReference&&!resolvedOperationId&&!values.title&&!values.description&&!values.opened_at)return null;
     let existing:Array<Record<string,unknown>>=[];
     if(sourceReference)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type,source_reference&tenant_id=eq.${tenantId}&source_reference=eq.${encodeURIComponent(sourceReference)}&source_channel=eq.${encodeURIComponent(channel)}&deleted_at=is.null&limit=1`);
-    else if(values.title&&values.opened_at&&resolvedOperationId){
+    if(!existing.length&&resolvedOperationId){
       const links=await this.supabase.select<Array<{occurrence_id:string}>>('occurrence_operation_links',`select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${resolvedOperationId}&limit=100`);
-      if(links.length)existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type&tenant_id=eq.${tenantId}&id=in.(${links.map(link=>link.occurrence_id).join(',')})&source_channel=eq.${encodeURIComponent(channel)}&title=eq.${encodeURIComponent(String(values.title))}&opened_at=eq.${encodeURIComponent(String(values.opened_at))}&deleted_at=is.null&limit=1`);
-    }else if(values.title&&values.opened_at){
+      if(links.length){
+        const identityFilters=[`source_channel=eq.${encodeURIComponent(channel)}`];
+        if(values.title)identityFilters.push(`title=eq.${encodeURIComponent(String(values.title))}`);
+        if(values.opened_at)identityFilters.push(`opened_at=eq.${encodeURIComponent(String(values.opened_at))}`);
+        existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type,source_reference&tenant_id=eq.${tenantId}&id=in.(${links.map(link=>link.occurrence_id).join(',')})&${identityFilters.join('&')}&deleted_at=is.null&limit=1`);
+      }
+    }
+    if(!existing.length&&values.title&&values.opened_at){
       existing=await this.supabase.select<Array<Record<string,unknown>>>('occurrences',`select=id,title,description,current_status,current_priority,source_channel,opened_at,due_at,created_by_type,source_reference&tenant_id=eq.${tenantId}&source_channel=eq.${encodeURIComponent(channel)}&title=eq.${encodeURIComponent(String(values.title))}&opened_at=eq.${encodeURIComponent(String(values.opened_at))}&deleted_at=is.null&limit=1`);
     }
     const safeValues=Object.fromEntries(Object.entries({...values,source_reference:sourceReference||null}).filter(([key,value])=>key!=='occurrence_number'&&value!==null&&value!==''&&!key.startsWith('linked_')));
@@ -1435,9 +1441,21 @@ export class NormalizationService {
       const [row]=await this.supabase.insert<Array<{id:string}>>('occurrences',{tenant_id:tenantId,occurrence_number:allocated,source_reference:sourceReference||null,title:String(values.title||`Ocorrência ${allocated}`),description:values.description??null,current_status:values.current_status??'open',current_priority:values.current_priority??'medium',source_channel:channel,opened_at:values.opened_at??new Date().toISOString(),closed_at:values.closed_at??null,due_at:values.due_at??null,created_by:userId,updated_by:userId,created_by_type:'normalization'});
       id=row.id;created=true;
     }
-    if(resolvedOperationId)await this.supabase.insert('occurrence_operation_links',{tenant_id:tenantId,occurrence_id:id,operation_record_id:resolvedOperationId,relationship_type:'source',is_primary:true,linked_by:userId}).catch(()=>undefined);
+    if(resolvedOperationId)await this.reconcileOccurrenceOperationLink(tenantId,id,resolvedOperationId,userId);
     await this.supabase.insert('occurrence_events',{tenant_id:tenantId,occurrence_id:id,event_type:created?'normalized_created':'normalized_updated',event_status:'reported',event_title:created?'Ocorrência normalizada':'Dados externos recebidos',event_description:'Atualização controlada após contrato, staging e pareamento.',event_at:new Date().toISOString(),created_by:userId,created_by_type:'normalization',source_channel:channel,source_reference:record.id,metadata:{}});
     return{id,created};
+  }
+  private async reconcileOccurrenceOperationLink(tenantId:string,occurrenceId:string,operationRecordId:string,userId:string){
+    const links=await this.supabase.select<Array<{id:string;operation_record_id:string;is_primary:boolean}>>('occurrence_operation_links',`select=id,operation_record_id,is_primary&tenant_id=eq.${tenantId}&occurrence_id=eq.${occurrenceId}&limit=100`);
+    const exact=links.find(link=>link.operation_record_id===operationRecordId);
+    if(exact?.is_primary)return;
+    const primary=links.find(link=>link.is_primary&&link.operation_record_id!==operationRecordId);
+    if(primary)await this.supabase.update('occurrence_operation_links',`tenant_id=eq.${tenantId}&occurrence_id=eq.${occurrenceId}&id=eq.${primary.id}&is_primary=eq.true`,{is_primary:false});
+    if(exact){
+      await this.supabase.update('occurrence_operation_links',`tenant_id=eq.${tenantId}&occurrence_id=eq.${occurrenceId}&id=eq.${exact.id}`,{is_primary:true,relationship_type:'source',linked_by:userId});
+      return;
+    }
+    await this.supabase.insert('occurrence_operation_links',{tenant_id:tenantId,occurrence_id:occurrenceId,operation_record_id:operationRecordId,relationship_type:'source',is_primary:true,linked_by:userId});
   }
   private async resolveOccurrenceOperation(tenantId:string,values:Record<string,unknown>){
     const setting=await this.logisticKeys.get(tenantId);
