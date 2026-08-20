@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Card, EmptyState, SectionHeader, StatusBadge } from '../../../components/ui';
 import { getCurrentUserPermissions, hasPermission, type UserPermission } from '../../../lib/rbac';
-import { establishSetupLogisticKey, getSessionContext, getSetupLogisticKey, listSetupProjects, type PrimaryLogisticKey, type SetupProject, type TenantLogisticKeySetting } from '../../../lib/setup-api';
+import { getSessionContext, listSetupProjects, type SetupProject } from '../../../lib/setup-api';
 
 const statuses = ['not_started', 'in_progress', 'blocked', 'waiting_customer', 'waiting_internal', 'completed', 'cancelled'];
 
@@ -12,10 +12,6 @@ export default function SetupPage() {
   const [permissions, setPermissions] = useState<UserPermission[]>([]);
   const [message, setMessage] = useState('Carregando setup...');
   const [tenantId, setTenantId] = useState<string | null>(null);
-  const [logisticSetting, setLogisticSetting] = useState<TenantLogisticKeySetting | null>(null);
-  const [logisticKey, setLogisticKey] = useState<PrimaryLogisticKey | ''>('');
-  const [confirmed, setConfirmed] = useState(false);
-  const [savingKey, setSavingKey] = useState(false);
 
   useEffect(() => {
     getSessionContext()
@@ -31,8 +27,6 @@ export default function SetupPage() {
         setTenantId(ctx.tenantId);
         const perms = await getCurrentUserPermissions(ctx.tenantId);
         setPermissions(perms);
-        if (hasPermission(perms, 'integrations.api.configure'))
-          setLogisticSetting(await getSetupLogisticKey(ctx.tenantId));
         if (!hasPermission(perms, 'setup.projects.view')) {
           setMessage('Acesso negado: permissão setup.projects.view é necessária.');
           return;
@@ -46,38 +40,16 @@ export default function SetupPage() {
 
   const counts = useMemo(() => Object.fromEntries(statuses.map((s) => [s, projects.filter((p) => p.status === s).length])), [projects]);
   const canView = hasPermission(permissions, 'setup.projects.view');
-  const canConfigureKey = hasPermission(permissions, 'integrations.api.configure');
-  const keyLabels: Record<PrimaryLogisticKey, string> = { delivery_number: 'Documento da entrega', document_number: 'Documento operacional', invoice_number: 'NF', cte_number: 'CT-e', manifest_number: 'Manifesto / Romaneio', order_number: 'Pedido' };
-
-  async function saveLogisticKey() {
-    if (!tenantId || !logisticKey || !confirmed) return;
-    setSavingKey(true);
-    try {
-      setLogisticSetting(await establishSetupLogisticKey(tenantId, logisticKey));
-      setMessage('');
-    } catch (error) { setMessage((error as Error).message); }
-    finally { setSavingKey(false); }
-  }
 
   return (
     <div className="page-stack app-page">
       <SectionHeader eyebrow="Setup" title="Central de implantação" description="Resumo mínimo dos projetos de setup do tenant ativo." />
       {message ? <EmptyState title="Status do setup" description={message} /> : null}
-      {canConfigureKey ? <Card>
+      <Card>
         <h2 className="text-lg font-bold">Chave oficial da empresa</h2>
-        {logisticSetting ? <>
-          <p className="mt-3 text-2xl font-bold text-blue-700">{keyLabels[logisticSetting.primary_logistic_key]}</p>
-          <p className="mt-2 text-sm text-slate-600">Definição concluída. A chave é permanente e vale para todas as integrações operacionais.</p>
-        </> : <div className="mt-4 space-y-4">
-          <p className="text-sm text-slate-600">Escolha uma vez a identidade usada para consolidar operações de todas as fontes. Esta ação não cria fonte, contrato, pareamento ou dado operacional.</p>
-          <select value={logisticKey} onChange={(event) => { setLogisticKey(event.target.value as PrimaryLogisticKey); setConfirmed(false); }} className="w-full rounded-xl border bg-white p-3">
-            <option value="">Selecione a chave oficial</option>
-            {Object.entries(keyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-          <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />Confirmo que esta será a chave oficial permanente da empresa e não poderá ser alterada.</label>
-          <button type="button" disabled={!logisticKey || !confirmed || savingKey} onClick={saveLogisticKey} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{savingKey ? 'Salvando...' : 'Definir chave oficial'}</button>
-        </div>}
-      </Card> : null}
+        <p className="mt-2 text-sm text-slate-600">Consulte ou defina a identidade logística permanente da empresa em uma tela dedicada.</p>
+        <Link href="/app/setup/logistic-key" className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Configurar chave oficial</Link>
+      </Card>
       {canView ? (
         <>
           <Card>
