@@ -1,4 +1,5 @@
 import { createBrowserSupabaseClient } from './supabase';
+import { isTenantLogisticKeySetting, normalizeTenantLogisticKeySetting } from './logistic-key-response.mjs';
 const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '');
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!base) throw new Error('API backend não configurada.');
@@ -159,14 +160,10 @@ export const listApiFieldMappings = (t: string, s: string) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`);
 export type PrimaryLogisticKey='delivery_number'|'document_number'|'invoice_number'|'cte_number'|'manifest_number'|'order_number';
 export type TenantLogisticKeySetting={tenant_id:string;primary_logistic_key:PrimaryLogisticKey;established_by_data_source_id:string|null;established_at:string};
-const primaryLogisticKeys:PrimaryLogisticKey[]=['delivery_number','document_number','invoice_number','cte_number','manifest_number','order_number'];
-export const isTenantLogisticKeySetting=(value:unknown):value is TenantLogisticKeySetting=>{
-  if(!value||Array.isArray(value)||typeof value!=='object')return false;
-  return primaryLogisticKeys.includes((value as Partial<TenantLogisticKeySetting>).primary_logistic_key as PrimaryLogisticKey);
-};
+export { isTenantLogisticKeySetting };
 export const getPrimaryLogisticKey=async(t:string,s:string):Promise<TenantLogisticKeySetting|null>=>{
-  const response=await call<TenantLogisticKeySetting|null|TenantLogisticKeySetting[]>(`${route(t,s)}/primary-logistic-key`);
-  return isTenantLogisticKeySetting(response)?response:null;
+  const response=await call<unknown>(`${route(t,s)}/primary-logistic-key`);
+  return normalizeTenantLogisticKeySetting(response) as TenantLogisticKeySetting|null;
 };
 export type IgnoredApiField = {
   source_field_name: string;

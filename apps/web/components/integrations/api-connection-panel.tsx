@@ -228,6 +228,7 @@ export function ApiConnectionPanel({
   const [apiMappings, setApiMappings] = useState<ApiFieldMapping[]>([]);
   const [ignoredFields, setIgnoredFields] = useState<IgnoredApiField[]>([]);
   const [logisticSetting,setLogisticSetting]=useState<TenantLogisticKeySetting|null>(null);
+  const [logisticSettingStatus,setLogisticSettingStatus]=useState<'loading'|'ready'|'error'>('loading');
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
     Record<string, FieldParseRule>
@@ -250,6 +251,7 @@ export function ApiConnectionPanel({
     NormalizationError[]
   >([]);
   async function load() {
+    setLogisticSettingStatus('loading');
     const [current, history, mappings, ignored, values, formats, targets,setting] = await Promise.all([
       getApiConfig(tenantId, sourceId),
       listApiRuns(tenantId, sourceId),
@@ -258,10 +260,11 @@ export function ApiConnectionPanel({
       listValueMappings(tenantId, sourceId),
       listFieldParseRules(tenantId, sourceId),
       listCanonicalMappingTargets(tenantId),
-      getPrimaryLogisticKey(tenantId,sourceId),
+      getPrimaryLogisticKey(tenantId,sourceId).catch((error) => { setLogisticSettingStatus('error'); throw error; }),
     ]);
     const currentLogisticSetting=setting?.primary_logistic_key?setting:null;
     setLogisticSetting(currentLogisticSetting);
+    setLogisticSettingStatus('ready');
     setCanonicalTargets(targets);
     setApiMappings(mappings);
     setIgnoredFields(ignored);
@@ -303,7 +306,7 @@ export function ApiConnectionPanel({
         setMessageTone('error');
         setMsg(error.message);
       });
-  }, [tenantId, sourceId]);
+  }, [tenantId, sourceId, initialPhase]);
   useEffect(() => setPhase(validInitialPhase(initialPhase)), [initialPhase]);
   async function act(
     action: Exclude<Action, null>,
@@ -882,9 +885,9 @@ export function ApiConnectionPanel({
             <h2 className="text-lg font-bold">Campos canônicos do AgentLog</h2>
             <p className="mt-1 text-sm text-slate-600">Escolha qual campo recebido da API alimenta cada destino canônico. Campos sem origem selecionada não serão preenchidos.</p>
             <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
-              <p className="text-sm font-bold">Chave oficial da empresa: {logisticSetting ? logisticKeyOptions.find((option) => option.value === logisticSetting.primary_logistic_key)?.label : 'não definida'}</p>
-              <p className="mt-2 text-xs text-slate-600">{logisticSetting ? 'Esta integração deve mapear o campo recebido para a chave oficial definida no setup.' : 'Conclua o setup da chave oficial antes de confirmar uma conexão operacional.'}</p>
-              {!logisticSetting ? <Link href={`/app/setup/logistic-key?sourceId=${encodeURIComponent(sourceId)}`} className="mt-3 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Ir para o setup</Link> : null}
+              <p className="text-sm font-bold">Chave oficial da empresa: {logisticSettingStatus === 'error' ? 'indisponível' : logisticSetting ? logisticKeyOptions.find((option) => option.value === logisticSetting.primary_logistic_key)?.label : logisticSettingStatus === 'loading' ? 'carregando...' : 'não definida'}</p>
+              <p className="mt-2 text-xs text-slate-600">{logisticSettingStatus === 'error' ? 'Não foi possível consultar a chave oficial. Verifique o erro técnico acima.' : logisticSetting ? 'Esta integração deve mapear o campo recebido para a chave oficial definida no setup.' : 'Conclua o setup da chave oficial antes de confirmar uma conexão operacional.'}</p>
+              {logisticSettingStatus === 'ready' && !logisticSetting ? <Link href={`/app/setup/logistic-key?sourceId=${encodeURIComponent(sourceId)}`} className="mt-3 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Ir para o setup</Link> : null}
             </div>
             <input value={mappingQuery} onChange={(event) => setMappingQuery(event.target.value)} placeholder="Buscar canônico, módulo, campo da API, interpretação ou exemplo..." aria-label="Buscar pareamento" className="mt-4 w-full rounded-xl border p-3 text-sm" />
             <div className="mt-5 space-y-6">
