@@ -12,7 +12,7 @@ assert.deepEqual(normalizeTenantLogisticKeySetting(setting), setting);
 assert.deepEqual(normalizeTenantLogisticKeySetting([setting]), setting);
 assert.equal(normalizeTenantLogisticKeySetting([]), null);
 assert.equal(normalizeTenantLogisticKeySetting(null), null);
-for (const invalidResponse of [{}, { data: setting }, [null], { ...setting, primary_logistic_key: 'invalid' }])
+for (const invalidResponse of [undefined, {}, { data: setting }, [null], [setting, setting], { ...setting, primary_logistic_key: 'invalid' }])
   assert.throws(() => normalizeTenantLogisticKeySetting(invalidResponse), /Resposta inválida/);
 
 const sourceId = '23be45f9-7922-4c81-addf-0b132f63b242';
@@ -50,6 +50,15 @@ assert.doesNotMatch(panel, /returnTo=/);
 assert.match(panel, /validInitialPhase\(initialPhase\)/);
 assert.match(panel, /\[tenantId, sourceId, initialPhase\]/);
 assert.match(panel, /logisticSettingStatus === 'error' \? 'indisponível'/);
+assert.match(panel, /logisticSettingStatus === 'ready' && !logisticSetting/);
+assert.match(panel, /Documento da entrega/);
+const mainPanelLoad = panel.match(/const \[current, history, mappings, ignored, values, formats, targets\] = await Promise\.all\(\[([\s\S]*?)\]\);/)?.[1];
+assert.ok(mainPanelLoad, 'main panel load was not found');
+assert.doesNotMatch(mainPanelLoad, /getPrimaryLogisticKey/, 'official key lookup must not be part of the main Promise.all');
+for (const assignment of ['setCanonicalTargets(targets)', 'setApiMappings(mappings)', 'setConfig(current)', 'setRuns(history)', 'setValueMappings(values)', 'setFormatDraft(', 'setDraft('])
+  assert.ok(panel.indexOf(assignment) > -1 && panel.indexOf(assignment) < panel.indexOf('const setting = await getPrimaryLogisticKey'), `${assignment} must run before the isolated key lookup`);
+assert.match(panel, /catch \(error\) \{[\s\S]*setLogisticSettingError\([\s\S]*setLogisticSettingStatus\('error'\)/);
+assert.match(panel, /setLogisticSetting\(setting\);\s*setLogisticSettingStatus\('ready'\)/);
 
 const api = readFileSync(new URL('../lib/api-connector-api.ts', import.meta.url), 'utf8');
 assert.match(api, /call<unknown>\(`\$\{route\(t,s\)\}\/primary-logistic-key`\)/);
