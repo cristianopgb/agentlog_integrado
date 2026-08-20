@@ -5,6 +5,15 @@ import {
   loadLogisticKeySetupState,
   logisticKeyReturnPath,
 } from '../lib/logistic-key-setup-flow.mjs';
+import { normalizeTenantLogisticKeySetting } from '../lib/logistic-key-response.mjs';
+
+const setting = { tenant_id: 'tenant-a', primary_logistic_key: 'delivery_number', established_by_data_source_id: null, established_at: '2026-08-20T00:00:00.000Z' };
+assert.deepEqual(normalizeTenantLogisticKeySetting(setting), setting);
+assert.deepEqual(normalizeTenantLogisticKeySetting([setting]), setting);
+assert.equal(normalizeTenantLogisticKeySetting([]), null);
+assert.equal(normalizeTenantLogisticKeySetting(null), null);
+for (const invalidResponse of [{}, { data: setting }, [null], { ...setting, primary_logistic_key: 'invalid' }])
+  assert.throws(() => normalizeTenantLogisticKeySetting(invalidResponse), /Resposta inválida/);
 
 const sourceId = '23be45f9-7922-4c81-addf-0b132f63b242';
 const expected = `/app/integrations/${sourceId}/setup?apiPhase=mapping`;
@@ -39,5 +48,11 @@ const panel = readFileSync(new URL('../components/integrations/api-connection-pa
 assert.match(panel, /sourceId=\$\{encodeURIComponent\(sourceId\)\}/);
 assert.doesNotMatch(panel, /returnTo=/);
 assert.match(panel, /validInitialPhase\(initialPhase\)/);
+assert.match(panel, /\[tenantId, sourceId, initialPhase\]/);
+assert.match(panel, /logisticSettingStatus === 'error' \? 'indisponível'/);
+
+const api = readFileSync(new URL('../lib/api-connector-api.ts', import.meta.url), 'utf8');
+assert.match(api, /call<unknown>\(`\$\{route\(t,s\)\}\/primary-logistic-key`\)/);
+assert.doesNotMatch(api, /primary-logistic-key[^;]+method:/s, 'a leitura da chave não pode escrever configuração');
 
 console.log('logistic key return and setup state tests passed');
