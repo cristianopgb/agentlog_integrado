@@ -32,10 +32,6 @@ type ApiMapping = {
   data_contract_field: ContractField;
 };
 type ApiContract = { id: string; entity_key: string };
-type OperationalMapping = {
-  canonical_entity: { entity_key: string } | null;
-  canonical_field: { field_key: string } | null;
-};
 type InsertedRecord = { id: string; row_number: number };
 type StagingErrorPreview = {
   id: string;
@@ -148,7 +144,6 @@ export class ApiConnectorSyncService {
     sourceId: string,
     userId: string,
     body: {
-      primary_logistic_key?: string;
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;
@@ -159,9 +154,7 @@ export class ApiConnectorSyncService {
   ) {
     const contract = await this.contract(tenantId, sourceId);
     const currentLogisticKey=await this.logisticKeys.get(tenantId);
-    if(!currentLogisticKey&&!body.primary_logistic_key) throw new BadRequestException('Escolha a chave logística principal da empresa antes de confirmar o pareamento.');
-    if(currentLogisticKey&&body.primary_logistic_key&&currentLogisticKey.primary_logistic_key!==body.primary_logistic_key)
-      throw new BadRequestException(`Esta empresa já usa ${this.logisticKeys.label(currentLogisticKey.primary_logistic_key)} como chave logística principal. A chave não pode ser alterada por outra integração.`);
+    if(!currentLogisticKey) throw new BadRequestException('Conclua o setup e defina a chave logística principal antes de configurar uma integração operacional.');
     const config = await this.requiredConfig(tenantId, sourceId);
     const detected = new Set(config.detected_fields ?? []);
     const fields = await this.db.select<ContractField[]>(
@@ -194,11 +187,14 @@ export class ApiConnectorSyncService {
     }
     if(contract.entity_key==='occurrences'&&proposedTargets.some(target=>target.entity_key==='operation_records'||target.entity_key==='deliveries'))
       throw new BadRequestException('Fontes de Ocorrências não podem mapear destinos de Operações. Use apenas campos Ocorrências / vínculo para localizar uma operação existente.');
-    const selectedKey=currentLogisticKey?.primary_logistic_key??body.primary_logistic_key!;
+    const selectedKey=currentLogisticKey.primary_logistic_key;
     const expectedEntity=contract.entity_key==='occurrences'?'occurrences':'operation_records';
     const expectedField=this.logisticKeys.expectedCanonicalField(selectedKey as PrimaryLogisticKey,contract.entity_key);
-    if(!proposedTargets.some(target=>target.entity_key===expectedEntity&&target.field_key===expectedField))
+    const officialTargetCount=proposedTargets.filter(target=>target.entity_key===expectedEntity&&target.field_key===expectedField).length;
+    if(officialTargetCount===0)
       throw new BadRequestException(`Esta empresa usa ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)} como chave logística principal. Mapeie um campo da API para ${this.logisticKeys.expectedCanonicalLabel(selectedKey as PrimaryLogisticKey,contract.entity_key)}.`);
+    if(officialTargetCount>1)
+      throw new BadRequestException(`Somente um campo da API pode apontar para ${this.logisticKeys.expectedCanonicalLabel(selectedKey as PrimaryLogisticKey,contract.entity_key)}.`);
     for(const item of requested.filter(item=>!item.data_contract_field_id)){
       const canonical=await this.db.select<Array<{id:string;canonical_entity_id:string;field_key:string;data_type:string;is_required:boolean}>>('canonical_fields',`select=id,canonical_entity_id,field_key,data_type,is_required&tenant_id=eq.${tenantId}&id=eq.${item.canonical_field_id}&canonical_entity_id=eq.${item.canonical_entity_id}&is_importable=eq.true&is_analytics_only=eq.false&limit=1`);
       if(!canonical[0])throw new BadRequestException('Destino canônico inválido ou fora do tenant.');
@@ -217,25 +213,6 @@ export class ApiConnectorSyncService {
       const payload={tenant_id:tenantId,data_contract_id:contract.id,data_contract_field_id:contractField.id,canonical_entity_id:item.canonical_entity_id,canonical_field_id:item.canonical_field_id,mapping_type:'direct',status:'active',operational_key:entities[0].entity_key==='operation_records'&&operationalKeys.has(canonical[0].field_key),created_by:userId};
       if(mapping[0])await this.db.update('field_mappings',`tenant_id=eq.${tenantId}&id=eq.${mapping[0].id}`,payload);
       else await this.db.insert('field_mappings',payload);
-    }
-    if(!currentLogisticKey){
-      if(contract.entity_key==='occurrences')
-        throw new BadRequestException('A primeira chave logística principal deve ser definida por um contrato de entregas, não por Ocorrências.');
-      const operationalMappings=await this.db.select<OperationalMapping[]>(
-        'field_mappings',
-        `select=canonical_entity:canonical_entities!field_mappings_entity_tenant_fk(entity_key),canonical_field:canonical_fields!field_mappings_canonical_field_tenant_fk(field_key)&tenant_id=eq.${tenantId}&data_contract_id=eq.${contract.id}&status=eq.active&operational_key=eq.true`,
-      );
-      const allowedKeys=new Set<PrimaryLogisticKey>(['delivery_number','document_number','invoice_number','cte_number','manifest_number','order_number']);
-      const validMappings=operationalMappings.filter(mapping=>mapping.canonical_entity?.entity_key==='operation_records'&&allowedKeys.has(mapping.canonical_field?.field_key as PrimaryLogisticKey));
-      const selectedMappings=validMappings.filter(mapping=>mapping.canonical_field?.field_key===selectedKey);
-      if(operationalMappings.length!==validMappings.length)
-        throw new BadRequestException('A chave logística principal não pôde ser estabelecida: existe mapping operacional ativo com destino canônico inválido.');
-      if(selectedMappings.length===0&&validMappings.length===0)
-        throw new BadRequestException('A chave logística principal não pôde ser estabelecida: não existe mapping operacional ativo e válido em operation_records para o contrato atual.');
-      if(selectedMappings.length===0)
-        throw new BadRequestException('A chave logística principal informada diverge dos mappings operacionais ativos e válidos do contrato.');
-      if(selectedMappings.length>1)
-        throw new BadRequestException(`A chave logística principal não pôde ser estabelecida: existe mais de um mapping operacional ativo para ${this.logisticKeys.label(selectedKey as PrimaryLogisticKey)}.`);
     }
     if (
       new Set(requested.map((item) => item.data_contract_field_id)).size !==
@@ -264,7 +241,6 @@ export class ApiConnectorSyncService {
     const savedMappings=await this.listApiMappings(tenantId,sourceId);
     // Establish only after every payload, target, persistence and response
     // projection step succeeds, so a rejected pairing never leaves a setting.
-    if(!currentLogisticKey)await this.logisticKeys.establish(tenantId,sourceId,selectedKey,userId);
     return savedMappings;
   }
 

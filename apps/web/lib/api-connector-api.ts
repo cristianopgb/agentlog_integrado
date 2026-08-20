@@ -183,11 +183,11 @@ export const saveApiFieldMappings = (
     data_contract_field_id: string;
     canonical_entity_id?: string;
     canonical_field_id?: string;
-  }>, primary_logistic_key?:PrimaryLogisticKey,
+  }>,
 ) =>
   call<ApiFieldMapping[]>(`${route(t, s)}/api-field-mappings`, {
     method: 'PUT',
-    body: JSON.stringify({ mappings, primary_logistic_key }),
+    body: JSON.stringify({ mappings }),
   });
 export type ValueMappingItem = {
   source_field_name: string;

@@ -29,10 +29,10 @@ export class TenantLogisticKeyService {
     const rows=await this.db.select<TenantLogisticKeySetting[]>('tenant_integration_settings',`select=tenant_id,primary_logistic_key,established_by_data_source_id,established_at&tenant_id=eq.${tenantId}&limit=1`);
     return rows[0]??null;
   }
-  async establish(tenantId:string, sourceId:string, key:string, userId:string) {
+  async establish(tenantId:string, sourceId:string|null, key:string, userId:string) {
     if(!PRIMARY_LOGISTIC_KEYS.includes(key as PrimaryLogisticKey)) throw new BadRequestException('Chave logística principal inválida.');
     const current=await this.get(tenantId);
-    if(current && current.primary_logistic_key!==key) throw new BadRequestException(`Esta empresa já usa ${this.label(current.primary_logistic_key)} como chave logística principal. A chave não pode ser alterada por outra integração.`);
+    if(current && current.primary_logistic_key!==key) throw new BadRequestException(`Esta empresa já usa ${this.label(current.primary_logistic_key)} como chave logística principal. A chave não pode ser alterada.`);
     if(!current) await this.db.insert('tenant_integration_settings',{tenant_id:tenantId,primary_logistic_key:key,established_by_data_source_id:sourceId,updated_by:userId});
     return (await this.get(tenantId))!;
   }

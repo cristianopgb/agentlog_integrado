@@ -48,12 +48,14 @@ function fixture(entityKey: string, targets: Target[], configuredKey?: string) {
     delete: async () => [],
     update: async () => [],
   };
-  const configs: any = { get: async () => ({ detected_fields: ['numero_entrega'] }) };
+  const configs: any = { get: async () => ({ detected_fields: ['numero_entrega', 'entrega_alternativa'] }) };
   const logisticKeys = new TenantLogisticKeyService(db);
   const service = new ApiConnectorSyncService(db, configs, {} as any, {} as any, {} as any, {} as any, logisticKeys);
-  const save = (primary_logistic_key = 'delivery_number') => service.saveApiMappings('tenant-a', 'source-a', 'user-a', {
-    primary_logistic_key,
-    mappings: [{ source_field_name: 'numero_entrega', data_contract_field_id: 'contract-field-delivery' }],
+  const save = (duplicateOfficialTarget = false) => service.saveApiMappings('tenant-a', 'source-a', 'user-a', {
+    mappings: [
+      { source_field_name: 'numero_entrega', data_contract_field_id: 'contract-field-delivery' },
+      ...(duplicateOfficialTarget ? [{ source_field_name: 'entrega_alternativa', data_contract_field_id: 'contract-field-delivery' }] : []),
+    ],
   });
   return { save, settings, inserts, logisticKeys, db };
 }
@@ -61,10 +63,10 @@ function fixture(entityKey: string, targets: Target[], configuredKey?: string) {
 async function run() {
   // Regression fixture: before this hotfix the validation compared the target
   // with contract.entity_key=deliveries and rejected this canonical mapping.
-  const first = fixture('deliveries', [{ entity: 'operation_records', field: 'delivery_number' }]);
+  const first = fixture('deliveries', [{ entity: 'operation_records', field: 'delivery_number' }], 'delivery_number');
   await first.save();
   assert.equal(first.settings[0]?.primary_logistic_key, 'delivery_number', 'numero_entrega is validated by its canonical operation_records.delivery_number target');
-  assert.equal(first.inserts.filter(item => item.table === 'tenant_integration_settings').length, 1, 'the explicit first-connection flow establishes one tenant setting');
+  assert.equal(first.inserts.filter(item => item.table === 'tenant_integration_settings').length, 0, 'pairing never establishes a tenant setting');
   assert.deepEqual(
     await first.db.select('canonical_entities', 'select=id&tenant_id=eq.tenant-a&entity_key=eq.deliveries&limit=1'),
     [],
@@ -77,30 +79,31 @@ async function run() {
   );
 
   await assert.rejects(
-    () => fixture('deliveries', [{ entity: 'operation_records', field: 'delivery_number', operational: false }]).save(),
-    /não existe mapping operacional ativo e válido/,
-    'zero valid operational mappings are explicit and blocked',
+    () => fixture('deliveries', [{ entity: 'operation_records', field: 'delivery_number' }]).save(),
+    /Conclua o setup/,
+    'a connection cannot establish the missing tenant key',
   );
   const severalOperationalKeys = fixture('deliveries', [
     { entity: 'operation_records', field: 'delivery_number' },
     { entity: 'operation_records', field: 'invoice_number' },
     { entity: 'operation_records', field: 'cte_number' },
-  ]);
+  ], 'delivery_number');
   await severalOperationalKeys.save();
   assert.equal(severalOperationalKeys.settings[0]?.primary_logistic_key, 'delivery_number', 'other operational keys do not make the selected canonical destination ambiguous');
   await assert.rejects(
     () => fixture('deliveries', [
       { entity: 'operation_records', field: 'delivery_number' },
       { entity: 'operation_records', field: 'delivery_number' },
-    ]).save(),
-    /mais de um mapping operacional ativo para Documento da entrega/,
-    'duplicate mappings for the selected canonical destination are blocked',
+    ], 'delivery_number').save(true),
+    /Somente um campo da API pode apontar/,
+    'two source fields cannot target the configured official key',
   );
 
   const configured = fixture('deliveries', [{ entity: 'operation_records', field: 'delivery_number' }], 'delivery_number');
   await configured.save();
   assert.equal(configured.inserts.filter(item => item.table === 'tenant_integration_settings').length, 0, 'a later connection does not create another setting');
-  await assert.rejects(() => configured.save('cte_number'), /chave não pode ser alterada/, 'an established key cannot change silently');
+  await configured.save();
+  assert.equal(configured.settings[0]?.primary_logistic_key, 'delivery_number', 'pairing has no input capable of changing the established key');
 
   const occurrence = fixture('occurrences', [{ entity: 'operation_records', field: 'delivery_number' }], 'delivery_number');
   await assert.rejects(() => occurrence.save(), /Fontes de Ocorrências não podem mapear destinos de Operações/, 'occurrences cannot target operation_records.delivery_number');

@@ -83,7 +83,6 @@ export class ApiIntegrationsController {
     @Req() req: AuthenticatedRequest,
     @Body()
     body: {
-      primary_logistic_key?: string;
       mappings?: Array<{
         source_field_name?: string;
         data_contract_field_id?: string;
