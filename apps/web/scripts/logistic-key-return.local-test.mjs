@@ -6,6 +6,30 @@ import {
   logisticKeyReturnPath,
 } from '../lib/logistic-key-setup-flow.mjs';
 import { normalizeTenantLogisticKeySetting } from '../lib/logistic-key-response.mjs';
+import { parseHttpJson } from '../lib/http-json.mjs';
+
+for (const [body, status] of [['', 200], ['', 204], ['   \n\t', 200], ['null', 200]])
+  assert.equal(await parseHttpJson(new Response(body || null, { status })), null);
+assert.deepEqual(await parseHttpJson(new Response('[]')), []);
+assert.deepEqual(await parseHttpJson(new Response('{}')), {});
+await assert.rejects(() => parseHttpJson(new Response('{invalid')), /JSON inválido/);
+
+async function setupResponse(response) {
+  const body = await parseHttpJson(response);
+  if (!response.ok) {
+    const message = body && typeof body === 'object' && !Array.isArray(body) ? body.message : undefined;
+    throw new Error(message ?? 'Falha ao configurar a chave logística.');
+  }
+  return normalizeTenantLogisticKeySetting(body);
+}
+await assert.rejects(() => setupResponse(new Response('{"message":"x"}', { status: 400 })), /^Error: x$/);
+await assert.rejects(() => setupResponse(new Response(null, { status: 500 })), /Falha ao configurar/);
+assert.equal(await setupResponse(new Response(null)), null);
+assert.equal(await setupResponse(new Response('null')), null);
+assert.equal(await setupResponse(new Response('[]')), null);
+assert.deepEqual(await setupResponse(new Response(JSON.stringify({ tenant_id: 'tenant-a', primary_logistic_key: 'delivery_number', established_by_data_source_id: null, established_at: '2026-08-20T00:00:00.000Z' }))), { tenant_id: 'tenant-a', primary_logistic_key: 'delivery_number', established_by_data_source_id: null, established_at: '2026-08-20T00:00:00.000Z' });
+for (const invalidBody of ['{}', JSON.stringify({ data: { tenant_id: 'tenant-a' } }), '{invalid'])
+  await assert.rejects(() => setupResponse(new Response(invalidBody)), /Resposta inválida|JSON inválido/);
 
 const setting = { tenant_id: 'tenant-a', primary_logistic_key: 'delivery_number', established_by_data_source_id: null, established_at: '2026-08-20T00:00:00.000Z' };
 assert.deepEqual(normalizeTenantLogisticKeySetting(setting), setting);
@@ -62,7 +86,7 @@ assert.match(panel, /catch \(error\) \{[\s\S]*setLogisticSettingError\([\s\S]*se
 assert.match(panel, /setLogisticSetting\(setting\);\s*setLogisticSettingStatus\('ready'\)/);
 
 const api = readFileSync(new URL('../lib/api-connector-api.ts', import.meta.url), 'utf8');
-assert.match(api, /call<unknown>\(`\$\{route\(t,s\)\}\/primary-logistic-key`\)/);
+assert.match(api, /primary-logistic-key`, undefined, true\)/);
 assert.doesNotMatch(api, /primary-logistic-key[^;]+method:/s, 'a leitura da chave não pode escrever configuração');
 
 const setupApi = readFileSync(new URL('../lib/setup-api.ts', import.meta.url), 'utf8');

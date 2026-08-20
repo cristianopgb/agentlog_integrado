@@ -1,7 +1,8 @@
 import { createBrowserSupabaseClient } from './supabase';
 import { isTenantLogisticKeySetting, normalizeTenantLogisticKeySetting } from './logistic-key-response.mjs';
+import { parseHttpJson } from './http-json.mjs';
 const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '');
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+async function call<T>(path: string, init?: RequestInit, parseEmptyBodyAsNull = false): Promise<T> {
   if (!base) throw new Error('API backend não configurada.');
   const token = createBrowserSupabaseClient().auth.getAccessToken();
   const response = await fetch(`${base}${path}`, {
@@ -12,9 +13,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const body = await response.json().catch(() => ({}));
+  const body = parseEmptyBodyAsNull
+    ? await parseHttpJson(response)
+    : await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = body as {
+    const error = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as {
       message?: string;
       source_field_name?: string;
       sample_value?: unknown;
@@ -162,7 +165,7 @@ export type PrimaryLogisticKey='delivery_number'|'document_number'|'invoice_numb
 export type TenantLogisticKeySetting={tenant_id:string;primary_logistic_key:PrimaryLogisticKey;established_by_data_source_id:string|null;established_at:string};
 export { isTenantLogisticKeySetting };
 export const getPrimaryLogisticKey=async(t:string,s:string):Promise<TenantLogisticKeySetting|null>=>{
-  const response=await call<unknown>(`${route(t,s)}/primary-logistic-key`);
+  const response=await call<unknown>(`${route(t,s)}/primary-logistic-key`, undefined, true);
   return normalizeTenantLogisticKeySetting(response) as TenantLogisticKeySetting|null;
 };
 export type IgnoredApiField = {

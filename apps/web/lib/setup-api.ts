@@ -1,6 +1,7 @@
 import { createBrowserSupabaseClient } from './supabase';
 import { getStrictLogisticKeySetupContext } from './logistic-key-setup-flow.mjs';
 import { normalizeTenantLogisticKeySetting } from './logistic-key-response.mjs';
+import { parseHttpJson } from './http-json.mjs';
 
 export type SetupProject = { id: string; tenant_id: string; name: string; description: string | null; status: string; priority: string; target_date: string | null; progress_percent: number; started_at: string | null; completed_at: string | null };
 export type SetupStep = { id: string; tenant_id: string; setup_project_id: string; key: string; title: string; description: string | null; status: string; sort_order: number };
@@ -28,10 +29,12 @@ async function setupApi<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new SetupApiError('Não foi possível acessar o serviço de configuração da chave logística.', null);
   }
-  const body = await response.json().catch(() => ({}));
+  const body = await parseHttpJson(response);
   if (!response.ok)
     throw new SetupApiError(
-      (body as { message?: string }).message ?? 'Falha ao configurar a chave logística.',
+      (body && typeof body === 'object' && !Array.isArray(body)
+        ? (body as { message?: string }).message
+        : undefined) ?? 'Falha ao configurar a chave logística.',
       response.status,
     );
   return body as T;
