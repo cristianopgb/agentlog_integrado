@@ -1,4 +1,5 @@
 import { createBrowserSupabaseClient } from './supabase';
+import { getStrictLogisticKeySetupContext } from './logistic-key-setup-flow.mjs';
 
 export type SetupProject = { id: string; tenant_id: string; name: string; description: string | null; status: string; priority: string; target_date: string | null; progress_percent: number; started_at: string | null; completed_at: string | null };
 export type SetupStep = { id: string; tenant_id: string; setup_project_id: string; key: string; title: string; description: string | null; status: string; sort_order: number };
@@ -6,16 +7,32 @@ export type SetupChecklistItem = { id: string; tenant_id: string; setup_project_
 export type PrimaryLogisticKey = 'delivery_number' | 'document_number' | 'invoice_number' | 'cte_number' | 'manifest_number' | 'order_number';
 export type TenantLogisticKeySetting = { tenant_id: string; primary_logistic_key: PrimaryLogisticKey; established_by_data_source_id: string | null; established_at: string };
 
+export class SetupApiError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = 'SetupApiError';
+  }
+}
+
 async function setupApi<T>(path: string, init?: RequestInit): Promise<T> {
   const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '');
   if (!base) throw new Error('API backend não configurada.');
   const token = createBrowserSupabaseClient().auth.getAccessToken();
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${token ?? ''}`, 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${token ?? ''}`, 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    });
+  } catch {
+    throw new SetupApiError('Não foi possível acessar o serviço de configuração da chave logística.', null);
+  }
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((body as { message?: string }).message ?? 'Falha ao configurar a chave logística.');
+  if (!response.ok)
+    throw new SetupApiError(
+      (body as { message?: string }).message ?? 'Falha ao configurar a chave logística.',
+      response.status,
+    );
   return body as T;
 }
 
@@ -27,6 +44,9 @@ export const establishSetupLogisticKey = (tenantId: string, primaryLogisticKey: 
     method: 'POST',
     body: JSON.stringify({ primary_logistic_key: primaryLogisticKey, confirmed: true }),
   });
+
+export const getLogisticKeySetupContext = () =>
+  getStrictLogisticKeySetupContext(createBrowserSupabaseClient());
 
 export async function getSessionContext() {
   const supabase = createBrowserSupabaseClient();

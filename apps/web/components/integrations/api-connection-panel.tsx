@@ -68,6 +68,10 @@ const phases: Array<{ key: Phase; label: string }> = [
   { key: 'sync', label: 'Sincronização para staging' },
   { key: 'done', label: 'Pronto' },
 ];
+const phaseKeys = new Set<Phase>(phases.map((item) => item.key));
+function validInitialPhase(value?: string | null): Phase {
+  return value && phaseKeys.has(value as Phase) ? value as Phase : 'connection';
+}
 const buttonText: Record<Exclude<Action, null>, [string, string]> = {
   save: ['Salvar e ir para amostra', 'Salvando...'],
   test: ['Testar conexão', 'Testando...'],
@@ -203,6 +207,7 @@ export function ApiConnectionPanel({
   fields,
   modules,
   source,
+  initialPhase,
 }: {
   tenantId: string;
   sourceId: string;
@@ -213,8 +218,9 @@ export function ApiConnectionPanel({
     module_key: string;
     metadata?: Record<string, unknown> | null;
   };
+  initialPhase?: string | null;
 }) {
-  const [phase, setPhase] = useState<Phase>('connection');
+  const [phase, setPhase] = useState<Phase>(() => validInitialPhase(initialPhase));
   const [config, setConfig] = useState<ApiConnectorConfig | null>(null);
   const [runs, setRuns] = useState<ApiSyncRun[]>([]);
   const [canonicalTargets,setCanonicalTargets]=useState<CanonicalMappingTarget[]>([]);
@@ -298,6 +304,7 @@ export function ApiConnectionPanel({
         setMsg(error.message);
       });
   }, [tenantId, sourceId]);
+  useEffect(() => setPhase(validInitialPhase(initialPhase)), [initialPhase]);
   async function act(
     action: Exclude<Action, null>,
     operation: () => Promise<void>,
@@ -877,7 +884,7 @@ export function ApiConnectionPanel({
             <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
               <p className="text-sm font-bold">Chave oficial da empresa: {logisticSetting ? logisticKeyOptions.find((option) => option.value === logisticSetting.primary_logistic_key)?.label : 'não definida'}</p>
               <p className="mt-2 text-xs text-slate-600">{logisticSetting ? 'Esta integração deve mapear o campo recebido para a chave oficial definida no setup.' : 'Conclua o setup da chave oficial antes de confirmar uma conexão operacional.'}</p>
-              {!logisticSetting ? <Link href="/app/setup" className="mt-3 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Ir para o setup</Link> : null}
+              {!logisticSetting ? <Link href={`/app/setup/logistic-key?sourceId=${encodeURIComponent(sourceId)}`} className="mt-3 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Ir para o setup</Link> : null}
             </div>
             <input value={mappingQuery} onChange={(event) => setMappingQuery(event.target.value)} placeholder="Buscar canônico, módulo, campo da API, interpretação ou exemplo..." aria-label="Buscar pareamento" className="mt-4 w-full rounded-xl border p-3 text-sm" />
             <div className="mt-5 space-y-6">
