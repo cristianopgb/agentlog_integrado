@@ -22,8 +22,10 @@ export function isTenantLogisticKeySetting(value) {
 
 export function normalizeTenantLogisticKeySetting(response) {
   if (response === null) return null;
-  const candidate = Array.isArray(response) ? response[0] : response;
   if (Array.isArray(response) && response.length === 0) return null;
+  if (Array.isArray(response) && response.length !== 1)
+    throw new Error('Resposta inválida ao consultar a chave logística oficial.');
+  const candidate = Array.isArray(response) ? response[0] : response;
   if (isTenantLogisticKeySetting(candidate)) return candidate;
   throw new Error('Resposta inválida ao consultar a chave logística oficial.');
 }
