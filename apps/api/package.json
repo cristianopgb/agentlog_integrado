@@ -19,6 +19,7 @@
     "test:public-chat": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/public-chat/public-chat.local-test.js",
     "test:canonical-coverage": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/canonical/canonical-coverage.local-test.js",
     "test:tenant-logistic-key": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/normalization/tenant-logistic-key.local-test.js",
+    "test:setup-logistic-key": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/setup/setup-logistic-key.local-test.js",
     "test:api-connector-logistic-key": "rm -rf dist && pnpm exec tsc -p tsconfig.build.json --incremental false && node dist/api-integrations/api-connector-sync.local-test.js"
   },
   "dependencies": {

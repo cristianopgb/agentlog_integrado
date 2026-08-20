@@ -3,6 +3,30 @@ import { createBrowserSupabaseClient } from './supabase';
 export type SetupProject = { id: string; tenant_id: string; name: string; description: string | null; status: string; priority: string; target_date: string | null; progress_percent: number; started_at: string | null; completed_at: string | null };
 export type SetupStep = { id: string; tenant_id: string; setup_project_id: string; key: string; title: string; description: string | null; status: string; sort_order: number };
 export type SetupChecklistItem = { id: string; tenant_id: string; setup_project_id: string; setup_step_id: string | null; title: string; description: string | null; status: string; is_required: boolean; sort_order: number };
+export type PrimaryLogisticKey = 'delivery_number' | 'document_number' | 'invoice_number' | 'cte_number' | 'manifest_number' | 'order_number';
+export type TenantLogisticKeySetting = { tenant_id: string; primary_logistic_key: PrimaryLogisticKey; established_by_data_source_id: string | null; established_at: string };
+
+async function setupApi<T>(path: string, init?: RequestInit): Promise<T> {
+  const base = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '');
+  if (!base) throw new Error('API backend não configurada.');
+  const token = createBrowserSupabaseClient().auth.getAccessToken();
+  const response = await fetch(`${base}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${token ?? ''}`, 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((body as { message?: string }).message ?? 'Falha ao configurar a chave logística.');
+  return body as T;
+}
+
+export const getSetupLogisticKey = (tenantId: string) =>
+  setupApi<TenantLogisticKeySetting | null>(`/tenants/${tenantId}/setup/logistic-key`);
+
+export const establishSetupLogisticKey = (tenantId: string, primaryLogisticKey: PrimaryLogisticKey) =>
+  setupApi<TenantLogisticKeySetting>(`/tenants/${tenantId}/setup/logistic-key`, {
+    method: 'POST',
+    body: JSON.stringify({ primary_logistic_key: primaryLogisticKey, confirmed: true }),
+  });
 
 export async function getSessionContext() {
   const supabase = createBrowserSupabaseClient();

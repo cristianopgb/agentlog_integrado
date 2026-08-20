@@ -11,8 +11,9 @@ async function run(){
   };
   const service=new TenantLogisticKeyService(db);
   assert.equal(await service.get('tenant-without-setting'),null,'tenant sem configuração retorna null, nunca array vazio');
-  await service.establish('tenant-a','source-operations','invoice_number','user-a');
-  assert.equal((await service.get('tenant-a'))?.primary_logistic_key,'invoice_number','a primeira fonte define a chave');
+  await service.establish('tenant-a',null,'invoice_number','user-a');
+  assert.equal((await service.get('tenant-a'))?.primary_logistic_key,'invoice_number','o setup define a chave sem fonte');
+  assert.equal(settings[0].established_by_data_source_id,null,'a configuração do setup não atribui propriedade a uma fonte');
   await assert.rejects(()=>service.establish('tenant-a','source-2','cte_number','user-a'),/já usa NF/);
   await assert.rejects(()=>service.validateSourceMapping('tenant-a','contract-occurrences','occurrences'),/Mapeie um campo da API para Ocorrências \/ NF vinculada/);
   mappings.push({id:'mapping-linked-invoice'});

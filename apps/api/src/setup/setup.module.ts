@@ -5,5 +5,7 @@ import { SetupChecklistController } from './setup-checklist.controller';
 import { SetupProjectsController } from './setup-projects.controller';
 import { SetupStepsController } from './setup-steps.controller';
 import { SetupService } from './setup.service';
-@Module({ imports: [SupabaseModule, RbacModule], controllers: [SetupProjectsController, SetupStepsController, SetupChecklistController], providers: [SetupService] })
+import { NormalizationModule } from '../normalization/normalization.module';
+import { SetupLogisticKeyController } from './setup-logistic-key.controller';
+@Module({ imports: [SupabaseModule, RbacModule, NormalizationModule], controllers: [SetupProjectsController, SetupStepsController, SetupChecklistController, SetupLogisticKeyController], providers: [SetupService] })
 export class SetupModule {}

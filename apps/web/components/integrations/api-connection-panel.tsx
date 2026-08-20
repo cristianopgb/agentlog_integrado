@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, StatusBadge } from '../ui';
 import {
@@ -221,7 +222,6 @@ export function ApiConnectionPanel({
   const [apiMappings, setApiMappings] = useState<ApiFieldMapping[]>([]);
   const [ignoredFields, setIgnoredFields] = useState<IgnoredApiField[]>([]);
   const [logisticSetting,setLogisticSetting]=useState<TenantLogisticKeySetting|null>(null);
-  const [logisticKey,setLogisticKey]=useState<PrimaryLogisticKey|''>('');
   const [valueDraft, setValueDraft] = useState<Record<string, string>>({});
   const [formatDraft, setFormatDraft] = useState<
     Record<string, FieldParseRule>
@@ -256,7 +256,6 @@ export function ApiConnectionPanel({
     ]);
     const currentLogisticSetting=setting?.primary_logistic_key?setting:null;
     setLogisticSetting(currentLogisticSetting);
-    setLogisticKey(currentLogisticSetting?.primary_logistic_key??'');
     setCanonicalTargets(targets);
     setApiMappings(mappings);
     setIgnoredFields(ignored);
@@ -391,7 +390,7 @@ export function ApiConnectionPanel({
   const selectedLegacyKeys = new Set(fields.filter((field) => Object.values(draft).includes(field.id)).map((field) => field.field_key));
   const normalizedSourceModule = source.module_key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const isOccurrenceSource = ['atendimento', 'ocorrencia', 'ocorrencias'].includes(normalizedSourceModule);
-  const selectedLogisticKey = logisticSetting?.primary_logistic_key || logisticKey || null;
+  const selectedLogisticKey = logisticSetting?.primary_logistic_key ?? null;
   const essentialTargets = isOccurrenceSource
     ? selectedLogisticKey
       ? [{
@@ -446,7 +445,7 @@ export function ApiConnectionPanel({
               return {source_field_name,data_contract_field_id:'',canonical_entity_id,canonical_field_id};
             }
             return {source_field_name,data_contract_field_id:target};
-          }), logisticSetting?undefined:logisticKey||undefined,
+          }),
       );
       await load();
       setMsg(
@@ -876,12 +875,9 @@ export function ApiConnectionPanel({
             <h2 className="text-lg font-bold">Campos canônicos do AgentLog</h2>
             <p className="mt-1 text-sm text-slate-600">Escolha qual campo recebido da API alimenta cada destino canônico. Campos sem origem selecionada não serão preenchidos.</p>
             <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
-              <label className="text-sm font-bold" htmlFor="primary-logistic-key">Chave logística principal da empresa</label>
-              <select id="primary-logistic-key" value={logisticKey} disabled={Boolean(logisticSetting?.primary_logistic_key)} onChange={(event)=>setLogisticKey(event.target.value as PrimaryLogisticKey)} className="mt-2 w-full rounded-xl border bg-white p-3 disabled:bg-slate-100">
-                {!logisticSetting?<option value="">Selecione uma chave logística</option>:null}
-                {logisticKeyOptions.map((option)=><option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-              <p className="mt-2 text-xs text-slate-600">{logisticSetting?'Esta chave está definida para a empresa e não pode variar entre integrações. Mapeie abaixo o campo recebido por esta API para a mesma chave.':'A primeira escolha será usada obrigatoriamente por todas as próximas integrações desta empresa.'}</p>
+              <p className="text-sm font-bold">Chave oficial da empresa: {logisticSetting ? logisticKeyOptions.find((option) => option.value === logisticSetting.primary_logistic_key)?.label : 'não definida'}</p>
+              <p className="mt-2 text-xs text-slate-600">{logisticSetting ? 'Esta integração deve mapear o campo recebido para a chave oficial definida no setup.' : 'Conclua o setup da chave oficial antes de confirmar uma conexão operacional.'}</p>
+              {!logisticSetting ? <Link href="/app/setup" className="mt-3 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Ir para o setup</Link> : null}
             </div>
             <input value={mappingQuery} onChange={(event) => setMappingQuery(event.target.value)} placeholder="Buscar canônico, módulo, campo da API, interpretação ou exemplo..." aria-label="Buscar pareamento" className="mt-4 w-full rounded-xl border p-3 text-sm" />
             <div className="mt-5 space-y-6">
@@ -950,7 +946,7 @@ export function ApiConnectionPanel({
                 disabled={
                   !detected.length ||
                   duplicates.size > 0 ||
-                  (!logisticSetting&&!logisticKey)
+                  !logisticSetting
                 }
                 onClick={confirmMappings}
               />
