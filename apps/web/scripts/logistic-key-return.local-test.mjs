@@ -39,7 +39,8 @@ assert.equal((await getStrictLogisticKeySetupContext(client({ profile: null })))
 
 const context = async () => ({ user: { id: 'user-a' }, tenantId: 'tenant-a' });
 assert.equal((await loadLogisticKeySetupState(context, async () => null)).state, 'unset');
-assert.equal((await loadLogisticKeySetupState(context, async () => ({ primary_logistic_key: 'delivery_number' }))).state, 'configured');
+assert.equal((await loadLogisticKeySetupState(context, async () => setting)).state, 'configured');
+assert.equal((await loadLogisticKeySetupState(context, async () => { throw new Error('Resposta inválida'); })).state, 'error');
 assert.equal((await loadLogisticKeySetupState(context, async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); })).state, 'forbidden');
 assert.equal((await loadLogisticKeySetupState(async () => { throw new Error('auth unavailable'); }, async () => null)).state, 'error');
 assert.equal((await loadLogisticKeySetupState(async () => { throw new Error('RLS denied'); }, async () => null)).state, 'error');
@@ -63,5 +64,10 @@ assert.match(panel, /setLogisticSetting\(setting\);\s*setLogisticSettingStatus\(
 const api = readFileSync(new URL('../lib/api-connector-api.ts', import.meta.url), 'utf8');
 assert.match(api, /call<unknown>\(`\$\{route\(t,s\)\}\/primary-logistic-key`\)/);
 assert.doesNotMatch(api, /primary-logistic-key[^;]+method:/s, 'a leitura da chave não pode escrever configuração');
+
+const setupApi = readFileSync(new URL('../lib/setup-api.ts', import.meta.url), 'utf8');
+assert.match(setupApi, /import \{ normalizeTenantLogisticKeySetting \} from '\.\/logistic-key-response\.mjs';/);
+assert.match(setupApi, /getSetupLogisticKey[\s\S]*?setupApi<unknown>\([\s\S]*?normalizeTenantLogisticKeySetting\(response\)/);
+assert.doesNotMatch(setupApi, /getSetupLogisticKey[\s\S]*?setupApi<TenantLogisticKeySetting \| null>/);
 
 console.log('logistic key return and setup state tests passed');

@@ -1,5 +1,6 @@
 import { createBrowserSupabaseClient } from './supabase';
 import { getStrictLogisticKeySetupContext } from './logistic-key-setup-flow.mjs';
+import { normalizeTenantLogisticKeySetting } from './logistic-key-response.mjs';
 
 export type SetupProject = { id: string; tenant_id: string; name: string; description: string | null; status: string; priority: string; target_date: string | null; progress_percent: number; started_at: string | null; completed_at: string | null };
 export type SetupStep = { id: string; tenant_id: string; setup_project_id: string; key: string; title: string; description: string | null; status: string; sort_order: number };
@@ -36,8 +37,10 @@ async function setupApi<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export const getSetupLogisticKey = (tenantId: string) =>
-  setupApi<TenantLogisticKeySetting | null>(`/tenants/${tenantId}/setup/logistic-key`);
+export async function getSetupLogisticKey(tenantId: string): Promise<TenantLogisticKeySetting | null> {
+  const response = await setupApi<unknown>(`/tenants/${tenantId}/setup/logistic-key`);
+  return normalizeTenantLogisticKeySetting(response) as TenantLogisticKeySetting | null;
+}
 
 export const establishSetupLogisticKey = (tenantId: string, primaryLogisticKey: PrimaryLogisticKey) =>
   setupApi<TenantLogisticKeySetting>(`/tenants/${tenantId}/setup/logistic-key`, {
