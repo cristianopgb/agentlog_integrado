@@ -642,6 +642,41 @@ export class AttendanceAgentToolsService {
         row.document_number ?? row.delivery_number ?? identifier,
     };
   }
+  private async findOpenOccurrencesByOperation(
+    tenantId: string,
+    operationRecordId: string,
+  ) {
+    const links = await this.db.select<any[]>(
+      'occurrence_operation_links',
+      `select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${operationRecordId}&deleted_at=is.null&limit=100`,
+    );
+    if (!links.length) return [];
+    const occurrenceIds = [...new Set(links.map((link) => link.occurrence_id))];
+    return this.db.select<any[]>(
+      'occurrences',
+      `select=id,occurrence_number,current_status&tenant_id=eq.${tenantId}&id=in.(${occurrenceIds.join(',')})&deleted_at=is.null&current_status=not.in.(resolved,closed,canceled)&order=opened_at.desc&limit=100`,
+    );
+  }
+  private async linkConversationOccurrence(
+    tenantId: string,
+    conversationId: string,
+    occurrenceId: string,
+    actorId: string,
+    relationshipType: string,
+  ) {
+    const existing = await this.db.select<any[]>(
+      'conversation_occurrence_links',
+      `select=id&tenant_id=eq.${tenantId}&conversation_id=eq.${conversationId}&occurrence_id=eq.${occurrenceId}&deleted_at=is.null&limit=1`,
+    );
+    if (!existing[0])
+      await this.db.insert('conversation_occurrence_links', {
+        tenant_id: tenantId,
+        conversation_id: conversationId,
+        occurrence_id: occurrenceId,
+        relationship_type: relationshipType,
+        created_by: actorId,
+      });
+  }
   private async createOccurrence(t: string, a: Args, u: string) {
     const conversationId = text(a.conversation_id, 'conversation_id', 80),
       conversations = await this.db.select<any[]>(
@@ -655,6 +690,39 @@ export class AttendanceAgentToolsService {
       return { created: false, needs_clarification: true };
     if ('operation_not_found' in operation)
       return { created: false, operation_not_found: true };
+    if (operation.operation_record_id) {
+      const open = await this.findOpenOccurrencesByOperation(
+        t,
+        operation.operation_record_id,
+      );
+      if (open.length > 1)
+        return {
+          created: false,
+          needs_clarification: true,
+          reason: 'multiple_open_occurrences_for_operation',
+          safe_message:
+            'Há mais de uma ocorrência aberta para esta operação. Informe o protocolo ou aguarde atendimento humano.',
+        };
+      if (open.length === 1) {
+        await this.linkConversationOccurrence(
+          t,
+          conversationId,
+          open[0].id,
+          u,
+          'related',
+        );
+        return {
+          created: false,
+          duplicate_blocked: true,
+          reason: 'existing_open_occurrence_for_operation',
+          existing_occurrence: {
+            occurrence_id: open[0].id,
+            occurrence_number: open[0].occurrence_number,
+          },
+          recommended_tool: 'attendance.occurrence.add_treatment',
+        };
+      }
+    }
     const linked = (
       await this.db.select<any[]>(
         'conversation_occurrence_links',
@@ -775,13 +843,13 @@ export class AttendanceAgentToolsService {
         verification_note: uncertain ? audit : undefined,
       },
     });
-    await this.db.insert('conversation_occurrence_links', {
-      tenant_id: t,
-      conversation_id: conversationId,
-      occurrence_id: occurrence.id,
-      relationship_type: 'created_from',
-      created_by: u,
-    });
+    await this.linkConversationOccurrence(
+      t,
+      conversationId,
+      occurrence.id,
+      u,
+      'created_from',
+    );
     await this.db.update(
       'inbox_message_attachments',
       `tenant_id=eq.${t}&conversation_id=eq.${conversationId}&occurrence_id=is.null&deleted_at=is.null`,
@@ -800,7 +868,39 @@ export class AttendanceAgentToolsService {
     };
   }
   private async addTreatment(t: string, a: Args, u: string) {
-    const resolved = await this.resolveOccurrenceId(t, a);
+    let resolved: any;
+    try {
+      resolved = await this.resolveOccurrenceId(t, a);
+    } catch (error) {
+      if (
+        !(error instanceof BadRequestException) ||
+        error.message !== 'occurrence_not_found'
+      )
+        throw error;
+      const operation = await this.resolveOperationReference(t, a);
+      if ('operation_not_found' in operation || !operation.operation_record_id)
+        return { created: false, occurrence_not_found: true };
+      const open = await this.findOpenOccurrencesByOperation(
+        t,
+        operation.operation_record_id,
+      );
+      if (open.length > 1)
+        return {
+          created: false,
+          needs_clarification: true,
+          reason: 'multiple_open_occurrences_for_operation',
+        };
+      if (!open.length) return { created: false, occurrence_not_found: true };
+      resolved = open[0];
+      if (typeof a.conversation_id === 'string' && a.conversation_id.trim())
+        await this.linkConversationOccurrence(
+          t,
+          text(a.conversation_id, 'conversation_id', 80),
+          resolved.id,
+          u,
+          'related',
+        );
+    }
     const originalType =
       typeof a.treatment_type === 'string' ? a.treatment_type : 'other';
     const aliases = new Set([
