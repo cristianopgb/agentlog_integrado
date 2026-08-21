@@ -231,6 +231,188 @@ async function main() {
   assert.equal(operationalContact.contact_type, 'driver_operational');
   assert.equal(operationalContact.contact_id, null);
   assert.equal(operationalContact.source, 'treated_transport_records');
+
+  const operationId = '22222222-2222-4222-8222-222222222222';
+  const linkQueries: string[] = [];
+  let occurrenceCreates = 0;
+  let createdOccurrenceBody: any;
+  const treatmentWrites: string[] = [];
+  const hotfixDb: any = {
+    select: async (table: string, query: string) => {
+      if (table === 'inbox_conversations')
+        return [{ id: 'conversation-hotfix', contact_id: null }];
+      if (table === 'operation_records')
+        return [
+          {
+            id: operationId,
+            document_number: query.includes('DOC-2026-000011')
+              ? 'DOC-2026-000011'
+              : 'DOC-2026-000001',
+          },
+        ];
+      if (table === 'occurrence_operation_links') {
+        linkQueries.push(query);
+        return query.includes('operation_record_id') &&
+          !query.includes('DOC-2026-000011-marker')
+          ? [{ occurrence_id: occurrenceId }]
+          : [];
+      }
+      if (table === 'occurrences' && query.includes('id=in.'))
+        return [
+          {
+            id: occurrenceId,
+            occurrence_number: 'OC0000001',
+            current_status: 'open',
+          },
+        ];
+      if (table === 'public_chat_sessions') return [];
+      return [];
+    },
+    insert: async () => [],
+    update: async () => [],
+  };
+  const hotfixOccurrences: any = {
+    create: async (_t: string, _u: string, body: any) => {
+      occurrenceCreates++;
+      createdOccurrenceBody = body;
+      return {
+        id: '33333333-3333-4333-8333-333333333333',
+        occurrence_number: 'OC0000012',
+        current_status: 'open',
+      };
+    },
+    createTreatment: async (_t: string, id: string, _u: string, body: any) => {
+      treatmentWrites.push(`${id}:${body.description}`);
+      return { id: 'treatment-hotfix', status: 'open' };
+    },
+  };
+  const hotfixTools = new AttendanceAgentToolsService(
+    hotfixDb,
+    hotfixOccurrences,
+    { ensurePermission: async () => undefined } as any,
+  );
+  const updated: any = await hotfixTools.execute(
+    'tenant-a',
+    'attendance.occurrence.create',
+    {
+      conversation_id: 'conversation-hotfix',
+      operation_record_id: operationId,
+      title: 'Atraso',
+      description: 'Motorista continua aguardando.',
+    },
+    'actor-a',
+  );
+  assert.equal(occurrenceCreates, 0, 'open occurrence must not be duplicated');
+  assert.equal(updated.treatment_created, true);
+  assert.equal(updated.occurrence_number, 'OC0000001');
+  assert.deepEqual(treatmentWrites, [
+    `${occurrenceId}:Motorista continua aguardando.`,
+  ]);
+  assert(
+    linkQueries.every((query) => !query.includes('deleted_at')),
+    'occurrence_operation_links queries must follow the actual schema',
+  );
+  const newOccurrenceTools = new AttendanceAgentToolsService(
+    {
+      ...hotfixDb,
+      select: async (table: string, query: string) => {
+        if (table === 'inbox_conversations')
+          return [{ id: 'conversation-new', contact_id: null }];
+        if (table === 'operation_records')
+          return [{ id: operationId, document_number: 'DOC-2026-000011' }];
+        if (table === 'occurrence_operation_links') {
+          linkQueries.push(query);
+          return [];
+        }
+        if (table === 'conversation_occurrence_links') return [];
+        if (table === 'public_chat_sessions') return [];
+        if (table === 'occurrence_reasons') return [{ id: 'reason-a' }];
+        return [];
+      },
+    },
+    hotfixOccurrences,
+    { ensurePermission: async () => undefined } as any,
+  );
+  const created: any = await newOccurrenceTools.execute(
+    'tenant-a',
+    'attendance.occurrence.create',
+    {
+      conversation_id: 'conversation-new',
+      operation_record_id: operationId,
+      title: 'Avaria',
+      description: 'Carga avariada.',
+      reason_code: 'AVARIA',
+    },
+    'actor-a',
+  );
+  assert.equal(created.created, true);
+  assert.equal(created.occurrence_number, 'OC0000012');
+  assert.equal(occurrenceCreates, 1);
+  assert.deepEqual(createdOccurrenceBody.operation_record_ids, [operationId]);
+  const failedCreate: any = await new AttendanceAgentToolsService(
+    (newOccurrenceTools as any).db,
+    {
+      ...hotfixOccurrences,
+      create: async () => {
+        throw new Error('database_write_failed');
+      },
+    },
+    { ensurePermission: async () => undefined } as any,
+  ).execute(
+    'tenant-a',
+    'attendance.occurrence.create',
+    {
+      conversation_id: 'conversation-new',
+      operation_record_id: operationId,
+      title: 'Avaria',
+      description: 'Carga avariada.',
+      reason_code: 'AVARIA',
+    },
+    'actor-a',
+  );
+  assert.equal(failedCreate.created, false);
+  assert.equal(failedCreate.failure_reason, 'occurrence_creation_failed');
+  assert.equal(failedCreate.technical_error, 'database_write_failed');
+
+  let failedTurn = 0;
+  const failedGateway: any = {
+    attendanceTurn: async () =>
+      failedTurn++ === 0
+        ? {
+            calls: [
+              {
+                id: 'failed-call',
+                name: 'attendance__occurrence__create',
+                args: { title: 'Falha', description: 'Falha' },
+              },
+            ],
+            answer: '',
+            responseId: 'failed-response',
+          }
+        : {
+            calls: [],
+            answer: 'Registrei a ocorrência com sucesso.',
+            responseId: 'failed-response-2',
+            modelName: 'test',
+            usage: {},
+          },
+  };
+  const falseSuccessService = new AttendanceAgentService(
+    configuredDb,
+    failedGateway,
+    {
+      execute: async () => ({
+        created: false,
+        duplicate_blocked: true,
+        safe_message: 'Não foi possível registrar agora.',
+      }),
+    } as any,
+  );
+  const falseSuccess = await falseSuccessService.processPublicConversation(
+    'tenant-a',
+    'conversation-hotfix',
+  );
+  assert.equal(falseSuccess.answer, 'Não foi possível registrar agora.');
   console.log('attendance-agent.local-test: ok');
 }
 void main();

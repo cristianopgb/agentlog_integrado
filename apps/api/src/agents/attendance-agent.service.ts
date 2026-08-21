@@ -211,6 +211,9 @@ export class AttendanceAgentService {
         })),
       });
       let rounds = 0;
+      let occurrenceWrite:
+        | { successful: boolean; answer: string; technicalError?: string }
+        | undefined;
       while (turn.calls.length && rounds++ < 5) {
         const outputs = [];
         for (const call of turn.calls) {
@@ -224,14 +227,57 @@ export class AttendanceAgentService {
               { ...call.args, conversation_id: conversationId },
               agent.created_by,
             );
+            const resultRecord = result as Record<string, any>;
+            if (key === 'attendance.occurrence.create') {
+              const created =
+                resultRecord.created === true &&
+                typeof resultRecord.occurrence_number === 'string';
+              const treated =
+                resultRecord.treatment_created === true &&
+                typeof resultRecord.occurrence_number === 'string';
+              occurrenceWrite = {
+                successful: created || treated,
+                answer: created
+                  ? `Ocorrência registrada com o protocolo ${resultRecord.occurrence_number}.`
+                  : treated
+                    ? `Atualização registrada na ocorrência ${resultRecord.occurrence_number}.`
+                    : String(resultRecord.safe_message ?? safeUnavailable),
+                technicalError:
+                  typeof resultRecord.technical_error === 'string'
+                    ? resultRecord.technical_error
+                    : undefined,
+              };
+            } else if (key === 'attendance.occurrence.add_treatment') {
+              const treated =
+                resultRecord.created === true &&
+                typeof resultRecord.treatment_id === 'string';
+              occurrenceWrite = {
+                successful: treated,
+                answer: treated
+                  ? resultRecord.occurrence_number
+                    ? `Atualização registrada na ocorrência ${resultRecord.occurrence_number}.`
+                    : 'Atualização registrada na ocorrência.'
+                  : String(resultRecord.safe_message ?? safeUnavailable),
+              };
+            }
             await this.db.insert('ai_tool_calls', {
               tenant_id: tenantId,
               ai_run_id: run.id,
               tool_id: catalog.find((x) => x.tool_key === key)?.id,
               tool_key: key,
-              status: 'completed',
+              status:
+                key === 'attendance.occurrence.create' &&
+                resultRecord.failure_reason
+                  ? 'failed'
+                  : 'completed',
               input_json: call.args,
               output_json: result,
+              error_message:
+                key === 'attendance.occurrence.create' &&
+                resultRecord.failure_reason
+                  ? (resultRecord.technical_error ??
+                    resultRecord.failure_reason)
+                  : undefined,
               duration_ms: Date.now() - started,
             });
             outputs.push({
@@ -252,6 +298,15 @@ export class AttendanceAgentService {
               error_message: message,
               duration_ms: Date.now() - started,
             });
+            if (
+              key === 'attendance.occurrence.create' ||
+              key === 'attendance.occurrence.add_treatment'
+            )
+              occurrenceWrite = {
+                successful: false,
+                answer: safeUnavailable,
+                technicalError: message,
+              };
             outputs.push({
               type: 'function_call_output',
               call_id: call.id,
@@ -279,6 +334,7 @@ export class AttendanceAgentService {
           toolOutputs: outputs,
         });
       }
+      if (occurrenceWrite) turn.answer = occurrenceWrite.answer;
       if (!turn.answer.trim()) throw new Error('attendance_empty_answer');
       await this.db.update(
         'ai_runs',
