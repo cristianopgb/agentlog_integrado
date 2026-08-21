@@ -175,10 +175,11 @@ async function main() {
   );
 
   const searchQueries: string[] = [];
+  const operationalContacts: any[] = [];
   const operationalTools = new AttendanceAgentToolsService(
     {
       select: async (table: string, query: string) => {
-        if (table === 'contacts') return [];
+        if (table === 'contacts') return operationalContacts;
         if (
           table === 'transport_records' &&
           query.includes('driver_phone.eq.61982757782')
@@ -208,6 +209,15 @@ async function main() {
         }
         return [];
       },
+      insert: async (table: string, payload: any) => {
+        if (table === 'contacts') {
+          const row = { id: 'operational-contact-a', ...payload };
+          operationalContacts.push(row);
+          return [row];
+        }
+        return [];
+      },
+      update: async () => [],
     } as any,
     occurrenceService,
     { ensurePermission: async () => undefined } as any,
@@ -229,7 +239,9 @@ async function main() {
     'actor-a',
   );
   assert.equal(operationalContact.contact_type, 'driver_operational');
-  assert.equal(operationalContact.contact_id, null);
+  assert.equal(operationalContact.contact_id, 'operational-contact-a');
+  assert.equal(operationalContacts.length, 1);
+  assert.equal(operationalContacts[0].metadata.origin, 'operational_match');
   assert.equal(operationalContact.source, 'treated_transport_records');
 
   const operationId = '22222222-2222-4222-8222-222222222222';

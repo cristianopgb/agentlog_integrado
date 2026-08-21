@@ -8,6 +8,7 @@ import {
   linkInboxOccurrence,
   listInbox,
   registerInboxMessage,
+  returnInboxToAi,
   uploadInboxAttachment,
   setInboxStatus,
   type InboxConversation,
@@ -218,18 +219,40 @@ export default function InboxPage() {
                     {detail.conversation.channel} ·{' '}
                     {statusLabels[detail.conversation.status]}
                   </p>
+                  {detail.contact && (
+                    <p className="text-xs text-slate-500">
+                      {detail.contact.phone || 'Telefone não informado'} ·{' '}
+                      {detail.contact.contact_type}
+                      {detail.contact.metadata?.origin === 'operational_match'
+                        ? ' · Identificado pela base operacional'
+                        : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    className="rounded-lg border px-3 py-2 text-sm font-semibold"
-                    onClick={() =>
-                      tenant &&
-                      selected &&
-                      action(() => assignInbox(tenant, selected))
-                    }
-                  >
-                    Assumir
-                  </button>
+                  {!detail.conversation.assigned_user_id ? (
+                    <button
+                      className="rounded-lg border px-3 py-2 text-sm font-semibold"
+                      onClick={() =>
+                        tenant &&
+                        selected &&
+                        action(() => assignInbox(tenant, selected))
+                      }
+                    >
+                      Assumir
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-lg border border-blue-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                      onClick={() =>
+                        tenant &&
+                        selected &&
+                        action(() => returnInboxToAi(tenant, selected))
+                      }
+                    >
+                      Devolver para IA
+                    </button>
+                  )}
                   <button
                     className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white"
                     onClick={() =>
@@ -328,10 +351,18 @@ export default function InboxPage() {
             <p className="text-sm text-slate-500">
               {detail?.contact?.phone || 'Sem telefone'}
             </p>
+            {detail?.contact && (
+              <p className="mt-1 text-xs text-slate-500">
+                Tipo: {detail.contact.contact_type}
+                {detail.contact.metadata?.origin === 'operational_match'
+                  ? ' · Identificado pela base operacional'
+                  : ''}
+              </p>
+            )}
           </section>
           <section>
             <h2 className="font-bold">Resumo</h2>
-            <p className="mt-2 text-sm text-slate-600">
+            <p className="mt-2 whitespace-pre-line text-sm text-slate-600">
               {detail?.conversation.summary || 'Sem resumo registrado.'}
             </p>
           </section>

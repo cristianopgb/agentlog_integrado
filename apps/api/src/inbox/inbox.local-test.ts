@@ -132,6 +132,19 @@ async function main() {
   );
   assert.equal(closed.status, 'closed');
   assert.equal(typeof closed.closed_at, 'string');
+  await service.assign('a', String(first.conversation_id), 'user-a', {});
+  const resumed = await service.returnToAi(
+    'a',
+    String(first.conversation_id),
+    'user-a',
+  );
+  assert.equal(resumed.assigned_user_id, null);
+  assert.equal(resumed.status, 'open');
+  assert(
+    db.tables.inbox_events.some(
+      (event) => event.event_type === 'automation_resumed',
+    ),
+  );
   await assert.rejects(() =>
     service.detail('b', String(first.conversation_id)),
   );

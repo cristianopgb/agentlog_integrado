@@ -132,6 +132,17 @@ export type Occurrence = {
   resolution_summary?: string | null;
   closed_reason?: string | null;
   closed_notes?: string | null;
+  operation_record_id?: string | null;
+  operation_delivery_number?: string | null;
+  operation_document_number?: string | null;
+  operation_invoice_number?: string | null;
+  operation_cte_number?: string | null;
+  operation_manifest_number?: string | null;
+  operation_order_number?: string | null;
+  operation_customer_name?: string | null;
+  last_treatment_description?: string | null;
+  last_treatment_at?: string | null;
+  last_treatment_type?: string | null;
 };
 export const occurrenceTreatmentTypeLabels: Record<string, string> = {
   contact_driver: 'Contato com motorista',
