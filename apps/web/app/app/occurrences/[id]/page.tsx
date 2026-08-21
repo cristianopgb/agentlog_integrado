@@ -44,7 +44,6 @@ import {
   formatCurrencyBRL,
   formatDateTimeBR,
   safeLinkLabel,
-  shortId,
 } from '../../../../lib/occurrence-formatters';
 import { OccurrenceActionModal } from './OccurrenceActionModal';
 import { OccurrenceTimelineDrawer } from './OccurrenceTimelineDrawer';
@@ -96,9 +95,7 @@ function operationLinkLabel(
     snapshot.invoice_number,
     snapshot.external_code,
   ].find((value) => typeof value === 'string' && value.trim());
-  return reference
-    ? String(reference)
-    : `Operação ${shortId(link.operation_record_id)}`;
+  return reference ? String(reference) : 'Sem documento vinculado';
 }
 function friendlyStatusError(
   message: string,
@@ -222,6 +219,17 @@ export default function Detail() {
             ? operationLinkLabel(primaryOperation)
             : 'Nenhuma operação vinculada.'}
         </p>
+      </Card>
+      <Card>
+        <h2 className="font-bold">Última atualização</h2>
+        <p className="mt-2 text-sm text-slate-700">
+          {row.last_treatment_description || 'Nenhuma tratativa registrada.'}
+        </p>
+        {row.last_treatment_at ? (
+          <time className="mt-1 block text-xs text-slate-500">
+            {formatDateTimeBR(row.last_treatment_at)}
+          </time>
+        ) : null}
       </Card>
       <section>
         <h2 className="mb-3 text-lg font-bold">Ações rápidas</h2>

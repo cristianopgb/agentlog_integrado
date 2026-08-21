@@ -120,12 +120,46 @@ export class AttendanceAgentToolsService {
           'operation_records',
           `select=driver_name&tenant_id=eq.${t}&id=eq.${transports[0].operation_record_id}&deleted_at=is.null&limit=1`,
         );
+        const operationalPhone =
+          transports[0].driver_phone ?? transports[0].driver_whatsapp;
+        const existing = await this.db.select<any[]>(
+          'contacts',
+          `select=id,name,phone,contact_type,metadata&tenant_id=eq.${t}&phone=eq.${encodeURIComponent(operationalPhone)}&deleted_at=is.null&limit=1`,
+        );
+        const contact =
+          existing[0] ??
+          (
+            await this.db.insert<any[]>('contacts', {
+              tenant_id: t,
+              name: operations[0]?.driver_name ?? 'Motorista operacional',
+              phone: operationalPhone,
+              contact_type: 'driver_operational',
+              metadata: { origin: 'operational_match' },
+            })
+          )[0];
+        if (typeof a.conversation_id === 'string') {
+          const id = text(a.conversation_id, 'conversation_id', 80);
+          await this.db.update(
+            'inbox_conversations',
+            `tenant_id=eq.${t}&id=eq.${id}&channel=eq.public_chat&deleted_at=is.null`,
+            { contact_id: contact.id, public_phone_normalized: p },
+          );
+          await this.db.update(
+            'public_chat_sessions',
+            `tenant_id=eq.${t}&conversation_id=eq.${id}`,
+            {
+              contact_id: contact.id,
+              contact_phone: p,
+              contact_name: contact.name,
+            },
+          );
+        }
         return {
           found: true,
-          contact_id: null,
+          contact_id: contact.id,
           contact_type: 'driver_operational',
           name: operations[0]?.driver_name ?? null,
-          phone: transports[0].driver_phone ?? transports[0].driver_whatsapp,
+          phone: operationalPhone,
           source: 'treated_transport_records',
         };
       }

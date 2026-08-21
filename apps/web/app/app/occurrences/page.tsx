@@ -23,29 +23,24 @@ import {
   occurrenceStatusLabel,
 } from '../../../lib/occurrence-labels';
 import { OperationPicker } from './operation-picker';
-import { shortId } from '../../../lib/occurrence-formatters';
 const date = (v: string) =>
   new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(new Date(v));
 const operationLabel = (occurrence: Occurrence) => {
-  const links = occurrence.operation_links ?? [];
-  const link =
-    links.find(
-      (item) => item.is_primary || item.relationship_type === 'primary',
-    ) ?? links[0];
-  if (!link) return 'Sem operação principal';
-  const snapshot = link.snapshot ?? {};
-  const label = snapshot.label;
-  if (typeof label === 'string' && label.trim()) return label;
-  const reference = snapshot.reference;
-  const customer = snapshot.customer_name;
-  if (typeof reference === 'string' && reference.trim())
-    return typeof customer === 'string' && customer.trim()
-      ? `${reference} · ${customer}`
-      : reference;
-  return `Operação ${shortId(link.operation_record_id)}`;
+  const nf = occurrence.operation_invoice_number;
+  const doc =
+    occurrence.operation_document_number ||
+    occurrence.operation_delivery_number;
+  if (nf && doc) return `${nf} / ${doc}`;
+  return (
+    doc ||
+    occurrence.operation_cte_number ||
+    occurrence.operation_manifest_number ||
+    occurrence.operation_order_number ||
+    'Sem documento vinculado'
+  );
 };
 export default function OccurrencesPage() {
   const [tenant, setTenant] = useState<string | null>(null),
@@ -244,7 +239,8 @@ export default function OccurrencesPage() {
                   <th>Canal</th>
                   <th>Responsável</th>
                   <th>Abertura</th>
-                  <th>Operação principal / NF</th>
+                  <th>Documento logístico</th>
+                  <th>Última atualização</th>
                 </tr>
               </thead>
               <tbody>
@@ -269,6 +265,15 @@ export default function OccurrencesPage() {
                     <td>{r.current_owner_id ?? 'Não atribuído'}</td>
                     <td>{date(r.opened_at)}</td>
                     <td>{operationLabel(r)}</td>
+                    <td className="max-w-xs text-xs text-slate-600">
+                      {r.last_treatment_description ||
+                        'Sem tratativa registrada'}
+                      {r.last_treatment_at ? (
+                        <time className="block">
+                          {date(r.last_treatment_at)}
+                        </time>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

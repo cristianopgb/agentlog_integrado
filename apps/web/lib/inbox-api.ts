@@ -26,6 +26,7 @@ export type InboxContact = {
   phone: string | null;
   email?: string | null;
   contact_type: string;
+  metadata?: { origin?: string } | null;
 };
 export type InboxConversation = {
   id: string;
@@ -108,6 +109,11 @@ export const uploadInboxAttachment = (
 };
 export const assignInbox = (tenant: string, id: string) =>
   api(`/tenants/${tenant}/inbox/conversations/${id}/assign`, {
+    method: 'PATCH',
+    body: '{}',
+  });
+export const returnInboxToAi = (tenant: string, id: string) =>
+  api(`/tenants/${tenant}/inbox/conversations/${id}/return-to-ai`, {
     method: 'PATCH',
     body: '{}',
   });

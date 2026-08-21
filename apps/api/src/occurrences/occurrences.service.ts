@@ -225,10 +225,53 @@ export class OccurrencesService {
       'occurrence_operation_links',
       `select=id,occurrence_id,operation_record_id,is_primary,relationship_type,snapshot&tenant_id=eq.${tenantId}&occurrence_id=in.(${occurrenceIds})&order=is_primary.desc,linked_at.asc`,
     );
+    const operationIds = [
+      ...new Set(links.map((link) => String(link.operation_record_id))),
+    ];
+    const operations = operationIds.length
+      ? await this.db.select<Row[]>(
+          'operation_records',
+          `select=id,delivery_number,document_number,invoice_number,cte_number,manifest_number,order_number,customer_name&tenant_id=eq.${tenantId}&id=in.(${operationIds.join(',')})&deleted_at=is.null`,
+        )
+      : [];
+    const treatments = await this.db.select<Row[]>(
+      'occurrence_treatments',
+      `select=occurrence_id,description,treatment_type,created_at&tenant_id=eq.${tenantId}&occurrence_id=in.(${occurrenceIds})&deleted_at=is.null&order=created_at.desc`,
+    );
     return rows.map((row) => ({
       ...this.withAutomaticSla(row),
       operation_links: links.filter((link) => link.occurrence_id === row.id),
+      ...this.primaryOperationFields(
+        links.find(
+          (link) => link.occurrence_id === row.id && link.is_primary,
+        ) ?? links.find((link) => link.occurrence_id === row.id),
+        operations,
+      ),
+      last_treatment_description:
+        treatments.find((item) => item.occurrence_id === row.id)?.description ??
+        null,
+      last_treatment_at:
+        treatments.find((item) => item.occurrence_id === row.id)?.created_at ??
+        null,
+      last_treatment_type:
+        treatments.find((item) => item.occurrence_id === row.id)
+          ?.treatment_type ?? null,
     }));
+  }
+  private primaryOperationFields(link: Row | undefined, operations: Row[]) {
+    const operation = link
+      ? operations.find((item) => item.id === link.operation_record_id)
+      : undefined;
+    return {
+      operation_record_id: operation?.id ?? null,
+      operation_delivery_number: operation?.delivery_number ?? null,
+      operation_document_number: operation?.document_number ?? null,
+      operation_invoice_number: operation?.invoice_number ?? null,
+      operation_cte_number: operation?.cte_number ?? null,
+      operation_manifest_number: operation?.manifest_number ?? null,
+      operation_order_number: operation?.order_number ?? null,
+      operation_customer_name: operation?.customer_name ?? null,
+    };
   }
   async operationOptions(tenantId: string, search = '') {
     const term = search
@@ -390,6 +433,9 @@ export class OccurrencesService {
       attachments,
       treatments,
       pending_actions,
+      last_treatment_description: treatments.at(-1)?.description ?? null,
+      last_treatment_at: treatments.at(-1)?.created_at ?? null,
+      last_treatment_type: treatments.at(-1)?.treatment_type ?? null,
     };
   }
   async listTreatments(t: string, o: string) {

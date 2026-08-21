@@ -96,6 +96,15 @@ export class InboxController {
   ) {
     return this.inbox.assign(tenant, id, req.user.id, body);
   }
+  @Patch(':id/return-to-ai')
+  @RequirePermission(['occurrences.inbox.assign', 'occurrences.inbox.reply'])
+  returnToAi(
+    @Param('tenantId') tenant: string,
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.inbox.returnToAi(tenant, id, req.user.id);
+  }
   @Patch(':id/status')
   @RequirePermission(['occurrences.inbox.assign', 'occurrences.inbox.close'])
   async status(

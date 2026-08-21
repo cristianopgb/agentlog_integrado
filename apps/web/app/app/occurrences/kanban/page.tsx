@@ -9,6 +9,16 @@ import {
   type Occurrence,
 } from '../../../../lib/occurrences-api';
 import { occurrenceStatusLabel } from '../../../../lib/occurrence-labels';
+const operationLabel = (item: Occurrence) => {
+  const doc = item.operation_document_number || item.operation_delivery_number;
+  return item.operation_invoice_number && doc
+    ? `${item.operation_invoice_number} / ${doc}`
+    : doc ||
+        item.operation_cte_number ||
+        item.operation_manifest_number ||
+        item.operation_order_number ||
+        'Sem documento vinculado';
+};
 type Column = { status: string; items: Occurrence[] };
 export default function Kanban() {
   const [tenant, setTenant] = useState<string | null>(null),
@@ -66,6 +76,16 @@ export default function Kanban() {
                     {item.occurrence_number}
                   </Link>
                   <p className="my-2 text-sm">{item.title}</p>
+                  <p className="mb-2 text-xs font-medium text-slate-600">
+                    {operationLabel(item)}
+                  </p>
+                  <p className="mb-2 line-clamp-2 text-xs text-slate-500">
+                    Última atualização:{' '}
+                    {item.last_treatment_description || 'sem tratativa'}
+                    {item.last_treatment_at
+                      ? ` · ${new Date(item.last_treatment_at).toLocaleString('pt-BR')}`
+                      : ''}
+                  </p>
                   <select
                     className="w-full rounded-lg border p-2 text-xs"
                     value={item.current_status}

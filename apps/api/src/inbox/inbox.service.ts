@@ -74,7 +74,7 @@ export class InboxService {
   }
   async refreshSummary(tenant: string, id: string) {
     try {
-      const [messages, links] = await Promise.all([
+      const [messages, links, conversation] = await Promise.all([
         this.db.select<Row[]>(
           'inbox_messages',
           `select=sender_type,body&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&order=created_at.desc&limit=6`,
@@ -83,31 +83,72 @@ export class InboxService {
           'conversation_occurrence_links',
           `select=occurrence_id&tenant_id=eq.${tenant}&conversation_id=eq.${id}&deleted_at=is.null&limit=1`,
         ),
+        this.conversation(tenant, id),
       ]);
-      let occurrence = '';
-      if (links[0])
-        occurrence = String(
-          (
-            await this.db.select<Row[]>(
-              'occurrences',
-              `select=occurrence_number,current_status&tenant_id=eq.${tenant}&id=eq.${links[0].occurrence_id}&deleted_at=is.null&limit=1`,
-            )
-          )[0]?.occurrence_number ?? '',
+      let occurrence = '',
+        operation: Row | undefined,
+        treatment: Row | undefined;
+      if (links[0]) {
+        const occurrenceRow = (
+          await this.db.select<Row[]>(
+            'occurrences',
+            `select=occurrence_number,current_status&tenant_id=eq.${tenant}&id=eq.${links[0].occurrence_id}&deleted_at=is.null&limit=1`,
+          )
+        )[0];
+        occurrence = String(occurrenceRow?.occurrence_number ?? '');
+        const operationLinks = await this.db.select<Row[]>(
+          'occurrence_operation_links',
+          `select=operation_record_id&tenant_id=eq.${tenant}&occurrence_id=eq.${links[0].occurrence_id}&order=is_primary.desc,linked_at.asc&limit=1`,
         );
-      const excerpt = messages
-        .reverse()
-        .map(
-          (m) =>
-            `${m.sender_type === 'contact' ? 'Motorista' : 'Operador/AgentLog'}: ${String(m.body ?? '').slice(0, 180)}`,
-        )
+        if (operationLinks[0])
+          operation = (
+            await this.db.select<Row[]>(
+              'operation_records',
+              `select=document_number,invoice_number&tenant_id=eq.${tenant}&id=eq.${operationLinks[0].operation_record_id}&deleted_at=is.null&limit=1`,
+            )
+          )[0];
+        treatment = (
+          await this.db.select<Row[]>(
+            'occurrence_treatments',
+            `select=description&tenant_id=eq.${tenant}&occurrence_id=eq.${links[0].occurrence_id}&deleted_at=is.null&order=created_at.desc&limit=1`,
+          )
+        )[0];
+      }
+      const contact = conversation.contact_id
+        ? (
+            await this.db.select<Row[]>(
+              'contacts',
+              `select=name,phone&tenant_id=eq.${tenant}&id=eq.${conversation.contact_id}&deleted_at=is.null&limit=1`,
+            )
+          )[0]
+        : undefined;
+      const inbound = messages.find((m) => m.sender_type === 'contact');
+      const references = [operation?.invoice_number, operation?.document_number]
         .filter(Boolean)
-        .join(' · ')
-        .slice(0, 900);
+        .join(' / ');
+      const parts = [
+        contact?.name || contact?.phone
+          ? `Motorista/contato: ${contact.name ?? contact.phone}.`
+          : '',
+        references ? `Documento: ${references}.` : '',
+        occurrence ? `Ocorrência ${occurrence} vinculada.` : '',
+        inbound?.body
+          ? `Problema informado: ${String(inbound.body).replace(/\s+/g, ' ').slice(0, 220)}.`
+          : '',
+        treatment?.description
+          ? `Última ação: ${String(treatment.description).replace(/\s+/g, ' ').slice(0, 180)}.`
+          : '',
+        occurrence ? 'Pendência: aguardando tratativa operacional.' : '',
+      ].filter(Boolean);
+      const summary =
+        parts.length >= 2
+          ? parts.slice(0, 5).join('\n')
+          : 'Conversa recebida. Aguardando identificação operacional.';
       await this.db.update(
         'inbox_conversations',
         `tenant_id=eq.${tenant}&id=eq.${id}`,
         {
-          summary: `${excerpt}${occurrence ? ` · Ocorrência ${occurrence} vinculada.` : ' · Atendimento em andamento.'}`,
+          summary,
           summary_updated_at: new Date().toISOString(),
         },
       );
@@ -255,7 +296,7 @@ export class InboxService {
           row.contact_id
             ? this.db.select<Row[]>(
                 'contacts',
-                `select=id,name,phone,email,contact_type&tenant_id=eq.${tenant}&id=eq.${row.contact_id}&deleted_at=is.null&limit=1`,
+                `select=id,name,phone,email,contact_type,metadata&tenant_id=eq.${tenant}&id=eq.${row.contact_id}&deleted_at=is.null&limit=1`,
               )
             : Promise.resolve([]),
           this.db.select<Row[]>(
@@ -317,7 +358,7 @@ export class InboxService {
             [],
             this.db.select<Row[]>(
               'contacts',
-              `select=id,name,phone,email,contact_type,external_ref,is_active,created_at&tenant_id=eq.${tenant}&id=eq.${conversation.contact_id}&deleted_at=is.null&limit=1`,
+              `select=id,name,phone,email,contact_type,metadata,external_ref,is_active,created_at&tenant_id=eq.${tenant}&id=eq.${conversation.contact_id}&deleted_at=is.null&limit=1`,
             ),
           )
         : Promise.resolve([]),
@@ -448,6 +489,29 @@ export class InboxService {
       },
     );
     await this.event(tenant, id, 'assigned', 'Conversa atribuída', user);
+    return rows[0];
+  }
+  async returnToAi(tenant: string, id: string, user: string) {
+    await this.conversation(tenant, id);
+    const now = new Date().toISOString();
+    const rows = await this.db.update<Row[]>(
+      'inbox_conversations',
+      `tenant_id=eq.${tenant}&id=eq.${id}&deleted_at=is.null`,
+      {
+        assigned_user_id: null,
+        status: 'open',
+        closed_at: null,
+        updated_at: now,
+      },
+    );
+    await this.event(
+      tenant,
+      id,
+      'automation_resumed',
+      'Conversa devolvida para IA',
+      user,
+    );
+    await this.refreshSummary(tenant, id);
     return rows[0];
   }
   async changeStatus(
