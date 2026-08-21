@@ -42,7 +42,10 @@ export class AttendanceAgentToolsService {
   ) {}
   async execute(tenantId: string, key: string, args: Args, actorId: string) {
     const permission: Record<string, string[]> = {
-      'attendance.occurrence.create': ['occurrences.ai.create_draft','occurrences.ai.create_confirmed'],
+      'attendance.occurrence.create': [
+        'occurrences.ai.create_draft',
+        'occurrences.ai.create_confirmed',
+      ],
       'attendance.occurrence.add_treatment': [
         'occurrence_treatments.create',
         'occurrences.ai.add_treatment',
@@ -648,7 +651,7 @@ export class AttendanceAgentToolsService {
   ) {
     const links = await this.db.select<any[]>(
       'occurrence_operation_links',
-      `select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${operationRecordId}&deleted_at=is.null&limit=100`,
+      `select=occurrence_id&tenant_id=eq.${tenantId}&operation_record_id=eq.${operationRecordId}&limit=100`,
     );
     if (!links.length) return [];
     const occurrenceIds = [...new Set(links.map((link) => link.occurrence_id))];
@@ -711,15 +714,30 @@ export class AttendanceAgentToolsService {
           u,
           'related',
         );
+        const treatment = await this.occurrences.createTreatment(
+          t,
+          open[0].id,
+          u,
+          {
+            treatment_type: 'other',
+            description: text(
+              a.description ?? a.evidence_summary ?? a.title,
+              'description',
+              4000,
+            ),
+            status: 'open',
+          },
+        );
         return {
           created: false,
+          updated_existing: true,
           duplicate_blocked: true,
           reason: 'existing_open_occurrence_for_operation',
-          existing_occurrence: {
-            occurrence_id: open[0].id,
-            occurrence_number: open[0].occurrence_number,
-          },
-          recommended_tool: 'attendance.occurrence.add_treatment',
+          occurrence_id: open[0].id,
+          occurrence_number: open[0].occurrence_number,
+          treatment_id: (treatment as any).id,
+          treatment_created: true,
+          safe_message: `Atualização registrada na ocorrência ${open[0].occurrence_number}.`,
         };
       }
     }
@@ -739,7 +757,7 @@ export class AttendanceAgentToolsService {
       const existingOperations = operation.operation_record_id
         ? await this.db.select<any[]>(
             'occurrence_operation_links',
-            `select=operation_record_id&tenant_id=eq.${t}&occurrence_id=eq.${linked.occurrence_id}&deleted_at=is.null&order=is_primary.desc&limit=10`,
+            `select=operation_record_id&tenant_id=eq.${t}&occurrence_id=eq.${linked.occurrence_id}&order=is_primary.desc&limit=10`,
           )
         : [];
       if (
@@ -824,25 +842,37 @@ export class AttendanceAgentToolsService {
       audit = uncertain
         ? 'Vínculo motorista/operação não confirmado automaticamente porque a operação não possui telefone tratado.'
         : 'Ocorrência criada pelo agente de atendimento.';
-    const occurrence: any = await this.occurrences.create(t, u, {
-      title: a.title,
-      description: a.description,
-      current_priority: a.priority ?? a.severity ?? 'medium',
-      source_channel: 'public_chat',
-      source_reference: conversationId,
-      reason_id: reason,
-      operation_record_ids: operation.operation_record_id
-        ? [operation.operation_record_id]
-        : [],
-      primary_operation_record_id: operation.operation_record_id,
-      event_description: audit,
-      metadata: {
-        contact_id: a.contact_id ?? conversations[0].contact_id,
-        requires_human_review: Boolean(a.requires_human_review) || uncertain,
-        evidence_summary: a.evidence_summary,
-        verification_note: uncertain ? audit : undefined,
-      },
-    });
+    let occurrence: any;
+    try {
+      occurrence = await this.occurrences.create(t, u, {
+        title: a.title,
+        description: a.description,
+        current_priority: a.priority ?? a.severity ?? 'medium',
+        source_channel: 'public_chat',
+        source_reference: conversationId,
+        reason_id: reason,
+        operation_record_ids: operation.operation_record_id
+          ? [operation.operation_record_id]
+          : [],
+        primary_operation_record_id: operation.operation_record_id,
+        event_description: audit,
+        metadata: {
+          contact_id: a.contact_id ?? conversations[0].contact_id,
+          requires_human_review: Boolean(a.requires_human_review) || uncertain,
+          evidence_summary: a.evidence_summary,
+          verification_note: uncertain ? audit : undefined,
+        },
+      });
+    } catch (error) {
+      return {
+        created: false,
+        failure_reason: 'occurrence_creation_failed',
+        technical_error:
+          error instanceof Error ? error.message : 'occurrence_creation_failed',
+        safe_message:
+          'Não foi possível registrar a ocorrência agora. A equipe operacional foi avisada.',
+      };
+    }
     await this.linkConversationOccurrence(
       t,
       conversationId,
