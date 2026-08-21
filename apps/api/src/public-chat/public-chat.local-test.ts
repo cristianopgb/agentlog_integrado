@@ -17,6 +17,19 @@ async function main(){
  const service=new PublicChatService(db as SupabaseService,{} as AttendanceAgentService);
  const identity=await (service as any).visitor('tenant-a','admin');
  assert.equal(identity.id,'identified');
+ const calls:string[]=[];
+ const pausedDb:any={
+  select:async(table:string)=>table==='inbox_conversations'?[{status:'assigned',assigned_user_id:'human-a'}]:[],
+  insert:async(table:string)=>{calls.push(`insert:${table}`);return[]},
+  update:async(table:string)=>{calls.push(`update:${table}`);return[]},
+ };
+ const pausedAttendance:any={processPublicConversation:async()=>{calls.push('attendance');return{answer:'automatic'}}};
+ const paused=new PublicChatService(pausedDb,pausedAttendance);
+ assert.deepEqual(await (paused as any).respond('tenant-a','conversation-a'),{human_control:true});
+ assert.deepEqual(calls,[]);
+ pausedDb.select=async(table:string)=>table==='inbox_conversations'?[{status:'open',assigned_user_id:null}]:[];
+ assert.deepEqual(await (paused as any).respond('tenant-a','conversation-a'),{human_control:false});
+ assert.deepEqual(calls,['attendance','insert:inbox_messages','update:inbox_conversations']);
  console.log('public-chat.local-test: ok');
 }
 void main();

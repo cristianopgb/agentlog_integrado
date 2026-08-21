@@ -117,6 +117,15 @@ export class PublicChatService {
           'Nova conversa';
   }
   private async respond(t: string, c: string) {
+    const conversations = await this.db.select<any[]>(
+      'inbox_conversations',
+      `select=status,assigned_user_id&tenant_id=eq.${t}&id=eq.${c}&deleted_at=is.null&limit=1`,
+    );
+    if (
+      conversations[0]?.status === 'assigned' ||
+      conversations[0]?.assigned_user_id
+    )
+      return { human_control: true };
     const result = await this.attendance.processPublicConversation(t, c);
     await this.db.insert('inbox_messages', {
       tenant_id: t,
@@ -135,6 +144,7 @@ export class PublicChatService {
       },
     );
     await this.inbox?.refreshSummary(t, c);
+    return { human_control: false };
   }
   async start(slug: string, b: Record<string, unknown>) {
     const tenant = await this.tenant(slug),
@@ -204,10 +214,14 @@ export class PublicChatService {
       `tenant_id=eq.${tenant.id}&id=eq.${session.conversation_id}`,
       { last_message_at: now, updated_at: now },
     );
-    await this.respond(tenant.id, session.conversation_id);
+    const responseState = await this.respond(
+      tenant.id,
+      session.conversation_id,
+    );
     return {
       session_id: session.id,
       conversation_id: session.conversation_id,
+      human_control: responseState.human_control,
       messages: await this.messages(tenant.id, session.conversation_id),
     };
   }

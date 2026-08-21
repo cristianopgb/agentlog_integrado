@@ -496,6 +496,11 @@ export class InboxService {
     );
     if (!found[0])
       throw new BadRequestException('Ocorrência não pertence ao tenant.');
+    const existing = await this.db.select<Row[]>(
+      'conversation_occurrence_links',
+      `select=id,tenant_id,conversation_id,occurrence_id,relationship_type&tenant_id=eq.${tenant}&conversation_id=eq.${id}&occurrence_id=eq.${occurrence}&deleted_at=is.null&limit=1`,
+    );
+    if (existing[0]) return existing[0];
     const rows = await this.db.insert<Row[]>('conversation_occurrence_links', {
       tenant_id: tenant,
       conversation_id: id,
